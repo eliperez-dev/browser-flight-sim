@@ -20,7 +20,7 @@ pub struct AircraftRoot {
 
 impl Default for AircraftRoot {
     fn default() -> Self {
-        Self { throttle_percent: 0.5 }
+        Self { throttle_percent: 0.85 }
     }
 }
 

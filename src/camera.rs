@@ -3,9 +3,9 @@ use bevy::{camera::visibility::RenderLayers, prelude::*};
 use crate::plane::Airplane;
 
 // Resolution of pixel canvas.
-// Default is 480 x 270
-pub const PIXEL_WIDTH: u32 = 560;
-pub const PIXEL_HEIGHT: u32 = 315;
+// Default is 560 x 315
+pub const PIXEL_WIDTH: u32 = 560 * 2;
+pub const PIXEL_HEIGHT: u32 = 315 * 2;
 
 pub const PIXEL_LAYER: RenderLayers = RenderLayers::layer(0);
 pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);
@@ -161,8 +161,8 @@ pub fn track_cam_control(
             cam_tf.look_at(plane_tf.translation, Vec3::Y);
         }
         CameraMode::Chase => {
-            // Same controls as Orbit but yaw is relative to the plane's heading,
-            // so the plane stays fixed in frame when the pilot turns.
+            // Dynamic chase cam: pulls back at speed, looks ahead of velocity,
+            // smoothly lerps position and slerps rotation.
             if keys.pressed(KeyCode::ArrowLeft)  { track.yaw += LOOK_SPEED * dt; }
             if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
             if keys.pressed(KeyCode::ArrowUp) {
@@ -172,11 +172,28 @@ pub fn track_cam_control(
                 track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(0.05, 1.4);
             }
 
+            // Velocity-based look-ahead so the camera leads the aircraft.
+            let velocity = plane_tf.forward() * 75.0; // approximate from heading
+            let speed = velocity.length();
+            let look_ahead = velocity.normalize_or_zero() * (speed * 0.15).clamp(0.0, 8.0);
+            let look_target = plane_tf.translation + look_ahead;
+
+            // Pull camera back proportionally to speed.
+            let speed_ratio = (speed / 75.0).clamp(0.0, 2.0);
+            let dynamic_dist = track.distance + 12.0 * speed_ratio.sqrt();
+
             let (plane_yaw, _, _) = plane_tf.rotation.to_euler(EulerRot::YXZ);
             let offset = Quat::from_euler(EulerRot::YXZ, plane_yaw + track.yaw, -track.pitch, 0.0)
-                * Vec3::new(0.0, 0.0, track.distance);
-            cam_tf.translation = plane_tf.translation + offset;
-            cam_tf.look_at(plane_tf.translation, Vec3::Y);
+                * Vec3::new(0.0, 0.0, dynamic_dist);
+            let target_pos = plane_tf.translation + offset;
+
+            // Smooth follow — faster at speed, lazier when slow.
+            let smoothness = 2.0 + speed_ratio * 1.5;
+            let t = (dt * smoothness).min(1.0);
+            cam_tf.translation = cam_tf.translation.lerp(target_pos, t);
+
+            let target_rot = cam_tf.looking_at(look_target, Vec3::Y).rotation;
+            cam_tf.rotation = cam_tf.rotation.slerp(target_rot, t);
         }
         CameraMode::Free => {}
     }

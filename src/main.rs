@@ -156,12 +156,12 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         stall_angle_low: -15.0,
         chord: 1.57,
         flap_fraction: 0.2,
-        span: 2.1,
-        aspect_ratio: 7.0,
+        span: 3.65,  // (total 10.3 m span - 2×1.5 m ailerons) / 2 panels → area ≈ 16.2 m²
+        aspect_ratio: 7.0, // full-wing AR = 10.3/1.57 ≈ 6.6, round to 7.0
     };
 
     let stab_h = AeroSurfaceConfig::stabilizer(4.5, 1.4);
-    let stab_v = AeroSurfaceConfig::stabilizer(1.8, 1.0);
+    let stab_v = AeroSurfaceConfig::stabilizer(2.5, 1.0);
 
     // Children spawned separately so we can get their entity IDs
     // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
@@ -209,16 +209,16 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         aspect_ratio: 7.0,
     };
 
-    // Outer 30% of span — place at ~75% semispan for correct moment arm
-    let aileron_dihedral_h = 75.0 * dihedral.tan();
+    // Outer ~30% of semispan (3.65+1.5=5.15 m total semispan, aileron centered at ~4.4 m = local 44)
+    let aileron_dihedral_h = 44.0 * dihedral.tan();
     let aileron_l = commands.spawn((
         AeroSurface::control(aileron_config.clone(), ControlInputType::Roll, -1.0),
-        Transform::from_xyz(-75.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
+        Transform::from_xyz(-44.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     let aileron_r = commands.spawn((
         AeroSurface::control(aileron_config, ControlInputType::Roll, 1.0),
-        Transform::from_xyz(75.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
+        Transform::from_xyz(44.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     // Body lift surfaces (non-control)
@@ -242,7 +242,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
 
     let elevator = commands.spawn((
         AeroSurface::control(stab_h, ControlInputType::Pitch, 1.0),
-        Transform::from_xyz(0.0, WING_Y, -58.0).with_rotation(wing_rot),
+        Transform::from_xyz(0.0, WING_Y - 3.0, -58.0).with_rotation(wing_rot),
     )).id();
 
     let rudder = commands.spawn((
@@ -267,9 +267,9 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         AircraftRoot::default(),
         // Avian rigid body
         RigidBody::Dynamic,
-        Mass(750.0),
-        AngularInertia::new(Vec3::new(1825.0, 2667.0, 1285.0)),
-        LinearVelocity(Vec3::new(0.0, 0.0, 60.0)),
+        Mass(1000.0),
+        AngularInertia::new(Vec3::new(1285.0, 2667.0, 1825.0)), // X=roll, Y=yaw, Z=pitch (kg·m²)
+        LinearVelocity(Vec3::new(0.0, 0.0, 75.0)),
         AngularVelocity(Vec3::ZERO),
         AngularDamping(0.0),
         CenterOfMass(Vec3::new(0.0, 7.0, 0.0)),

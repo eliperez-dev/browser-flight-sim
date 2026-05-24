@@ -38,9 +38,9 @@ pub struct FlightModelConfig {
     pub vne_authority: f32,
 
     // --- Aerodynamics ------------------------------------------------------
-    /// Rotational damping coefficient.  Torque = -coeff * airspeed * ang_vel.
-    /// Higher values reduce pitch/roll oscillations at speed (ζ closer to 1).
-    pub aero_damp: f32,
+    /// Per-axis rotational damping (X=roll, Y=yaw, Z=pitch).
+    /// Torque = -aero_damp * airspeed * ang_vel per axis.
+    pub aero_damp: Vec3,
     /// Air density (kg/m³). Standard sea-level ISA = 1.225.
     pub air_density: f32,
     /// Gravitational acceleration (m/s²).
@@ -48,6 +48,12 @@ pub struct FlightModelConfig {
     /// Fraction of the time-step used for the trapezoidal velocity prediction.
     /// 0.5 = midpoint (second-order accurate), 0 = forward-Euler.
     pub prediction_fraction: f32,
+
+    // --- Flight assists ----------------------------------------------------
+    /// Roll auto-level strength. Torque = -coeff * bank_angle * airspeed.
+    pub auto_level_strength: f32,
+    /// Bank-to-turn strength. Yaw torque = coeff * bank_angle * airspeed.
+    pub bank_turn_strength: f32,
 
     // --- Engine ------------------------------------------------------------
     /// Maximum static thrust at full throttle (Newtons).
@@ -58,21 +64,25 @@ impl Default for FlightModelConfig {
     fn default() -> Self {
         Self {
             pitch_sensitivity:    0.65,
-            roll_sensitivity:     0.45,
+            roll_sensitivity:     0.65,
             yaw_sensitivity:      0.30,
             throttle_rate:        0.5,
-            servo_tau:            0.12,
-            elevator_trim:        0.0,
+            servo_tau:            0.15,
+            elevator_trim:        0.035,
 
             stall_speed:          28.0,
             authority_limit_speed: 66.0,
             vne_speed:            84.0,
             vne_authority:        0.35,
 
-            aero_damp:            60.0,
+            // X=roll (light), Y=yaw (heavy), Z=pitch (moderate)
+            aero_damp:            Vec3::new(3.0, 15.0, 8.0),
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
+
+            auto_level_strength:  18.0,
+            bank_turn_strength:   12.0,
 
             thrust_max:           4_800.0,
         }

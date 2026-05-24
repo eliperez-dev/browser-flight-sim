@@ -67,18 +67,20 @@ impl AeroSurface {
         let stall_high = zero_lift_aoa + cl_max_high / corrected_lift_slope;
         let stall_low = zero_lift_aoa + cl_max_low / corrected_lift_slope;
 
-        // Air velocity in surface-local space (Unity: InverseTransformDirection)
-        // Local +Z is spanwise; we discard it and work in the XY plane
+        // Air velocity in surface-local space.
+        // Span is local +Z; project out the spanwise component to get the
+        // chord-plane velocity (works for any surface orientation).
         let local_vel = surface_rotation.inverse() * world_air_velocity;
-        let local_vel_2d = Vec3::new(local_vel.x, local_vel.y, 0.0);
+        let local_vel_2d = Vec3::new(local_vel.x, local_vel.y, 0.0); // zero span (Z) component
 
-        let drag_dir = surface_rotation * local_vel_2d.normalize_or_zero();
-        // span direction = local +Z in world (Unity convention: transform.forward = +Z world)
         let span_dir = surface_rotation * Vec3::Z;
+        let drag_dir = surface_rotation * local_vel_2d.normalize_or_zero();
         let lift_dir = drag_dir.cross(span_dir);
 
         let area = c.chord * c.span;
         let q = 0.5 * air_density * local_vel_2d.length_squared();
+        // AoA: angle between chord axis (local +X) and the chord-plane airflow.
+        // atan2(y, -x) gives positive AoA when flow comes from below (+Y side).
         let aoa = f32::atan2(local_vel.y, -local_vel.x);
 
         let coeffs = self.calculate_coefficients(aoa, corrected_lift_slope, zero_lift_aoa, stall_high, stall_low);

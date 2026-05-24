@@ -138,16 +138,30 @@ fn draw_menu(
             egui::CollapsingHeader::new("Aerodynamics")
                 .default_open(true)
                 .show(ui, |ui| {
-                    // Rotational drag coefficient: torque = -coeff * speed * ang_vel.
-                    // ~150 gives ζ ≈ 0.7 (well-damped) at cruise.
-                    ui.add(egui::Slider::new(&mut cfg.aero_damp, 0.0..=500.0)
-                        .text("Aero damping (N·m/rad/s)"));
+                    ui.add(egui::Slider::new(&mut cfg.aero_damp.x, 0.0..=200.0)
+                        .text("Aero damp roll (X)"));
+                    ui.add(egui::Slider::new(&mut cfg.aero_damp.y, 0.0..=200.0)
+                        .text("Aero damp yaw (Y)"));
+                    ui.add(egui::Slider::new(&mut cfg.aero_damp.z, 0.0..=200.0)
+                        .text("Aero damp pitch (Z)"));
                     ui.add(egui::Slider::new(&mut cfg.air_density, 0.1..=2.0)
                         .text("Air density (kg/m³)"));
                     ui.add(egui::Slider::new(&mut cfg.gravity, 0.0..=20.0)
                         .text("Gravity (m/s²)"));
                     ui.add(egui::Slider::new(&mut cfg.prediction_fraction, 0.0..=1.0)
                         .text("Prediction fraction"));
+                });
+
+            // ---------------------------------------------------------------
+            // Flight assists
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Flight Assists")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut cfg.auto_level_strength, 0.0..=500.0)
+                        .text("Auto-level strength"));
+                    ui.add(egui::Slider::new(&mut cfg.bank_turn_strength, 0.0..=500.0)
+                        .text("Bank-to-turn strength"));
                 });
 
             // ---------------------------------------------------------------

@@ -31,7 +31,7 @@ pub fn airplane_controller(
     // Low-speed: authority ramps 0→1 between stall and limit speed.
     // High-speed: authority ramps 1→vne_authority above limit speed.
     let authority = if speed < cfg.stall_speed {
-        speed / cfg.stall_speed
+        (speed / cfg.stall_speed).powi(2)
     } else if speed < cfg.authority_limit_speed {
         1.0
     } else {
@@ -63,7 +63,7 @@ pub fn airplane_controller(
             ControlInputType::Pitch => pitch * cfg.pitch_sensitivity * surface.input_multiplier * authority + cfg.elevator_trim,
             ControlInputType::Roll  => roll  * cfg.roll_sensitivity  * surface.input_multiplier * authority,
             // Rudder gets a small coordinated-turn mix from the ailerons.
-            ControlInputType::Yaw   => (yaw + roll * 0.35) * cfg.yaw_sensitivity * surface.input_multiplier * authority,
+            ControlInputType::Yaw   => (yaw + roll * 0.55) * cfg.yaw_sensitivity * surface.input_multiplier * authority,
             ControlInputType::Flap  => 0.0,
         };
         let new_angle = surface.flap_angle + (target - surface.flap_angle) * alpha;
