@@ -6,7 +6,10 @@ pub fn spawn_debug_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ambient: ResMut<GlobalAmbientLight>,
 ) {
+    // Low-level fill light so surfaces in shadow aren't pitch black.
+    ambient.brightness = 400.0;
     // Large green ground plane
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(500.0, 500.0))),
@@ -30,12 +33,13 @@ pub fn spawn_debug_world(
     ];
 
     let cube_color = materials.add(Color::srgb(0.75, 0.45, 0.2));
+    let scale = 10.0;
 
     for &(x, y_half, z, w, h, d) in cubes {
         commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(w, h, d))),
+            Mesh3d(meshes.add(Cuboid::new(w * scale, h * scale, d * scale))),
             MeshMaterial3d(cube_color.clone()),
-            Transform::from_xyz(x, y_half, z),
+            Transform::from_xyz(x * scale, y_half * scale, z * scale),
             PIXEL_LAYER,
         ));
     }

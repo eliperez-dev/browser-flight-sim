@@ -2,8 +2,8 @@ use bevy::{camera::visibility::RenderLayers, prelude::*};
 
 use crate::plane::Airplane;
 
-pub const PIXEL_WIDTH: u32 = 320 * 5;
-pub const PIXEL_HEIGHT: u32 = 180 * 5;
+pub const PIXEL_WIDTH: u32 = 480;
+pub const PIXEL_HEIGHT: u32 = 270;
 
 pub const PIXEL_LAYER: RenderLayers = RenderLayers::layer(0);
 pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);
@@ -70,7 +70,7 @@ pub fn free_cam_control(
         return;
     }
 
-    const MOVE_SPEED: f32 = 5.0;
+    const MOVE_SPEED: f32 = 50.0;
     const LOOK_SPEED: f32 = 1.5;
 
     let Ok((mut transform, mut cam)) = query.single_mut() else { return };

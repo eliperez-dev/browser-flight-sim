@@ -15,10 +15,12 @@ use crate::camera::{
     PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER,
     free_cam_control, track_cam_control, toggle_camera_mode,
 };
+use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_world::spawn_debug_world;
 use crate::plane::{Airplane, move_airplane};
 
 mod camera;
+mod debug_hud;
 mod debug_world;
 mod plane;
 
@@ -35,6 +37,7 @@ fn main() {
             FrameTimeDiagnosticsPlugin::default(),
         ))
         .init_resource::<CameraMode>()
+        .init_resource::<DebugHud>()
         .add_systems(Startup, (setup, spawn_debug_world))
         .add_systems(Update, (
             toggle_camera_mode,
@@ -43,6 +46,8 @@ fn main() {
             move_airplane,
             update_fps,
             fit_canvas,
+            // populate must run before render so render always sees the current frame's data
+            (populate_debug_hud, render_debug_hud).chain(),
         ))
         .run();
 }
@@ -56,6 +61,28 @@ fn update_fps(
         if let Some(value) = fps.smoothed() {
             **text = format!("FPS: {:.0}", value);
         }
+    }
+}
+
+/// Clears and repopulates the debug overlay each frame.
+/// Add new entries here as more flight-physics values become available.
+fn populate_debug_hud(
+    mut hud: ResMut<DebugHud>,
+    mode: Res<CameraMode>,
+    cam_query: Query<&Transform, With<FreeCam>>,
+) {
+    hud.entries.clear();
+
+    // Camera mode
+    hud.entries.push(("CAM", match &*mode {
+        CameraMode::Free  => "FREE".into(),
+        CameraMode::Track => "TRACK".into(),
+    }));
+
+    // Camera world position, rounded to one decimal place
+    if let Ok(tf) = cam_query.single() {
+        let p = tf.translation;
+        hud.entries.push(("POS", format!("X:{:.1}  Y:{:.1}  Z:{:.1}", p.x, p.y, p.z)));
     }
 }
 
@@ -97,7 +124,6 @@ fn setup(
     canvas.sampler = ImageSampler::nearest();
     let pixel_target = images.add(canvas);
 
-    // Plane faces -Z (Bevy forward) so it flies along the -Z axis
     commands.spawn((
         SceneRoot(asset_server.load("low-poly-airplane/scene.gltf#Scene0")),
         Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::splat(0.1)),
@@ -105,11 +131,13 @@ fn setup(
         PIXEL_LAYER,
     ));
 
-    // Camera starts in Free mode; TrackCam state is also stored for when F is pressed.
-    // TrackCam yaw=0 puts the orbit behind the plane (+Z), pitch lifts it slightly above.
     commands.spawn((
         Camera3d::default(),
-        Camera { order: -1, ..default() },
+        Camera {
+            order: -1,
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.45, 0.65, 0.9)),
+            ..default()
+        },
         RenderTarget::Image(pixel_target.clone().into()),
         Msaa::Off,
         PIXEL_LAYER,
@@ -137,6 +165,7 @@ fn setup(
         OuterCamera,
     ));
 
+    // FPS keeps its own text so it can use the diagnostics smoothing independently
     commands.spawn((
         Text::new("FPS: --"),
         FpsText,
@@ -145,6 +174,20 @@ fn setup(
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
+            left: Val::Px(8.0),
+            ..default()
+        },
+    ));
+
+    // Single text entity for the generic debug overlay; content is driven by DebugHud entries
+    commands.spawn((
+        Text::new(""),
+        DebugHudText,
+        TextColor(Color::linear_rgb(1.0, 1.0, 1.0)),
+        TextFont { font_size: 16.0, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(28.0),
             left: Val::Px(8.0),
             ..default()
         },
