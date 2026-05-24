@@ -17,12 +17,14 @@ use crate::camera::{
 };
 use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_world::spawn_debug_world;
+use crate::fog::{FogEnabled, FogPlugin};
 use crate::plane::{Airplane, PlaneState};
 use crate::physics::simple::{SimplePlanePhysics, simple_plane_physics};
 
 mod camera;
 mod debug_hud;
 mod debug_world;
+mod fog;
 mod physics;
 mod plane;
 
@@ -37,6 +39,7 @@ fn main() {
                 ..default()
             }),
             FrameTimeDiagnosticsPlugin::default(),
+            FogPlugin,
         ))
         .init_resource::<CameraMode>()
         .init_resource::<DebugHud>()
@@ -44,10 +47,10 @@ fn main() {
         .add_systems(Update, (
             toggle_camera_mode,
             free_cam_control,
-            track_cam_control,
-            simple_plane_physics,
             update_fps,
             fit_canvas,
+            // physics must settle before the tracking camera reads the plane transform
+            (simple_plane_physics, track_cam_control).chain(),
             // populate must run before render so render always sees the current frame's data
             (populate_debug_hud, render_debug_hud).chain(),
         ))
@@ -71,6 +74,7 @@ fn update_fps(
 fn populate_debug_hud(
     mut hud: ResMut<DebugHud>,
     mode: Res<CameraMode>,
+    fog: Res<FogEnabled>,
     cam_query: Query<&Transform, With<FreeCam>>,
     plane_query: Query<(&Transform, &PlaneState, Option<&SimplePlanePhysics>), With<Airplane>>,
 ) {
@@ -81,6 +85,8 @@ fn populate_debug_hud(
         CameraMode::Free  => "FREE".into(),
         CameraMode::Track => "TRACK".into(),
     }));
+
+    hud.entries.push(("FOG", if fog.0 { "ON  [1]" } else { "OFF [1]" }.into()));
 
     // Camera world position, rounded to one decimal place
     if let Ok(tf) = cam_query.single() {

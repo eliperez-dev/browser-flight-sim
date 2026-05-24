@@ -65,8 +65,8 @@ pub fn simple_plane_physics(
         let authority = (speed / CRUISE_SPEED).clamp(0.0, 1.0);
         if keys.pressed(KeyCode::KeyW) { transform.rotate_local_x(PITCH_RATE * authority * dt); }
         if keys.pressed(KeyCode::KeyS) { transform.rotate_local_x(- PITCH_RATE * authority * dt); }
-        if keys.pressed(KeyCode::KeyA) { transform.rotate_local_z( ROLL_RATE  * authority * dt); }
-        if keys.pressed(KeyCode::KeyD) { transform.rotate_local_z(-ROLL_RATE  * authority * dt); }
+        if keys.pressed(KeyCode::KeyA) { transform.rotate_local_z( -ROLL_RATE  * authority * dt); }
+        if keys.pressed(KeyCode::KeyD) { transform.rotate_local_z(ROLL_RATE  * authority * dt); }
         if keys.pressed(KeyCode::KeyQ) { transform.rotate_local_y( YAW_RATE   * authority * dt); }
         if keys.pressed(KeyCode::KeyE) { transform.rotate_local_y(-YAW_RATE   * authority * dt); }
     }

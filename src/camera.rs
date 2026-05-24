@@ -2,6 +2,8 @@ use bevy::{camera::visibility::RenderLayers, prelude::*};
 
 use crate::plane::Airplane;
 
+// Resolution of pixel canvas.
+// Default is 480 x 270
 pub const PIXEL_WIDTH: u32 = 480;
 pub const PIXEL_HEIGHT: u32 = 270;
 
