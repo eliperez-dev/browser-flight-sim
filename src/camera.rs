@@ -123,17 +123,17 @@ pub fn track_cam_control(
     }
 
     const LOOK_SPEED: f32 = 1.5;
-    const ZOOM_SPEED: f32 = 10.0;
+    const ZOOM_SPEED: f32 = 100.0;
 
     let Ok(plane_tf) = plane_query.single() else { return };
     let Ok((mut cam_tf, mut track)) = cam_query.single_mut() else { return };
 
     let dt = time.delta_secs();
 
-    // W/S pull the camera closer to or farther from the plane.
+    // [ / ] pull the camera closer to or farther from the plane.
     // Clamped so you can't clip through the plane or zoom out infinitely.
-    if keys.pressed(KeyCode::KeyW) { track.distance = (track.distance - ZOOM_SPEED * dt).clamp(3.0, 100.0); }
-    if keys.pressed(KeyCode::KeyS) { track.distance = (track.distance + ZOOM_SPEED * dt).clamp(3.0, 100.0); }
+    if keys.pressed(KeyCode::BracketLeft)  { track.distance = (track.distance - ZOOM_SPEED * dt).clamp(3.0, 100.0); }
+    if keys.pressed(KeyCode::BracketRight) { track.distance = (track.distance + ZOOM_SPEED * dt).clamp(3.0, 100.0); }
 
     // Arrow keys adjust the orbit angles stored in TrackCam.
     // Yaw spins the camera horizontally around the plane (no clamping — full 360°).

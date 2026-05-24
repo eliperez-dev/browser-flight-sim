@@ -17,11 +17,13 @@ use crate::camera::{
 };
 use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_world::spawn_debug_world;
-use crate::plane::{Airplane, move_airplane};
+use crate::plane::{Airplane, PlaneState};
+use crate::physics::simple::{SimplePlanePhysics, simple_plane_physics};
 
 mod camera;
 mod debug_hud;
 mod debug_world;
+mod physics;
 mod plane;
 
 #[derive(Component)]
@@ -43,7 +45,7 @@ fn main() {
             toggle_camera_mode,
             free_cam_control,
             track_cam_control,
-            move_airplane,
+            simple_plane_physics,
             update_fps,
             fit_canvas,
             // populate must run before render so render always sees the current frame's data
@@ -70,6 +72,7 @@ fn populate_debug_hud(
     mut hud: ResMut<DebugHud>,
     mode: Res<CameraMode>,
     cam_query: Query<&Transform, With<FreeCam>>,
+    plane_query: Query<(&Transform, &PlaneState, Option<&SimplePlanePhysics>), With<Airplane>>,
 ) {
     hud.entries.clear();
 
@@ -82,7 +85,23 @@ fn populate_debug_hud(
     // Camera world position, rounded to one decimal place
     if let Ok(tf) = cam_query.single() {
         let p = tf.translation;
-        hud.entries.push(("POS", format!("X:{:.1}  Y:{:.1}  Z:{:.1}", p.x, p.y, p.z)));
+        hud.entries.push(("POS", format!("X={:.1}  Y={:.1}  Z={:.1}", p.x, p.y, p.z)));
+    }
+
+    // Flight physics — read from PlaneState so the HUD works with any model
+    if let Ok((tf, state, simple)) = plane_query.single() {
+        let (yaw, pitch, roll) = tf.rotation.to_euler(EulerRot::YXZ);
+        hud.entries.push(("SPD",    format!("{:.1} m/s",  state.speed)));
+        hud.entries.push(("ALT",    format!("{:.1} m",    tf.translation.y)));
+        if let Some(s) = simple {
+            hud.entries.push(("THR", format!("{:.0}%", s.throttle * 100.0)));
+        }
+        hud.entries.push(("THRUST", format!("{:.1} m/s²", state.thrust)));
+        hud.entries.push(("DRAG",   format!("{:.1} m/s²", state.drag)));
+        hud.entries.push(("LIFT",   format!("{:.0}%",     state.lift_pct * 100.0)));
+        hud.entries.push(("PITCH",  format!("{:.1} deg",  pitch.to_degrees())));
+        hud.entries.push(("ROLL",   format!("{:.1} deg",  roll.to_degrees())));
+        hud.entries.push(("YAW",    format!("{:.1} deg",  yaw.to_degrees())));
     }
 }
 
@@ -128,6 +147,8 @@ fn setup(
         SceneRoot(asset_server.load("low-poly-airplane/scene.gltf#Scene0")),
         Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::splat(0.1)),
         Airplane,
+        PlaneState::default(),
+        SimplePlanePhysics::default(),
         PIXEL_LAYER,
     ));
 
