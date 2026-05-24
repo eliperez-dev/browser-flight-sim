@@ -19,6 +19,8 @@ use crate::camera::{
     PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER,
     free_cam_control, track_cam_control, toggle_camera_mode,
 };
+use bevy_egui::PrimaryEguiContext;
+use crate::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_world::spawn_debug_world;
 use crate::fog::{FogEnabled, FogPlugin};
@@ -28,8 +30,10 @@ use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::aircraft_physics::{AircraftRoot, apply_aero_forces};
 use crate::physics::airplane_controller::airplane_controller;
+use crate::physics::flight_config::FlightModelConfig;
 
 mod camera;
+mod debug_flight_menu;
 mod debug_gizmos;
 mod debug_hud;
 mod debug_world;
@@ -50,20 +54,24 @@ fn main() {
             FrameTimeDiagnosticsPlugin::default(),
             FogPlugin,
             PhysicsPlugins::default(),
+            DebugFlightMenuPlugin,
         ))
         // Disable avian's built-in gravity so our prediction step
         // matches the applied forces; we pass gravity into the prediction
         // manually, and avian's integrator will apply it via Gravity resource.
         .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
+        .init_resource::<FlightModelConfig>()
         .init_resource::<CameraMode>()
         .init_resource::<DebugHud>()
         .init_resource::<GizmosVisible>()
         .add_systems(Startup, (setup, spawn_debug_world))
-        .add_systems(FixedUpdate, (
-            airplane_controller,
-            apply_aero_forces,
-        ).chain())
         .add_systems(Update, (
+            // Controller and aero forces run in Update so they are in sync with
+            // Avian's PhysicsSchedule, which also runs once per render frame
+            // using the real frame delta rather than a fixed timestep.
+            // Running them in FixedUpdate caused a rate mismatch that produced
+            // the visible stepping / snapping artifacts.
+            (airplane_controller, apply_aero_forces).chain(),
             toggle_camera_mode,
             toggle_gizmos,
             free_cam_control,
@@ -95,6 +103,7 @@ fn populate_debug_hud(
     fog: Res<FogEnabled>,
     cam_query: Query<&Transform, With<FreeCam>>,
     plane_query: Query<(&Transform, &PlaneState, &AircraftRoot), With<Airplane>>,
+    cfg: Res<FlightModelConfig>,
 ) {
     hud.entries.clear();
 
@@ -115,7 +124,7 @@ fn populate_debug_hud(
         hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
-        hud.entries.push(("THRUST", format!("{:.0} N",   state.thrust)));
+        hud.entries.push(("THRUST", format!("{:.0} N",   cfg.thrust_max * root.throttle_percent)));
         hud.entries.push(("LIFT",   format!("{:.0}%",    state.lift_pct * 100.0)));
         hud.entries.push(("PITCH",  format!("{:.1}°",    pitch.to_degrees())));
         hud.entries.push(("ROLL",   format!("{:.1}°",    roll.to_degrees())));
@@ -294,7 +303,7 @@ fn setup(
         ..default()
     };
     canvas.resize(canvas_size);
-    canvas.sampler = ImageSampler::linear();
+    canvas.sampler = ImageSampler::nearest();
     let pixel_target = images.add(canvas);
 
     spawn_aircraft(&mut commands, &asset_server);
@@ -331,6 +340,9 @@ fn setup(
         Msaa::Off,
         SCREEN_LAYER,
         OuterCamera,
+        // Pins the egui primary context to this camera so the debug panel
+        // renders at window resolution rather than into the pixel render target.
+        PrimaryEguiContext,
     ));
 
     commands.spawn((

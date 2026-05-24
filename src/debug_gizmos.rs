@@ -1,9 +1,9 @@
 use avian3d::prelude::{CenterOfMass, LinearVelocity};
 use bevy::prelude::*;
 
-use crate::camera::PIXEL_LAYER;
 use crate::physics::aero_surface::AeroSurface;
 use crate::physics::aircraft_physics::AircraftRoot;
+use crate::physics::flight_config::FlightModelConfig;
 use crate::plane::Airplane;
 
 #[derive(Resource, Default)]
@@ -17,11 +17,12 @@ pub fn toggle_gizmos(keys: Res<ButtonInput<KeyCode>>, mut visible: ResMut<Gizmos
 
 pub fn draw_aero_gizmos(
     visible: Res<GizmosVisible>,
+    cfg: Res<FlightModelConfig>,
     aircraft_q: Query<
         (&Transform, &LinearVelocity, &CenterOfMass, &Children, &AircraftRoot),
         With<Airplane>,
     >,
-    surface_q: Query<(&AeroSurface, &Transform)>,
+    surface_q: Query<(&AeroSurface, &GlobalTransform)>,
     mut gizmos: Gizmos,
 ) {
     if !visible.0 {
@@ -46,7 +47,7 @@ pub fn draw_aero_gizmos(
 
     // Thrust arrow — blue, along nose (+Z rotated)
     let nose = tf.rotation * Vec3::Z;
-    let thrust_n = root.thrust_max * root.throttle_percent;
+    let thrust_n = cfg.thrust_max * root.throttle_percent;
     gizmos.arrow(
         com_world,
         com_world + nose * (thrust_n / 2000.0),
@@ -60,13 +61,11 @@ pub fn draw_aero_gizmos(
     let q = 0.5 * 1.2 * speed * speed; // dynamic pressure
 
     for child in children {
-        let Ok((surface, local_tf)) = surface_q.get(*child) else {
+        let Ok((surface, gtf)) = surface_q.get(*child) else {
             continue;
         };
-        // Derive world pos/rot from the interpolated parent transform, not GlobalTransform.
-        // GlobalTransform on children only syncs at the physics rate; tf is already interpolated.
-        let pos = tf.transform_point(local_tf.translation);
-        let rot = tf.rotation * local_tf.rotation;
+        let pos = gtf.translation();
+        let (_, rot, _) = gtf.to_scale_rotation_translation();
 
         // Surface position — orange dot
         gizmos.sphere(Isometry3d::from_translation(pos), 0.15, Color::srgb(1.0, 0.55, 0.0));
