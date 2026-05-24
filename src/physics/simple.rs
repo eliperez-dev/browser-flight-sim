@@ -1,5 +1,5 @@
+#![allow(dead_code)]
 use bevy::prelude::*;
-
 use crate::camera::CameraMode;
 use crate::plane::{Airplane, PlaneState};
 
@@ -60,7 +60,7 @@ pub fn simple_plane_physics(
     let current_dir = if speed > 0.001 { physics.velocity / speed } else { nose };
 
     // Flight controls only active in Track mode so they don't fight the free camera's WASD.
-    if matches!(*mode, CameraMode::Track) {
+    if matches!(*mode, CameraMode::Orbit) {
         // Authority scales with airspeed: sluggish at stall, full at cruise, capped there.
         let authority = (speed / CRUISE_SPEED).clamp(0.0, 1.0);
         if keys.pressed(KeyCode::KeyW) { transform.rotate_local_x(PITCH_RATE * authority * dt); }

@@ -4,17 +4,19 @@ use crate::plane::Airplane;
 
 // Resolution of pixel canvas.
 // Default is 480 x 270
-pub const PIXEL_WIDTH: u32 = 480;
-pub const PIXEL_HEIGHT: u32 = 270;
+pub const PIXEL_WIDTH: u32 = 560;
+pub const PIXEL_HEIGHT: u32 = 315;
 
 pub const PIXEL_LAYER: RenderLayers = RenderLayers::layer(0);
 pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);
 
 #[derive(Resource, Default)]
 pub enum CameraMode {
-    #[default]
     Free,
-    Track,
+    #[default]
+    Orbit,
+    /// Locked behind the plane, facing its heading direction.
+    Chase,
 }
 
 /// State for the free-look camera (yaw/pitch accumulated from arrow keys).
@@ -36,21 +38,27 @@ pub struct TrackCam {
 #[derive(Component)]
 pub struct OuterCamera;
 
-/// Toggles between Free and Track camera modes with F.
-/// When returning to Free, syncs FreeCam angles from the current transform
-/// so the view doesn't snap to a stale orientation.
+/// Cycles Free → Orbit → Chase → Free with F.
 pub fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut mode: ResMut<CameraMode>,
-    mut cam_query: Query<(&Transform, &mut FreeCam)>,
+    mut cam_query: Query<(&Transform, &mut FreeCam, &mut TrackCam)>,
 ) {
     if !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
     *mode = match *mode {
-        CameraMode::Free => CameraMode::Track,
-        CameraMode::Track => {
-            if let Ok((tf, mut free)) = cam_query.single_mut() {
+        CameraMode::Free  => CameraMode::Orbit,
+        CameraMode::Orbit => {
+            // Reset relative yaw to 0 so Chase starts directly behind the plane.
+            if let Ok((_, _, mut track)) = cam_query.single_mut() {
+                track.yaw = 0.0;
+            }
+            CameraMode::Chase
+        }
+        CameraMode::Chase => {
+            // Sync FreeCam angles from current transform so the view doesn't snap.
+            if let Ok((tf, mut free, _)) = cam_query.single_mut() {
                 let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
                 free.yaw = yaw;
                 free.pitch = pitch;
@@ -68,7 +76,7 @@ pub fn free_cam_control(
     mode: Res<CameraMode>,
     mut query: Query<(&mut Transform, &mut FreeCam)>,
 ) {
-    if matches!(*mode, CameraMode::Track) {
+    if !matches!(*mode, CameraMode::Free) {
         return;
     }
 
@@ -111,8 +119,7 @@ pub fn free_cam_control(
     if keys.pressed(KeyCode::KeyQ) { transform.translation -= Vec3::Y * MOVE_SPEED * dt; }
 }
 
-/// Tracking camera — orbits around the plane with arrow keys.
-/// Only active when mode is Track.
+/// Orbit / Chase camera — only active when mode is Orbit or Chase.
 pub fn track_cam_control(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -132,34 +139,45 @@ pub fn track_cam_control(
 
     let dt = time.delta_secs();
 
-    // [ / ] pull the camera closer to or farther from the plane.
-    // Clamped so you can't clip through the plane or zoom out infinitely.
+    // [ / ] zoom in/out in both modes.
     if keys.pressed(KeyCode::BracketLeft)  { track.distance = (track.distance - ZOOM_SPEED * dt).clamp(3.0, 100.0); }
     if keys.pressed(KeyCode::BracketRight) { track.distance = (track.distance + ZOOM_SPEED * dt).clamp(3.0, 100.0); }
 
-    // Arrow keys adjust the orbit angles stored in TrackCam.
-    // Yaw spins the camera horizontally around the plane (no clamping — full 360°).
-    // Pitch raises/lowers the camera above the plane; clamped so it never
-    // goes below the ground plane (0.05) or flips over the top (1.4 ≈ 80°).
-    if keys.pressed(KeyCode::ArrowLeft) { track.yaw += LOOK_SPEED * dt; }
-    if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
-    if keys.pressed(KeyCode::ArrowUp) {
-        track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(0.05, 1.4);
-    }
-    if keys.pressed(KeyCode::ArrowDown) {
-        track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(0.05, 1.4);
-    }
+    match *mode {
+        CameraMode::Orbit => {
+            // Arrow keys orbit freely around the plane.
+            if keys.pressed(KeyCode::ArrowLeft)  { track.yaw += LOOK_SPEED * dt; }
+            if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
+            if keys.pressed(KeyCode::ArrowUp) {
+                track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(0.05, 1.4);
+            }
+            if keys.pressed(KeyCode::ArrowDown) {
+                track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(0.05, 1.4);
+            }
 
-    // Build the camera's position as an orbit around the plane.
-    // We start with a point directly behind the plane at `distance` units on
-    // the +Z axis, then rotate it: first around Y by yaw (horizontal spin),
-    // then around X by -pitch (negative so "up arrow = higher elevation").
-    // Adding that offset to the plane's world position gives the camera location.
-    // look_at() then aims the camera back at the plane, keeping Y as up so
-    // the view never rolls.
-    let offset = Quat::from_euler(EulerRot::YXZ, track.yaw, -track.pitch, 0.0)
-        * Vec3::new(0.0, 0.0, track.distance);
+            let offset = Quat::from_euler(EulerRot::YXZ, track.yaw, -track.pitch, 0.0)
+                * Vec3::new(0.0, 0.0, track.distance);
+            cam_tf.translation = plane_tf.translation + offset;
+            cam_tf.look_at(plane_tf.translation, Vec3::Y);
+        }
+        CameraMode::Chase => {
+            // Same controls as Orbit but yaw is relative to the plane's heading,
+            // so the plane stays fixed in frame when the pilot turns.
+            if keys.pressed(KeyCode::ArrowLeft)  { track.yaw += LOOK_SPEED * dt; }
+            if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
+            if keys.pressed(KeyCode::ArrowUp) {
+                track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(0.05, 1.4);
+            }
+            if keys.pressed(KeyCode::ArrowDown) {
+                track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(0.05, 1.4);
+            }
 
-    cam_tf.translation = plane_tf.translation + offset;
-    cam_tf.look_at(plane_tf.translation, Vec3::Y);
+            let (plane_yaw, _, _) = plane_tf.rotation.to_euler(EulerRot::YXZ);
+            let offset = Quat::from_euler(EulerRot::YXZ, plane_yaw + track.yaw, -track.pitch, 0.0)
+                * Vec3::new(0.0, 0.0, track.distance);
+            cam_tf.translation = plane_tf.translation + offset;
+            cam_tf.look_at(plane_tf.translation, Vec3::Y);
+        }
+        CameraMode::Free => {}
+    }
 }

@@ -8,6 +8,12 @@ use crate::plane::PlaneState;
 const AIR_DENSITY: f32 = 1.2;
 const GRAVITY: f32 = 9.81;
 const PREDICTION_FRACTION: f32 = 0.5;
+// Rotational drag coefficient: torque = -AERO_DAMP * speed * ang_vel (N·m per rad/s).
+// Must be large enough that ζ ≈ c/(2√(k·I)) stays near 0.7 across speeds.
+// Tail restoring spring k ∝ v², natural aero damping c ∝ v → ζ is speed-independent,
+// but ζ is very low (~0.2) with a small coefficient, causing high-frequency pitch
+// oscillations at speed. ~150 gives ζ ≈ 0.7 (well-damped) at cruise and above.
+const AERO_DAMP: f32 = 150.0;
 
 #[derive(Component)]
 pub struct AircraftRoot {
@@ -17,7 +23,7 @@ pub struct AircraftRoot {
 
 impl Default for AircraftRoot {
     fn default() -> Self {
-        Self { thrust_max: 25_000.0, throttle_percent: 0.0 }
+        Self { thrust_max: 4_800.0, throttle_percent: 0.5 }
     }
 }
 
@@ -66,8 +72,10 @@ pub fn apply_aero_forces(
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
+    let aero_damp = -ang_vel * AERO_DAMP * lin_vel.length();
+
     forces.apply_force(final_ft.force + thrust_force);
-    forces.apply_torque(final_ft.torque);
+    forces.apply_torque(final_ft.torque + aero_damp);
 
     // Update shared PlaneState for HUD / camera
     state.speed = lin_vel.length();

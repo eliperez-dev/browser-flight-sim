@@ -1,6 +1,6 @@
 use avian3d::prelude::{
-    AngularInertia, AngularVelocity, Forces, Gravity, LinearVelocity, Mass,
-    PhysicsPlugins, RigidBody,
+    AngularDamping, AngularInertia, AngularVelocity, CenterOfMass, Gravity,
+    LinearVelocity, Mass, PhysicsPlugins, RigidBody, TransformInterpolation,
 };
 use bevy::{
     asset::AssetMetaCheck,
@@ -23,12 +23,14 @@ use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_world::spawn_debug_world;
 use crate::fog::{FogEnabled, FogPlugin};
 use crate::plane::{Airplane, PlaneState};
+use crate::debug_gizmos::{GizmosVisible, draw_aero_gizmos, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::aircraft_physics::{AircraftRoot, apply_aero_forces};
 use crate::physics::airplane_controller::airplane_controller;
 
 mod camera;
+mod debug_gizmos;
 mod debug_hud;
 mod debug_world;
 mod fog;
@@ -55,6 +57,7 @@ fn main() {
         .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
         .init_resource::<CameraMode>()
         .init_resource::<DebugHud>()
+        .init_resource::<GizmosVisible>()
         .add_systems(Startup, (setup, spawn_debug_world))
         .add_systems(FixedUpdate, (
             airplane_controller,
@@ -62,9 +65,11 @@ fn main() {
         ).chain())
         .add_systems(Update, (
             toggle_camera_mode,
+            toggle_gizmos,
             free_cam_control,
             update_fps,
             fit_canvas,
+            draw_aero_gizmos,
             (populate_debug_hud, render_debug_hud).chain(),
         ))
         // track cam must run after physics writes the transform back
@@ -95,7 +100,8 @@ fn populate_debug_hud(
 
     hud.entries.push(("CAM", match &*mode {
         CameraMode::Free  => "FREE".into(),
-        CameraMode::Track => "TRACK".into(),
+        CameraMode::Orbit => "ORBIT".into(),
+        CameraMode::Chase => "CHASE".into(),
     }));
     hud.entries.push(("FOG", if fog.0 { "ON  [1]" } else { "OFF [1]" }.into()));
 
@@ -125,7 +131,7 @@ fn fit_canvas(
     for event in events.read() {
         let h_scale = event.width / PIXEL_WIDTH as f32;
         let v_scale = event.height / PIXEL_HEIGHT as f32;
-        projection.scale = 1.0 / h_scale.min(v_scale).round();
+        projection.scale = 1.0 / h_scale.min(v_scale);
     }
 }
 
@@ -145,7 +151,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         aspect_ratio: 7.0,
     };
 
-    let stab_h = AeroSurfaceConfig::stabilizer(1.7, 0.9);
+    let stab_h = AeroSurfaceConfig::stabilizer(2.5, 1.2);
     let stab_v = AeroSurfaceConfig::stabilizer(1.3, 0.9);
 
     // Children spawned separately so we can get their entity IDs
@@ -160,18 +166,28 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     let rudder_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
         * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
 
+    // C172 dihedral: 1.5° per side. Both wingtips sit above the root.
+    // Rz(+dihedral) tilts the surface so sideslip in a bank creates asymmetric AoA
+    // on the two wings, generating a natural restoring roll moment.
+    let dihedral = 1.5_f32.to_radians();
+    let dihedral_h = 55.0 * dihedral.tan(); // ≈ 1.44 local units of height at the tip
+    let dihedral_rot = Quat::from_rotation_z(dihedral) * wing_rot;
+
+    // Visual wings sit ~1 m (10 local units) above the entity origin after the mesh offset.
+    const WING_Y: f32 = 10.0;
+
     // Wings are fixed lift surfaces; ailerons are separate smaller panels.
     let left_wing = commands.spawn((
         AeroSurface::wing(wing_config.clone()),
-        Transform::from_xyz(-55.0, 0.0, 0.0).with_rotation(wing_rot),
+        Transform::from_xyz(-55.0, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     let right_wing = commands.spawn((
         AeroSurface::wing(wing_config.clone()),
-        Transform::from_xyz(55.0, 0.0, 0.0).with_rotation(wing_rot),
+        Transform::from_xyz(55.0, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
-    // Ailerons: ~28% of wing span, 35% chord flap, same moment arm as wing
+    // Ailerons: outer 28% of wing span, 35% chord flap — C172 ~1.5m span each
     let aileron_config = AeroSurfaceConfig {
         lift_slope: 6.28,
         skin_friction: 0.02,
@@ -180,18 +196,20 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         stall_angle_low: -15.0,
         chord: 1.57,
         flap_fraction: 0.35,
-        span: 0.6,
+        span: 1.5,
         aspect_ratio: 7.0,
     };
 
+    // Outer 30% of span — place at ~75% semispan for correct moment arm
+    let aileron_dihedral_h = 75.0 * dihedral.tan();
     let aileron_l = commands.spawn((
         AeroSurface::control(aileron_config.clone(), ControlInputType::Roll, -1.0),
-        Transform::from_xyz(-55.0, 0.0, 0.0).with_rotation(wing_rot),
+        Transform::from_xyz(-75.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     let aileron_r = commands.spawn((
         AeroSurface::control(aileron_config, ControlInputType::Roll, 1.0),
-        Transform::from_xyz(55.0, 0.0, 0.0).with_rotation(wing_rot),
+        Transform::from_xyz(75.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     // Body lift surfaces (non-control)
@@ -201,7 +219,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
             zero_lift_aoa: -3.0, stall_angle_high: 15.0, stall_angle_low: -15.0,
             chord: 1.57, flap_fraction: 0.0, span: 0.5, aspect_ratio: 0.5 / 1.57,
         }),
-        Transform::from_xyz(-10.0, 0.0, 5.0).with_rotation(wing_rot),
+        Transform::from_xyz(-10.0, WING_Y, 5.0).with_rotation(wing_rot),
     )).id();
 
     let body_right = commands.spawn((
@@ -210,7 +228,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
             zero_lift_aoa: -3.0, stall_angle_high: 15.0, stall_angle_low: -15.0,
             chord: 1.57, flap_fraction: 0.0, span: 0.5, aspect_ratio: 0.5 / 1.57,
         }),
-        Transform::from_xyz(10.0, 0.0, 5.0).with_rotation(wing_rot),
+        Transform::from_xyz(10.0, WING_Y, 5.0).with_rotation(wing_rot),
     )).id();
 
     let elevator = commands.spawn((
@@ -223,9 +241,18 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         Transform::from_xyz(0.0, 10.0, -45.0).with_rotation(rudder_rot),
     )).id();
 
-    commands.spawn((
+    // Visual mesh is a separate child so it can be offset independently of the physics origin.
+    // The model's Y origin is at the belly; shifting it down -10 local units (-1 m world)
+    // aligns the fuselage center with the CoM and the simulated wing positions.
+    let visual = commands.spawn((
         SceneRoot(asset_server.load("low-poly-airplane/scene.gltf#Scene0")),
+        Transform::from_xyz(0.0, -10.0, 0.0),
+        PIXEL_LAYER,
+    )).id();
+
+    commands.spawn((
         Transform::from_xyz(0.0, 250.0, 0.0).with_scale(Vec3::splat(0.1)),
+        Visibility::default(),
         Airplane,
         PlaneState::default(),
         AircraftRoot::default(),
@@ -233,12 +260,14 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         RigidBody::Dynamic,
         Mass(750.0),
         AngularInertia::new(Vec3::new(1285.0, 1825.0, 2667.0)),
-        LinearVelocity(Vec3::new(0.0, 0.0, 60.0)), // start with forward airspeed
+        LinearVelocity(Vec3::new(0.0, 0.0, 60.0)),
         AngularVelocity(Vec3::ZERO),
-        // No collider — we handle ground in physics or let it fall
+        AngularDamping(0.0),
+        CenterOfMass(Vec3::new(0.0, 1.7, 0.0)),
+        TransformInterpolation,
         PIXEL_LAYER,
     ))
-    .add_children(&[left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder])
+    .add_children(&[visual, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder])
     .id()
 }
 
@@ -265,7 +294,7 @@ fn setup(
         ..default()
     };
     canvas.resize(canvas_size);
-    canvas.sampler = ImageSampler::nearest();
+    canvas.sampler = ImageSampler::linear();
     let pixel_target = images.add(canvas);
 
     spawn_aircraft(&mut commands, &asset_server);
