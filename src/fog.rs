@@ -16,7 +16,7 @@ pub struct FogPlugin;
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FogEnabled>()
-            .add_systems(PostStartup, setup_fog)
+            .add_systems(Startup, setup_fog)
             .add_systems(Update, toggle_fog);
     }
 }
