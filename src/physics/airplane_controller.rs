@@ -6,6 +6,8 @@
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
 
+use crate::camera::CameraMode;
+
 use super::aero_surface::{AeroSurface, ControlInputType};
 use super::aircraft_physics::AircraftRoot;
 use super::flight_config::FlightModelConfig;
@@ -16,9 +18,13 @@ pub fn airplane_controller(
     mut aircraft_q: Query<(&Children, &mut AircraftRoot, &LinearVelocity)>,
     mut surface_q: Query<&mut AeroSurface>,
     time: Res<Time>,
+    camera_mode: Res<CameraMode>,
 ) {
+    if *camera_mode == CameraMode::Free {
+        return;
+    }
     let Ok((children, mut root, lin_vel)) = aircraft_q.single_mut() else { return };
-
+    
     let dt = time.delta_secs();
     let speed = lin_vel.0.length();
 

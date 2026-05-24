@@ -77,11 +77,11 @@ fn main() {
             free_cam_control,
             update_fps,
             fit_canvas,
-            draw_aero_gizmos,
             (populate_debug_hud, render_debug_hud).chain(),
         ))
-        // track cam must run after physics writes the transform back
-        .add_systems(PostUpdate, track_cam_control)
+        // PostUpdate: transform propagation has already run, so GlobalTransform
+        // reflects the current frame position — no one-frame lag on gizmos.
+        .add_systems(PostUpdate, (track_cam_control, draw_aero_gizmos))
         .run();
 }
 
@@ -160,8 +160,8 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         aspect_ratio: 7.0,
     };
 
-    let stab_h = AeroSurfaceConfig::stabilizer(2.5, 1.2);
-    let stab_v = AeroSurfaceConfig::stabilizer(1.3, 0.9);
+    let stab_h = AeroSurfaceConfig::stabilizer(4.5, 1.4);
+    let stab_v = AeroSurfaceConfig::stabilizer(1.8, 1.0);
 
     // Children spawned separately so we can get their entity IDs
     // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
@@ -242,12 +242,12 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
 
     let elevator = commands.spawn((
         AeroSurface::control(stab_h, ControlInputType::Pitch, 1.0),
-        Transform::from_xyz(0.0, 0.0, -45.0).with_rotation(wing_rot),
+        Transform::from_xyz(0.0, WING_Y, -58.0).with_rotation(wing_rot),
     )).id();
 
     let rudder = commands.spawn((
         AeroSurface::control(stab_v, ControlInputType::Yaw, 1.0),
-        Transform::from_xyz(0.0, 10.0, -45.0).with_rotation(rudder_rot),
+        Transform::from_xyz(0.0, 10.0, -58.0).with_rotation(rudder_rot),
     )).id();
 
     // Visual mesh is a separate child so it can be offset independently of the physics origin.
@@ -268,11 +268,11 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         // Avian rigid body
         RigidBody::Dynamic,
         Mass(750.0),
-        AngularInertia::new(Vec3::new(1285.0, 1825.0, 2667.0)),
+        AngularInertia::new(Vec3::new(1825.0, 2667.0, 1285.0)),
         LinearVelocity(Vec3::new(0.0, 0.0, 60.0)),
         AngularVelocity(Vec3::ZERO),
         AngularDamping(0.0),
-        CenterOfMass(Vec3::new(0.0, 1.7, 0.0)),
+        CenterOfMass(Vec3::new(0.0, 7.0, 0.0)),
         TransformInterpolation,
         PIXEL_LAYER,
     ))

@@ -10,7 +10,7 @@ pub const PIXEL_HEIGHT: u32 = 315;
 pub const PIXEL_LAYER: RenderLayers = RenderLayers::layer(0);
 pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, PartialEq, Eq)]
 pub enum CameraMode {
     Free,
     #[default]

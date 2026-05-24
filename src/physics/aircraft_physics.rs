@@ -33,7 +33,7 @@ pub fn apply_aero_forces(
         &AircraftRoot,
         &mut PlaneState,
     )>,
-    surface_q: Query<(&AeroSurface, &GlobalTransform)>,
+    surface_q: Query<(&AeroSurface, &Transform), Without<AircraftRoot>>,
     cfg: Res<FlightModelConfig>,
     time: Res<Time>,
 ) {
@@ -46,11 +46,14 @@ pub fn apply_aero_forces(
     let ang_vel: Vec3 = forces.angular_velocity();
     let com: Vec3 = forces.position().0;
     let rot: Quat = forces.rotation().0;
+    // Aircraft entity has scale(0.1) baked into its Transform; Avian's Position/Rotation
+    // are world-space, so we need the scale separately to convert child local positions.
+    const ROOT_SCALE: f32 = 0.1;
 
     // nose = aircraft local +Z in world space (model faces +Z, parent scale 0.1)
     let nose = rot * Vec3::Z;
 
-    let frame_ft = sum_aero_forces(lin_vel, ang_vel, com, children, &surface_q, cfg.air_density);
+    let frame_ft = sum_aero_forces(lin_vel, ang_vel, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
 
     // thrust_max comes from the config; root only tracks the live throttle position
     let thrust_force = nose * cfg.thrust_max * root.throttle_percent;
@@ -67,7 +70,7 @@ pub fn apply_aero_forces(
     let ang_accel = inertia_world_rot * accel_local;
     let ang_vel_pred = ang_vel + dt * cfg.prediction_fraction * ang_accel;
 
-    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, com, children, &surface_q, cfg.air_density);
+    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
@@ -90,19 +93,21 @@ fn sum_aero_forces(
     lin_vel: Vec3,
     ang_vel: Vec3,
     com: Vec3,
+    root_rot: Quat,
+    root_scale: f32,
     children: &Children,
-    surface_q: &Query<(&AeroSurface, &GlobalTransform)>,
+    surface_q: &Query<(&AeroSurface, &Transform), Without<AircraftRoot>>,
     air_density: f32,
 ) -> BiVector3 {
     let mut total = BiVector3::default();
     for child in children {
-        let Ok((surface, gtf)) = surface_q.get(*child) else { continue };
-        let surface_pos = gtf.translation();
+        let Ok((surface, local_tf)) = surface_q.get(*child) else { continue };
+        // Reconstruct world position from current physics rotation — never stale.
+        let surface_pos = com + root_rot * (local_tf.translation * root_scale);
         let rel_pos = surface_pos - com;
-        // air velocity at this surface = -body velocity - angular contribution
         let world_air_vel = -lin_vel - ang_vel.cross(rel_pos);
-        let (_, rot, _) = gtf.to_scale_rotation_translation();
-        total += surface.calculate_forces(world_air_vel, air_density, rel_pos, rot);
+        let world_rot = root_rot * local_tf.rotation;
+        total += surface.calculate_forces(world_air_vel, air_density, rel_pos, world_rot);
     }
     total
 }

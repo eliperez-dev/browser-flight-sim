@@ -69,7 +69,7 @@ impl Default for FlightModelConfig {
             vne_speed:            84.0,
             vne_authority:        0.35,
 
-            aero_damp:            150.0,
+            aero_damp:            60.0,
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,

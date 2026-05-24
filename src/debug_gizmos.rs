@@ -22,7 +22,7 @@ pub fn draw_aero_gizmos(
         (&Transform, &LinearVelocity, &CenterOfMass, &Children, &AircraftRoot),
         With<Airplane>,
     >,
-    surface_q: Query<(&AeroSurface, &GlobalTransform)>,
+    surface_q: Query<(&AeroSurface, &Transform), Without<Airplane>>,
     mut gizmos: Gizmos,
 ) {
     if !visible.0 {
@@ -33,19 +33,17 @@ pub fn draw_aero_gizmos(
         return;
     };
 
-    // CoM world position: entity origin + rotation * (scale * local_com)
+    // CoM world position derived from the root's interpolated Transform (updated every frame
+    // by TransformInterpolation), not GlobalTransform (only updated on physics steps).
     let com_world = tf.translation + tf.rotation * (tf.scale * com.0);
 
-    // CoM marker — white sphere
     gizmos.sphere(Isometry3d::from_translation(com_world), 0.3, Color::WHITE);
 
-    // Velocity arrow — cyan
     let vel = lin_vel.0;
     if vel.length() > 0.1 {
         gizmos.arrow(com_world, com_world + vel * 0.1, Color::srgb(0.0, 1.0, 1.0));
     }
 
-    // Thrust arrow — blue, along nose (+Z rotated)
     let nose = tf.rotation * Vec3::Z;
     let thrust_n = cfg.thrust_max * root.throttle_percent;
     gizmos.arrow(
@@ -54,34 +52,33 @@ pub fn draw_aero_gizmos(
         Color::srgb(0.2, 0.4, 1.0),
     );
 
-    // Gravity arrow — red downward reference
     gizmos.arrow(com_world, com_world + Vec3::NEG_Y * 3.0, Color::srgb(1.0, 0.2, 0.2));
 
     let speed = vel.length();
-    let q = 0.5 * 1.2 * speed * speed; // dynamic pressure
+    let q = 0.5 * 1.2 * speed * speed;
 
     for child in children {
-        let Ok((surface, gtf)) = surface_q.get(*child) else {
+        let Ok((surface, local_tf)) = surface_q.get(*child) else {
             continue;
         };
-        let pos = gtf.translation();
-        let (_, rot, _) = gtf.to_scale_rotation_translation();
 
-        // Surface position — orange dot
+        // Reconstruct world position from root's interpolated Transform + child local Transform.
+        // child local_tf.translation is in the parent's local space (scale 0.1 already applies).
+        let pos = tf.transform_point(local_tf.translation);
+        let rot = tf.rotation * local_tf.rotation;
+
         gizmos.sphere(Isometry3d::from_translation(pos), 0.15, Color::srgb(1.0, 0.55, 0.0));
 
-        // Approximate lift direction: surface local +Y in world, scaled by dynamic pressure * area
         let lift_dir = rot * Vec3::Y;
         let area = surface.config.chord * surface.config.span;
-        let lift_scale = (q * area * 0.002).clamp(0.1, 6.0);
+        let lift_scale = (q * area * 0.0002).clamp(0.05, 5.0);
         let lift_color = if surface.is_control_surface {
-            Color::srgb(0.4, 1.0, 0.4) // lighter green for control surfaces
+            Color::srgb(0.4, 1.0, 0.4)
         } else {
-            Color::srgb(0.0, 0.8, 0.0) // solid green for fixed surfaces
+            Color::srgb(0.0, 0.8, 0.0)
         };
         gizmos.arrow(pos, pos + lift_dir * lift_scale, lift_color);
 
-        // Line from CoM to surface — dim white
         gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.25));
     }
 }
