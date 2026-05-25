@@ -1,6 +1,6 @@
 use bevy::{diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, prelude::*};
 
-use crate::{FpsText, camera::{CameraMode, FreeCam}, fog::FogEnabled, physics::aircraft_physics::AircraftRoot, plane::{Airplane, PlaneState}};
+use crate::{FpsText, camera::{CameraMode, FreeCam}, fog::FogEnabled, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
 
 /// Shared debug overlay. Any system can push entries into `entries` each frame;
 /// `render_debug_hud` turns the vec into the on-screen text.
@@ -70,6 +70,13 @@ pub fn populate_debug_hud(
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("GND",    if state.on_ground { "ON GROUND" } else { "AIRBORNE" }.into()));
         hud.entries.push(("BRK",    if state.braking { "ON  [B]" } else { "OFF [B]" }.into()));
+        let eng = match root.engine_state {
+            EngineState::Off      => "OFF  [I=start]",
+            EngineState::Cranking => "CRANKING...",
+            EngineState::Running  => "RUNNING",
+        };
+        hud.entries.push(("ENG",    eng.into()));
+        hud.entries.push(("MIX",    format!("{:.0}%  [K/L]", root.mixture * 100.0)));
         hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
         hud.entries.push(("RPM",    format!("{:.0}",     root.engine_rps * 60.0)));
         hud.entries.push(("FLAPS",  format!("{:.0} degrees",    root.flap_setting.to_degrees())));

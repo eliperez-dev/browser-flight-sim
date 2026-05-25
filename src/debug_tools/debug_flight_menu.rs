@@ -169,6 +169,10 @@ fn draw_menu(
                     ui.add(egui::Slider::new(&mut cfg.engine_spool_down_tau, 0.05..=15.0)
                         .text("Spool-down tau (s)")
                         .logarithmic(true));
+                    ui.add(egui::Slider::new(&mut cfg.engine_crank_rps, 0.0..=20.0)
+                        .text("Crank speed (rev/s)"));
+                    ui.add(egui::Slider::new(&mut cfg.engine_start_secs, 0.1..=10.0)
+                        .text("Start time (s)"));
                 });
 
             // ---------------------------------------------------------------

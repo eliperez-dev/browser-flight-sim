@@ -18,6 +18,17 @@ pub const ROOT_SCALE: f32 = 0.1;
 
 /// Per-instance aircraft state. Only runtime-mutable values live here;
 /// fixed parameters (thrust_max, sensitivities, etc.) live in [`FlightModelConfig`].
+/// Running state of the piston engine — a small state machine driven in
+/// `airplane_controller`. `Off` is cold/dark, `Cranking` while the starter is
+/// engaged, `Running` once it catches and fires on its own.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EngineState {
+    #[default]
+    Off,
+    Cranking,
+    Running,
+}
+
 #[derive(Component)]
 pub struct AircraftRoot {
     pub throttle_percent: f32,
@@ -27,6 +38,14 @@ pub struct AircraftRoot {
     /// chopping the throttle winds the engine (and thrust) down over a few
     /// seconds rather than cutting instantly.
     pub engine_rps: f32,
+    /// Engine running state (off / cranking / running).
+    pub engine_state: EngineState,
+    /// Seconds the starter has been cranking, used to time the "catch".
+    pub crank_timer: f32,
+    /// Mixture lever, 0 = idle cutoff (no fuel → engine dies) to 1 = full rich.
+    /// Must be matched to the air density: full rich near sea level, leaned as
+    /// you climb. Mis-set loses power; pulled to cutoff it stops the engine.
+    pub mixture: f32,
     /// Commanded flap deflection (radians) — the notch the lever is set to.
     pub flap_target: f32,
     /// Actual flap deflection (radians), which moves toward `flap_target` at a
@@ -36,7 +55,15 @@ pub struct AircraftRoot {
 
 impl Default for AircraftRoot {
     fn default() -> Self {
-        Self { throttle_percent: 1.0, engine_rps: 0.0, flap_target: 0.0, flap_setting: 0.0 }
+        Self {
+            throttle_percent: 1.0,
+            engine_rps: 0.0,
+            engine_state: EngineState::Off,
+            crank_timer: 0.0,
+            mixture: 1.0,
+            flap_target: 0.0,
+            flap_setting: 0.0,
+        }
     }
 }
 
@@ -80,10 +107,13 @@ pub fn apply_aero_forces(
 
     // Thrust follows engine RPM, not the throttle directly: the throttle sets a
     // target RPM that the engine spools toward (airplane_controller), so thrust
-    // builds and decays with the engine instead of snapping. Normalised by
-    // prop_max_rps so full RPM = thrust_max.
+    // builds and decays with the engine instead of snapping. A fixed-pitch prop's
+    // static thrust scales roughly with RPM², so square the normalised RPM —
+    // full RPM = thrust_max, and idle (~650 rpm ≈ 24% of redline) makes only a
+    // gentle ~6% of max thrust, so the aircraft just creeps at idle.
     let rpm_fraction = (root.engine_rps / cfg.prop_max_rps.max(1e-3)).clamp(0.0, 1.0);
-    let thrust_force = nose * cfg.thrust_max * rpm_fraction;
+    let thrust_factor = rpm_fraction * rpm_fraction;
+    let thrust_force = nose * cfg.thrust_max * thrust_factor;
 
     // Predict velocity (trapezoidal, matching Unity AircraftPhysics.cs)
     let vel_pred = lin_vel
@@ -129,7 +159,7 @@ pub fn apply_aero_forces(
 
     // Update shared PlaneState for HUD / camera
     state.speed = lin_vel.length();
-    state.thrust = cfg.thrust_max * rpm_fraction;
+    state.thrust = cfg.thrust_max * thrust_factor;
     let drag_dir = -lin_vel.normalize_or_zero();
     state.drag_surface = final_ft.force.dot(drag_dir).max(0.0);
     state.drag_fuselage = fuselage_drag.dot(drag_dir).max(0.0);

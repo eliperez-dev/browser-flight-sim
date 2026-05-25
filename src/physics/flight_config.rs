@@ -71,6 +71,11 @@ pub struct FlightModelConfig {
     /// Engine spool-DOWN time constant (seconds): how slowly RPM bleeds off when
     /// you pull the throttle back. Usually longer than spool-up — the prop coasts.
     pub engine_spool_down_tau: f32,
+    /// Starter cranking speed (rev/s) — the RPM the starter motor drives the
+    /// engine to while you hold the start key, before it catches. ~300 rpm ≈ 5.
+    pub engine_crank_rps: f32,
+    /// Seconds of cranking before the engine catches and transitions to running.
+    pub engine_start_secs: f32,
 
     // --- Propeller (visual only) -------------------------------------------
     /// Propeller spin rate at zero throttle, in revolutions per second. The
@@ -220,14 +225,17 @@ impl Default for FlightModelConfig {
             bank_turn_strength:   12.0,
 
             thrust_max:           2_600.0,
-            // Engine winds up in ~2 s, coasts down more slowly in ~4 s.
-            engine_spool_up_tau:   2.0,
-            engine_spool_down_tau: 4.0,
+            // Lycoming-ish throttle response: winds up in ~1.2 s, settles back to
+            // idle in ~1.5 s. (A real fixed-pitch single responds in a second or
+            // two; the deliberate slow throttle push pilots use is technique.)
+            engine_spool_up_tau:   1.2,
+            engine_spool_down_tau: 1.5,
+            engine_crank_rps:      5.0,  // ~300 rpm starter cranking speed
+            engine_start_secs:     1.5,  // cranks ~1.5 s before it catches
 
-            // Prop RPM: 0 at a closed throttle (so it spins down to a stop),
-            // ~2400 rpm at full. Raise prop_idle_rps for a running ground idle.
-            prop_idle_rps:        0.0,
-            prop_max_rps:         40.0,
+            // Real C172 (direct-drive, fixed-pitch): idle ~650 rpm, redline 2700.
+            prop_idle_rps:        11.0,  // ~660 rpm running idle
+            prop_max_rps:         45.0,  // 2700 rpm redline
             prop_spin_axis:       Vec3::Z,
             // Forward of the wing on the nose, on the centerline. Tune onto the
             // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).

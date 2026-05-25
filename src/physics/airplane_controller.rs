@@ -8,13 +8,13 @@ use bevy::prelude::*;
 use crate::camera::CameraMode;
 
 use super::aero_surface::{AeroSurface, ControlInputType};
-use super::aircraft_physics::AircraftRoot;
+use super::aircraft_physics::{AircraftRoot, EngineState};
 use super::flight_config::FlightModelConfig;
 
 pub fn airplane_controller(
     keys: Res<ButtonInput<KeyCode>>,
     cfg: Res<FlightModelConfig>,
-    mut aircraft_q: Query<(&Children, &mut AircraftRoot)>,
+    mut aircraft_q: Query<(&Children, &Transform, &mut AircraftRoot)>,
     mut surface_q: Query<&mut AeroSurface>,
     time: Res<Time>,
     camera_mode: Res<CameraMode>,
@@ -22,7 +22,7 @@ pub fn airplane_controller(
     if *camera_mode == CameraMode::Free {
         return;
     }
-    let Ok((children, mut root)) = aircraft_q.single_mut() else { return };
+    let Ok((children, tf, mut root)) = aircraft_q.single_mut() else { return };
 
     let dt = time.delta_secs();
 
@@ -40,14 +40,77 @@ pub fn airplane_controller(
         root.throttle_percent = (root.throttle_percent - cfg.throttle_rate * dt).max(0.0);
     }
 
-    // Engine spool: the throttle commands a target RPM (idle at 0% → max at
-    // 100%), and the engine's actual RPM lags toward it with first-order inertia
-    // — faster to wind up under power than to wind down on a closed throttle, so
-    // they get separate time constants. Both thrust and the prop's spin read
-    // `engine_rps`, so this is what makes cutting the throttle spin the prop (and
-    // thrust) down to a stop over a few seconds instead of instantly.
-    let target_rps = cfg.prop_idle_rps
-        + root.throttle_percent * (cfg.prop_max_rps - cfg.prop_idle_rps);
+    // --- Mixture lever (L = lean / less fuel, R = rich / more fuel) ----------
+    // Full rich (1.0) suits sea level; lean toward 0 as you climb. Pulling it to
+    // 0 is "idle cutoff" — it starves the engine and shuts it down.
+    const MIXTURE_RATE: f32 = 0.5; // lever travel per second
+    if keys.pressed(KeyCode::KeyL) {
+        root.mixture = (root.mixture + MIXTURE_RATE * dt).min(1.0);
+    }
+    if keys.pressed(KeyCode::KeyK) {
+        root.mixture = (root.mixture - MIXTURE_RATE * dt).max(0.0);
+    }
+
+    // Mixture power factor: how well the current lever matches the air density.
+    // The ideal lever leans with density (≈ density ratio σ from the ISA model),
+    // so full rich is right at sea level and progressively too rich with
+    // altitude. Off-ideal loses power; the lean side is steep (the engine can
+    // quit), the rich side gentle (runs cool, never below ~25%). Below the
+    // cutoff threshold there's effectively no fuel.
+    const MIXTURE_CUTOFF: f32 = 0.05;   // lever below this = no fuel
+    const START_MIN_MIXTURE: f32 = 0.3; // need at least this rich to catch
+    let altitude = tf.translation.y;
+    let density_ratio = (1.0 - 2.2557e-5 * altitude).max(0.0).powf(4.2559);
+    let ideal_mixture = density_ratio.clamp(0.05, 1.0);
+    let mixture_ratio = root.mixture / ideal_mixture;
+    let mixture_power = if root.mixture < MIXTURE_CUTOFF {
+        0.0
+    } else if mixture_ratio <= 1.0 {
+        (1.0 - 1.3 * (1.0 - mixture_ratio).powi(2)).max(0.0)
+    } else {
+        (1.0 - 0.35 * (mixture_ratio - 1.0).powi(2)).max(0.25)
+    };
+
+    // --- Engine state machine (I = engage starter) ---------------------------
+    let starter = keys.pressed(KeyCode::KeyI);
+    match root.engine_state {
+        EngineState::Off => {
+            if starter && root.mixture >= START_MIN_MIXTURE {
+                root.engine_state = EngineState::Cranking;
+                root.crank_timer = 0.0;
+            }
+        }
+        EngineState::Cranking => {
+            root.crank_timer += dt;
+            if !starter {
+                root.engine_state = EngineState::Off; // gave up before it caught
+            } else if root.crank_timer >= cfg.engine_start_secs
+                && root.mixture >= START_MIN_MIXTURE
+            {
+                root.engine_state = EngineState::Running;
+            }
+        }
+        EngineState::Running => {
+            // Starved of fuel (idle cutoff or leaned past the point it can fire).
+            if mixture_power <= 0.0 {
+                root.engine_state = EngineState::Off;
+            }
+        }
+    }
+
+    // --- Target RPM by state, then spool the live RPM toward it ---------------
+    // Throttle commands idle→redline; mixture scales the achievable RPM. Both
+    // thrust and the prop's spin read `engine_rps`, so cranking, catching,
+    // leaning and shutdown all show up in the engine note and the propeller.
+    let target_rps = match root.engine_state {
+        EngineState::Off => 0.0,
+        EngineState::Cranking => cfg.engine_crank_rps,
+        EngineState::Running => {
+            let throttle_rps = cfg.prop_idle_rps
+                + root.throttle_percent * (cfg.prop_max_rps - cfg.prop_idle_rps);
+            throttle_rps * mixture_power
+        }
+    };
     let spool_tau = if target_rps > root.engine_rps {
         cfg.engine_spool_up_tau
     } else {
