@@ -1,5 +1,5 @@
 use avian3d::prelude::LinearVelocity;
-use bevy::{camera::visibility::RenderLayers, prelude::*};
+use bevy::{camera::visibility::RenderLayers, prelude::*, window::WindowResized};
 
 use crate::plane::Airplane;
 
@@ -42,6 +42,18 @@ pub struct TrackCam {
 /// Marker for the outer 2D camera that upscales the pixel canvas to the screen.
 #[derive(Component)]
 pub struct OuterCamera;
+
+pub fn fit_canvas(
+    mut events: MessageReader<WindowResized>,
+    mut projection: Single<&mut Projection, With<OuterCamera>>,
+) {
+    let Projection::Orthographic(projection) = &mut **projection else { return };
+    for event in events.read() {
+        let h_scale = event.width / PIXEL_WIDTH as f32;
+        let v_scale = event.height / PIXEL_HEIGHT as f32;
+        projection.scale = 1.0 / h_scale.min(v_scale);
+    }
+}
 
 /// Cycles Free → Orbit → Chase → Free with F.
 pub fn toggle_camera_mode(

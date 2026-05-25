@@ -31,7 +31,6 @@ pub fn render_debug_hud(
         .join("\n");
 }
 
-
 pub fn update_fps(
     diagnostics: Res<DiagnosticsStore>,
     mut query: Query<&mut Text, With<FpsText>>,

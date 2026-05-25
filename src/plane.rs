@@ -161,7 +161,7 @@ pub fn spawn_aircraft(
     // it spins about local Z (the model's forward axis). `Name` contains "prop"
     // so it matches the same systems a real node would. Positioned from the
     // tunable `prop_position`; `apply_config_to_entities` keeps it in sync.
-    let span = 2.0 * cfg.prop_radius / ROOT_SCALE;
+    let span = 2.0 * cfg.propeller.prop_radius / ROOT_SCALE;
     let debug_prop = commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(span * 0.06, span, span * 0.015))),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -169,7 +169,7 @@ pub fn spawn_aircraft(
             unlit: true,
             ..default()
         })),
-        Transform::from_translation(cfg.prop_position),
+        Transform::from_translation(cfg.propeller.prop_position),
         Propeller,
         DebugPropeller,
         Name::new("debug propeller"),
@@ -229,12 +229,11 @@ pub fn tag_propeller(
         // Iterative DFS over the scene's node hierarchy.
         let mut stack = vec![visual];
         while let Some(entity) = stack.pop() {
-            if let Ok(name) = name_q.get(entity) {
-                if name.as_str().to_ascii_lowercase().contains("prop") {
+            if let Ok(name) = name_q.get(entity)
+                && name.as_str().to_ascii_lowercase().contains("prop") {
                     commands.entity(entity).insert(Propeller);
                     tagged = true;
                 }
-            }
             if let Ok(children) = children_q.get(entity) {
                 for &child in children {
                     stack.push(child);
@@ -260,7 +259,7 @@ pub fn spin_propeller(
 ) {
     let Ok(root) = root_q.single() else { return };
     let angle = root.engine_rps * std::f32::consts::TAU * time.delta_secs();
-    let axis = cfg.prop_spin_axis.normalize_or(Vec3::Z);
+    let axis = cfg.propeller.prop_spin_axis.normalize_or(Vec3::Z);
     let delta = Quat::from_axis_angle(axis, angle);
     for mut transform in &mut prop_q {
         transform.rotation *= delta;

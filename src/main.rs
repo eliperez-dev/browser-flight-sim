@@ -11,11 +11,10 @@ use bevy::{
     render::render_resource::{
         Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     },
-    window::WindowResized,
 };
 
 use crate::{camera::{
-    CameraMode, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, free_cam_control, toggle_camera_mode, track_cam_control
+    CameraMode, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, fit_canvas, free_cam_control, toggle_camera_mode, track_cam_control
 }, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
 use bevy_egui::PrimaryEguiContext;
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
@@ -116,7 +115,7 @@ fn apply_config_to_entities(
     }
     // Move only the placeholder's translation; spin_propeller owns its rotation.
     for mut tf in &mut debug_prop_q {
-        tf.translation = cfg.prop_position;
+        tf.translation = cfg.propeller.prop_position;
     }
     // Empty airframe + current fuel/cargo/occupant load → effective mass,
     // CoM (metres), and inertia. Avian recomputes its solver mass properties
@@ -139,20 +138,6 @@ fn apply_config_to_entities(
         surface.config = new_config.clone();
     }
 }
-
-fn fit_canvas(
-    mut events: MessageReader<WindowResized>,
-    mut projection: Single<&mut Projection, With<OuterCamera>>,
-) {
-    let Projection::Orthographic(projection) = &mut **projection else { return };
-    for event in events.read() {
-        let h_scale = event.width / PIXEL_WIDTH as f32;
-        let v_scale = event.height / PIXEL_HEIGHT as f32;
-        projection.scale = 1.0 / h_scale.min(v_scale);
-    }
-}
-
-
 
 fn setup(
     mut commands: Commands,

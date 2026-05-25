@@ -106,8 +106,8 @@ pub fn airplane_controller(
         EngineState::Off => 0.0,
         EngineState::Cranking => cfg.engine_crank_rps,
         EngineState::Running => {
-            let throttle_rps = cfg.prop_idle_rps
-                + root.throttle_percent * (cfg.prop_max_rps - cfg.prop_idle_rps);
+            let throttle_rps = cfg.propeller.prop_idle_rps
+                + root.throttle_percent * (cfg.propeller.prop_max_rps - cfg.propeller.prop_idle_rps);
             throttle_rps * mixture_power
         }
     };

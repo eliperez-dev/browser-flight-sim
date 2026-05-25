@@ -111,7 +111,7 @@ pub fn apply_aero_forces(
     // static thrust scales roughly with RPM², so square the normalised RPM —
     // full RPM = thrust_max, and idle (~650 rpm ≈ 24% of redline) makes only a
     // gentle ~6% of max thrust, so the aircraft just creeps at idle.
-    let rpm_fraction = (root.engine_rps / cfg.prop_max_rps.max(1e-3)).clamp(0.0, 1.0);
+    let rpm_fraction = (root.engine_rps / cfg.propeller.prop_max_rps.max(1e-3)).clamp(0.0, 1.0);
     let thrust_factor = rpm_fraction * rpm_fraction;
     let thrust_force = nose * cfg.thrust_max * thrust_factor;
 
@@ -168,6 +168,7 @@ pub fn apply_aero_forces(
     state.lift_pct = lift_vertical / (mass.0 * cfg.gravity).max(1.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sum_aero_forces(
     lin_vel: Vec3,
     ang_vel: Vec3,

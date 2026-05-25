@@ -46,7 +46,8 @@ pub struct GearLeg {
 /// Order is `[nose, main-left, main-right]`. The nose uses `gear_nose_rest_length`
 /// while both mains share `gear_rest_length`. Shared with the debug gizmos so the
 /// drawn struts always match where the physics looks for the ground.
-pub fn gear_legs(cfg: &FlightModelConfig) -> [GearLeg; 3] {
+pub fn gear_legs(flight_model: &FlightModelConfig) -> [GearLeg; 3] {
+    let cfg = &flight_model.landing_gear;
     let y = cfg.gear_mount_height;
     let half_track = cfg.gear_track * 0.5;
     [
@@ -78,12 +79,14 @@ pub fn gear_legs(cfg: &FlightModelConfig) -> [GearLeg; 3] {
 /// the step.
 pub fn apply_landing_gear(
     mut aircraft_q: Query<(Forces, &CenterOfMass, &mut PlaneState), With<Airplane>>,
-    cfg: Res<FlightModelConfig>,
+    flight_model: Res<FlightModelConfig>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Ok((mut forces, center_of_mass, mut state)) = aircraft_q.single_mut() else {
         return;
     };
+
+    let cfg = &flight_model.landing_gear;
 
     // Brakes add to the rolling-resistance coefficient while B is held.
     let braking = keys.pressed(KeyCode::KeyB);
@@ -103,7 +106,7 @@ pub fn apply_landing_gear(
 
     let mut any_contact = false;
 
-    for leg in gear_legs(&cfg) {
+    for leg in gear_legs(&flight_model) {
         // If the strut is not pointing meaningfully downward (aircraft on its
         // side or inverted) the flat-ground intersection is undefined — skip it.
         if down.y > -1.0e-3 {

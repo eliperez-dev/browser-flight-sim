@@ -182,19 +182,19 @@ fn draw_menu(
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.label("Position (local units, ×0.1 → m)");
-                    ui.add(egui::Slider::new(&mut cfg.prop_position.x, -30.0..=30.0)
+                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_position.x, -30.0..=30.0)
                         .text("Prop X (local)"));
-                    ui.add(egui::Slider::new(&mut cfg.prop_position.y, -30.0..=30.0)
+                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_position.y, -30.0..=30.0)
                         .text("Prop Y up (local)"));
-                    ui.add(egui::Slider::new(&mut cfg.prop_position.z, -30.0..=90.0)
+                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_position.z, -30.0..=90.0)
                         .text("Prop Z fwd (local)"));
-                    ui.add(egui::Slider::new(&mut cfg.prop_radius, 0.1..=3.0)
+                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_radius, 0.1..=3.0)
                         .text("Prop radius (m)"));
 
                     ui.separator();
-                    ui.add(egui::Slider::new(&mut cfg.prop_idle_rps, 0.0..=30.0)
+                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_idle_rps, 0.0..=30.0)
                         .text("Idle spin (rev/s)"));
-                    ui.add(egui::Slider::new(&mut cfg.prop_max_rps, 0.0..=80.0)
+                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_max_rps, 0.0..=80.0)
                         .text("Full-throttle spin (rev/s)"));
                 });
 
@@ -204,30 +204,30 @@ fn draw_menu(
             egui::CollapsingHeader::new("Landing Gear")
                 .default_open(false)
                 .show(ui, |ui| {
-                    ui.add(egui::Slider::new(&mut cfg.gear_spring, 0.0..=200_000.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_spring, 0.0..=200_000.0)
                         .text("Spring stiffness (N/m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_damping, 0.0..=40_000.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_damping, 0.0..=40_000.0)
                         .text("Damping (N·s/m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_rest_length, 0.1..=2.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_rest_length, 0.1..=2.0)
                         .text("Main strut length (m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_nose_rest_length, 0.1..=2.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_nose_rest_length, 0.1..=2.0)
                         .text("Nose strut length (m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_grip, 0.0..=20_000.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_grip, 0.0..=20_000.0)
                         .text("Lateral grip (N·s/m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_rolling_resistance, 0.0..=0.3)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_rolling_resistance, 0.0..=0.3)
                         .text("Rolling resistance (Crr)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_brake_strength, 0.0..=2.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_brake_strength, 0.0..=2.0)
                         .text("Brake strength (B)"));
 
                     ui.separator();
                     ui.label("Geometry (G to show struts)");
-                    ui.add(egui::Slider::new(&mut cfg.gear_nose_z, -3.0..=4.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_nose_z, -3.0..=4.0)
                         .text("Nose wheel fwd (m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_main_z, -3.0..=4.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_main_z, -3.0..=4.0)
                         .text("Main gear fwd (m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_track, 0.0..=6.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_track, 0.0..=6.0)
                         .text("Main gear track (m)"));
-                    ui.add(egui::Slider::new(&mut cfg.gear_mount_height, -2.0..=1.0)
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_mount_height, -2.0..=1.0)
                         .text("Mount height (m)"));
                 });
 
@@ -252,13 +252,13 @@ fn draw_menu(
 
                     ui.separator();
                     ui.label("Loadout");
-                    ui.add(egui::Slider::new(&mut cfg.fuel_left_kg, 0.0..=FUEL_TANK_MAX_KG)
+                    ui.add(egui::Slider::new(&mut cfg.cargo.fuel_left_kg, 0.0..=FUEL_TANK_MAX_KG)
                         .text("Fuel L wing (kg)"));
-                    ui.add(egui::Slider::new(&mut cfg.fuel_right_kg, 0.0..=FUEL_TANK_MAX_KG)
+                    ui.add(egui::Slider::new(&mut cfg.cargo.fuel_right_kg, 0.0..=FUEL_TANK_MAX_KG)
                         .text("Fuel R wing (kg)"));
-                    ui.add(egui::Slider::new(&mut cfg.cargo_kg, 0.0..=CARGO_MAX_KG)
+                    ui.add(egui::Slider::new(&mut cfg.cargo.cargo_kg, 0.0..=CARGO_MAX_KG)
                         .text("Cargo (kg)"));
-                    ui.add(egui::Slider::new(&mut cfg.passengers, 1..=4)
+                    ui.add(egui::Slider::new(&mut cfg.cargo.passengers, 1..=4)
                         .text("Occupants")
                         .integer());
 

@@ -56,6 +56,7 @@ pub struct FlightModelConfig {
     pub prediction_fraction: f32,
 
     // --- Flight assists ----------------------------------------------------
+    /// TODO: Actually implement this, this is dead code for now
     /// Roll auto-level strength. Torque = -coeff * bank_angle * airspeed.
     pub auto_level_strength: f32,
     /// Bank-to-turn strength. Yaw torque = coeff * bank_angle * airspeed.
@@ -78,6 +79,91 @@ pub struct FlightModelConfig {
     pub engine_start_secs: f32,
 
     // --- Propeller (visual only) -------------------------------------------
+    // Configuation for propeller
+    pub propeller: PropellerConfig,
+
+    // --- Landing gear ------------------------------------------------------
+    /// Configuation for landing gear
+    pub landing_gear: LandingGearConfig,
+
+    // --- Mass & inertia ----------------------------------------------------
+    /// Empty (zero-fuel, no occupants, no baggage) airframe mass (kg).
+    /// C172 basic empty weight ≈ 767 kg. The fuel/cargo/occupant load is added
+    /// on top in [`FlightModelConfig::loaded_mass_properties`].
+    pub mass: f32,
+    /// Empty-airframe principal moments of inertia about the BODY axes (kg·m²):
+    /// X = pitch, Y = yaw, Z = roll (nose is +Z, wings span ±X, up is +Y).
+    /// Higher = more sluggish rotation on that axis. C172: pitch 1825, yaw 2667,
+    /// roll 1285. The load adds to these via the parallel-axis theorem.
+    pub angular_inertia: Vec3,
+    /// Avian's intrinsic angular damping (1/s). The aerodynamic rotational
+    /// damping is modelled separately in `aero_damp`; this is an extra
+    /// velocity-independent decay, normally left at 0.
+    pub angular_damping: f32,
+
+    // --- Cargo (mass that shifts CoM & inertia realistically) ------------
+    // Config for cargo.
+    pub cargo: CargoConfig,
+
+    // --- Visual ------------------------------------------------------------
+    /// Local-space offset (×0.1 → metres) of the GLTF mesh relative to the
+    /// physics origin. Purely cosmetic — lets the model be lined up with the
+    /// simulated wing/tail positions without touching the flight model.
+    pub model_offset: Vec3,
+    /// Local-space center of mass (×0.1 → metres). +Z forward (nose), +Y up.
+    /// Moving aft shortens the static margin (livelier/less stable pitch);
+    /// moving down increases pendulum roll stability. Every aerodynamic moment
+    /// arm is measured from this point, so it genuinely sets the trim and
+    /// stability. Synced to the rigid body at runtime.
+    pub center_of_mass: Vec3,
+
+    // --- Aerodynamic surfaces ---------------------------------------------
+    // Per-surface geometry and stall behaviour. `spawn_aircraft` builds the
+    // surfaces from these at startup, and `apply_config_to_entities` pushes
+    // any later edit back onto the matching live surfaces (keyed by control
+    // input type), so every wing/tail parameter is tunable at runtime.
+    /// Main wing panels (carry the flaps — `ControlInputType::Flap`).
+    pub wing: AeroSurfaceConfig,
+    /// Outboard aileron panels (`ControlInputType::Roll`).
+    pub aileron: AeroSurfaceConfig,
+    /// Horizontal stabilizer / elevator (`ControlInputType::Pitch`).
+    pub elevator: AeroSurfaceConfig,
+    /// Vertical stabilizer / rudder (`ControlInputType::Yaw`).
+    pub rudder: AeroSurfaceConfig,
+    /// Fuselage lift surfaces — small non-control panels at the body.
+    pub body_lift: AeroSurfaceConfig,
+}
+
+#[derive(Clone)]
+pub struct CargoConfig {
+    /// Left wing-tank fuel (kg), 0 → full (~75 kg). Independent of the right
+    /// tank so an imbalance offsets the CoM laterally and rolls the aircraft.
+    pub fuel_left_kg: f32,
+    /// Right wing-tank fuel (kg), 0 → full (~75 kg).
+    pub fuel_right_kg: f32,
+    /// Baggage load (kg), 0 → max (~54 kg / 120 lb). Sits aft of the rear seats.
+    pub cargo_kg: f32,
+    /// Number of occupants on board (1–4), filled pilot → front-R → rear seats.
+    /// Each is treated as a standard ~86 kg adult.
+    pub passengers: u32,
+}
+
+impl Default for CargoConfig {
+    fn default() -> Self {
+        Self { 
+            fuel_left_kg:         FUEL_TANK_MAX_KG / 2.0, // full tanks
+            fuel_right_kg:        FUEL_TANK_MAX_KG / 2.0,
+            cargo_kg:             0.0,
+            passengers:           1, // pilot only
+        }
+    }
+}
+
+
+
+#[derive(Clone)]
+/// Configuation for propeller
+pub struct PropellerConfig {
     /// Propeller spin rate at zero throttle, in revolutions per second. The
     /// engine idles rather than stopping, so the prop keeps turning on the
     /// ground. Purely cosmetic — does not affect thrust.
@@ -95,8 +181,26 @@ pub struct FlightModelConfig {
     /// Propeller disc radius in metres — drives the prop gizmo (the circle swept
     /// by the blades). C172 ≈ 0.94 m.
     pub prop_radius: f32,
+}
 
-    // --- Landing gear ------------------------------------------------------
+impl Default for PropellerConfig {
+    fn default() -> Self {
+        Self {
+            // Real C172 (direct-drive, fixed-pitch): idle ~650 rpm, redline 2700.
+            prop_idle_rps:        11.0,  // ~660 rpm running idle
+            prop_max_rps:         45.0,  // 2700 rpm redline
+            prop_spin_axis:       Vec3::Z,
+            // Forward of the wing on the nose, on the centerline. Tune onto the
+            // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
+            prop_position:        Vec3::new(0.0, 0.0, 60.0),
+            prop_radius:          0.94,
+        }
+    }
+}
+
+/// Configuation for plane landing gear
+#[derive(Clone)]
+pub struct LandingGearConfig {
     // Spring-damper suspension feel, shared by every strut. Geometry (wheel
     // positions) lives in `landing_gear.rs`; these set how the gear responds.
     /// Suspension stiffness per strut (N/m). Higher = firmer, less squat under
@@ -143,62 +247,32 @@ pub struct FlightModelConfig {
     /// tuck the wheels closer to the belly; combined with `gear_rest_length`
     /// this sets how far the wheels reach below the fuselage.
     pub gear_mount_height: f32,
-
-    // --- Mass & inertia ----------------------------------------------------
-    /// Empty (zero-fuel, no occupants, no baggage) airframe mass (kg).
-    /// C172 basic empty weight ≈ 767 kg. The fuel/cargo/occupant load is added
-    /// on top in [`FlightModelConfig::loaded_mass_properties`].
-    pub mass: f32,
-    /// Empty-airframe principal moments of inertia about the BODY axes (kg·m²):
-    /// X = pitch, Y = yaw, Z = roll (nose is +Z, wings span ±X, up is +Y).
-    /// Higher = more sluggish rotation on that axis. C172: pitch 1825, yaw 2667,
-    /// roll 1285. The load adds to these via the parallel-axis theorem.
-    pub angular_inertia: Vec3,
-    /// Avian's intrinsic angular damping (1/s). The aerodynamic rotational
-    /// damping is modelled separately in `aero_damp`; this is an extra
-    /// velocity-independent decay, normally left at 0.
-    pub angular_damping: f32,
-
-    // --- Loadout (mass that shifts CoM & inertia realistically) ------------
-    /// Left wing-tank fuel (kg), 0 → full (~75 kg). Independent of the right
-    /// tank so an imbalance offsets the CoM laterally and rolls the aircraft.
-    pub fuel_left_kg: f32,
-    /// Right wing-tank fuel (kg), 0 → full (~75 kg).
-    pub fuel_right_kg: f32,
-    /// Baggage load (kg), 0 → max (~54 kg / 120 lb). Sits aft of the rear seats.
-    pub cargo_kg: f32,
-    /// Number of occupants on board (1–4), filled pilot → front-R → rear seats.
-    /// Each is treated as a standard ~86 kg adult.
-    pub passengers: u32,
-
-    // --- Visual ------------------------------------------------------------
-    /// Local-space offset (×0.1 → metres) of the GLTF mesh relative to the
-    /// physics origin. Purely cosmetic — lets the model be lined up with the
-    /// simulated wing/tail positions without touching the flight model.
-    pub model_offset: Vec3,
-    /// Local-space center of mass (×0.1 → metres). +Z forward (nose), +Y up.
-    /// Moving aft shortens the static margin (livelier/less stable pitch);
-    /// moving down increases pendulum roll stability. Every aerodynamic moment
-    /// arm is measured from this point, so it genuinely sets the trim and
-    /// stability. Synced to the rigid body at runtime.
-    pub center_of_mass: Vec3,
-
-    // --- Aerodynamic surfaces ---------------------------------------------
-    // Per-surface geometry and stall behaviour. `spawn_aircraft` builds the
-    // surfaces from these at startup, and `apply_config_to_entities` pushes
-    // any later edit back onto the matching live surfaces (keyed by control
-    // input type), so every wing/tail parameter is tunable at runtime.
-    /// Main wing panels (carry the flaps — `ControlInputType::Flap`).
-    pub wing: AeroSurfaceConfig,
-    /// Outboard aileron panels (`ControlInputType::Roll`).
-    pub aileron: AeroSurfaceConfig,
-    /// Horizontal stabilizer / elevator (`ControlInputType::Pitch`).
-    pub elevator: AeroSurfaceConfig,
-    /// Vertical stabilizer / rudder (`ControlInputType::Yaw`).
-    pub rudder: AeroSurfaceConfig,
-    /// Fuselage lift surfaces — small non-control panels at the body.
-    pub body_lift: AeroSurfaceConfig,
 }
+
+impl Default for LandingGearConfig {
+    fn default() -> Self {
+        Self {
+            // Loaded C172 ≈ 1000 kg over 3 wheels (~330 kg each). gear_spring
+            // ~60 kN/m squats ≈5 cm under that load; gear_damping ≈ 2·√(k·m)
+            // ≈ 9 kN·s/m is near-critical so it settles without bouncing.
+            gear_spring:             100_000.0,
+            gear_damping:            15_000.0,
+            gear_rest_length:        1.1,
+            gear_nose_rest_length:   1.1,
+            gear_grip:               6_000.0,
+            gear_rolling_resistance: 0.03,
+            gear_brake_strength:     0.6,
+
+            // Tricycle layout: nose wheel forward, mains just aft of the CoM
+            // with a ~2.5 m track, mounts tucked just below the origin.
+            gear_nose_z:             2.35,
+            gear_main_z:             0.2,
+            gear_track:              2.5,
+            gear_mount_height:       -0.15,
+        }
+    }
+}
+
 
 impl Default for FlightModelConfig {
     fn default() -> Self {
@@ -233,41 +307,15 @@ impl Default for FlightModelConfig {
             engine_crank_rps:      5.0,  // ~300 rpm starter cranking speed
             engine_start_secs:     1.5,  // cranks ~1.5 s before it catches
 
-            // Real C172 (direct-drive, fixed-pitch): idle ~650 rpm, redline 2700.
-            prop_idle_rps:        11.0,  // ~660 rpm running idle
-            prop_max_rps:         45.0,  // 2700 rpm redline
-            prop_spin_axis:       Vec3::Z,
-            // Forward of the wing on the nose, on the centerline. Tune onto the
-            // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
-            prop_position:        Vec3::new(0.0, 0.0, 60.0),
-            prop_radius:          0.94,
+            propeller: PropellerConfig::default(),
 
-            // Loaded C172 ≈ 1000 kg over 3 wheels (~330 kg each). gear_spring
-            // ~60 kN/m squats ≈5 cm under that load; gear_damping ≈ 2·√(k·m)
-            // ≈ 9 kN·s/m is near-critical so it settles without bouncing.
-            gear_spring:             100_000.0,
-            gear_damping:            15_000.0,
-            gear_rest_length:        1.1,
-            gear_nose_rest_length:   1.1,
-            gear_grip:               6_000.0,
-            gear_rolling_resistance: 0.03,
-            gear_brake_strength:     0.6,
-
-            // Tricycle layout: nose wheel forward, mains just aft of the CoM
-            // with a ~2.5 m track, mounts tucked just below the origin.
-            gear_nose_z:             2.35,
-            gear_main_z:             0.2,
-            gear_track:              2.5,
-            gear_mount_height:       -0.15,
+            landing_gear: LandingGearConfig::default(),
 
             mass:                 767.0, // C172 basic empty weight
             angular_inertia:      Vec3::new(1825.0, 2667.0, 1285.0),
             angular_damping:      0.0,
 
-            fuel_left_kg:         FUEL_TANK_MAX_KG / 2.0, // full tanks
-            fuel_right_kg:        FUEL_TANK_MAX_KG / 2.0,
-            cargo_kg:             0.0,
-            passengers:           1,           // pilot only
+            cargo: CargoConfig::default(),
 
             model_offset:         Vec3::new(0.0, -12.0, 11.0),
             // Local units (×0.1 → metres): 1.5 m forward of the wing AC (+Z) and
@@ -346,16 +394,16 @@ impl FlightModelConfig {
 
         // Gather (mass, position) for every load item present.
         let mut loads: Vec<(f32, Vec3)> = Vec::new();
-        if self.fuel_left_kg > 0.0 {
-            loads.push((self.fuel_left_kg, FUEL_POS_LEFT));
+        if self.cargo.fuel_left_kg > 0.0 {
+            loads.push((self.cargo.fuel_left_kg, FUEL_POS_LEFT));
         }
-        if self.fuel_right_kg > 0.0 {
-            loads.push((self.fuel_right_kg, FUEL_POS_RIGHT));
+        if self.cargo.fuel_right_kg > 0.0 {
+            loads.push((self.cargo.fuel_right_kg, FUEL_POS_RIGHT));
         }
-        if self.cargo_kg > 0.0 {
-            loads.push((self.cargo_kg, CARGO_POS));
+        if self.cargo.cargo_kg > 0.0 {
+            loads.push((self.cargo.cargo_kg, CARGO_POS));
         }
-        for seat in SEAT_POS.iter().take(self.passengers.min(4) as usize) {
+        for seat in SEAT_POS.iter().take(self.cargo.passengers.min(4) as usize) {
             loads.push((OCCUPANT_MASS, *seat));
         }
 

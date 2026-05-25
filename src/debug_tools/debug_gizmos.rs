@@ -25,6 +25,7 @@ pub fn setup_gizmo_config(mut config_store: ResMut<GizmoConfigStore>) {
     config.depth_bias = -1.0;
 }
 
+#[allow(clippy::type_complexity)]
 pub fn draw_aero_gizmos(
     visible: Res<GizmosVisible>,
     cfg: Res<FlightModelConfig>,
@@ -52,10 +53,10 @@ pub fn draw_aero_gizmos(
         let prop_color = Color::srgb(1.0, 0.4, 0.9);
         gizmos.circle(
             Isometry3d::new(prop_pos, prop_rot),
-            cfg.prop_radius,
+            cfg.propeller.prop_radius,
             prop_color,
         );
-        let blade = prop_rot * Vec3::Y * cfg.prop_radius;
+        let blade = prop_rot * Vec3::Y * cfg.propeller.prop_radius;
         gizmos.line(prop_pos - blade, prop_pos + blade, prop_color);
     }
 
