@@ -24,7 +24,7 @@ use crate::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_world::spawn_debug_world;
 use crate::fog::{FogEnabled, FogPlugin};
-use crate::plane::{Airplane, PlaneState};
+use crate::plane::{Airplane, PlaneState, PlaneVisual};
 use crate::debug_gizmos::{GizmosVisible, draw_aero_gizmos, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
@@ -77,6 +77,7 @@ fn main() {
             free_cam_control,
             update_fps,
             fit_canvas,
+            apply_config_to_entities,
             (populate_debug_hud, render_debug_hud).chain(),
         ))
         // PostUpdate: transform propagation has already run, so GlobalTransform
@@ -125,10 +126,36 @@ fn populate_debug_hud(
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
         hud.entries.push(("THRUST", format!("{:.0} N",   cfg.thrust_max * root.throttle_percent)));
+        hud.entries.push(("DRAG",   format!("{:.0} N",    state.drag)));
+        hud.entries.push(("  SURF", format!("{:.0} N",    state.drag_surface)));
+        hud.entries.push(("  FUSE", format!("{:.0} N",    state.drag_fuselage)));
         hud.entries.push(("LIFT",   format!("{:.0}%",    state.lift_pct * 100.0)));
         hud.entries.push(("PITCH",  format!("{:.1}°",    pitch.to_degrees())));
         hud.entries.push(("ROLL",   format!("{:.1}°",    roll.to_degrees())));
         hud.entries.push(("YAW",    format!("{:.1}°",    yaw.to_degrees())));
+    }
+}
+
+/// Pushes debug-menu values that live on entities (not in the config resource)
+/// back onto those entities whenever the config changes: the visual mesh
+/// offset, the rigid-body center of mass, and each surface's drag coefficient.
+fn apply_config_to_entities(
+    cfg: Res<FlightModelConfig>,
+    mut visual_q: Query<&mut Transform, With<PlaneVisual>>,
+    mut com_q: Query<&mut CenterOfMass, With<Airplane>>,
+    mut surface_q: Query<&mut AeroSurface>,
+) {
+    if !cfg.is_changed() {
+        return;
+    }
+    for mut tf in &mut visual_q {
+        tf.translation = cfg.model_offset;
+    }
+    for mut com in &mut com_q {
+        com.0 = cfg.center_of_mass;
+    }
+    for mut surface in &mut surface_q {
+        surface.config.skin_friction = cfg.skin_friction;
     }
 }
 
@@ -160,8 +187,9 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         aspect_ratio: 7.0, // full-wing AR = 10.3/1.57 ≈ 6.6, round to 7.0
     };
 
-    let stab_h = AeroSurfaceConfig::stabilizer(4.5, 1.4);
-    let stab_v = AeroSurfaceConfig::stabilizer(2.5, 1.0);
+    // Tail sized to a real C172: horizontal ≈ 3.4 m², vertical ≈ 1.8 m².
+    let stab_h = AeroSurfaceConfig::stabilizer(3.4, 1.0);
+    let stab_v = AeroSurfaceConfig::stabilizer(2.2, 0.8);
 
     // Children spawned separately so we can get their entity IDs
     // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
@@ -179,7 +207,12 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     // Rz(+dihedral) tilts the surface so sideslip in a bank creates asymmetric AoA
     // on the two wings, generating a natural restoring roll moment.
     let dihedral = 1.5_f32.to_radians();
-    let dihedral_h = 55.0 * dihedral.tan(); // ≈ 1.44 local units of height at the tip
+    // Main wing panel is the inboard section (~2.0 m semispan center); the
+    // ailerons sit just outboard of it. Mounting the panel center at local 20
+    // keeps the wingtip near 5.5 m (≈11 m total span) instead of overlapping
+    // the aileron panels, and gives a realistic dihedral roll moment arm.
+    const WING_X: f32 = 20.0;
+    let dihedral_h = WING_X * dihedral.tan();
     let dihedral_rot = Quat::from_rotation_z(dihedral) * wing_rot;
 
     // Visual wings sit ~1 m (10 local units) above the entity origin after the mesh offset.
@@ -188,12 +221,12 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     // Wings are fixed lift surfaces; ailerons are separate smaller panels.
     let left_wing = commands.spawn((
         AeroSurface::wing(wing_config.clone()),
-        Transform::from_xyz(-55.0, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
+        Transform::from_xyz(-WING_X, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     let right_wing = commands.spawn((
         AeroSurface::wing(wing_config.clone()),
-        Transform::from_xyz(55.0, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
+        Transform::from_xyz(WING_X, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     // Ailerons: outer 28% of wing span, 35% chord flap — C172 ~1.5m span each
@@ -256,6 +289,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     let visual = commands.spawn((
         SceneRoot(asset_server.load("low-poly-airplane/scene.gltf#Scene0")),
         Transform::from_xyz(0.0, -10.0, 0.0),
+        PlaneVisual,
         PIXEL_LAYER,
     )).id();
 
@@ -268,11 +302,19 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         // Avian rigid body
         RigidBody::Dynamic,
         Mass(1000.0),
-        AngularInertia::new(Vec3::new(1285.0, 2667.0, 1825.0)), // X=roll, Y=yaw, Z=pitch (kg·m²)
+        // Principal moments about the BODY axes (kg·m²). Nose is +Z, wings span
+        // ±X, up is +Y, so: X = pitch axis, Y = yaw axis, Z = roll axis.
+        // Real C172: roll 1285, pitch 1825, yaw 2667 → placed on their axes.
+        AngularInertia::new(Vec3::new(1825.0, 2667.0, 1285.0)),
         LinearVelocity(Vec3::new(0.0, 0.0, 75.0)),
         AngularVelocity(Vec3::ZERO),
         AngularDamping(0.0),
-        CenterOfMass(Vec3::new(0.0, 7.0, 0.0)),
+        // Local space (×0.1 → metres). Nudged 0.2 m aft of the wing AC (Z=0)
+        // to trim out the nose-heaviness and shorten the static margin so pitch
+        // stops feeling like it pivots about a point ahead of the aircraft.
+        // Y=2 sits the CoM ~0.5 m below the high wing (Y≈10.5), giving the
+        // pendulum (keel) roll stability a high-wing Cessna has.
+        CenterOfMass(Vec3::new(0.0, 2.0, -2.0)),
         TransformInterpolation,
         PIXEL_LAYER,
     ))

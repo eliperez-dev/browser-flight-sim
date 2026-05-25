@@ -20,7 +20,7 @@ pub struct AircraftRoot {
 
 impl Default for AircraftRoot {
     fn default() -> Self {
-        Self { throttle_percent: 0.85 }
+        Self { throttle_percent: 1.0 }
     }
 }
 
@@ -74,17 +74,39 @@ pub fn apply_aero_forces(
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
-    // Rotational drag: torque = -aero_damp * airspeed * ang_vel.
-    // See flight_config.rs for the damping ratio derivation.
-    let aero_damp = -ang_vel * cfg.aero_damp * lin_vel.length();
+    // Rotational drag: torque = -aero_damp * airspeed * ang_vel, per body axis.
+    // aero_damp is indexed (x=roll, y=yaw, z=pitch) by intent, but the BODY axes
+    // are X=pitch, Y=yaw, Z=roll (nose is +Z, wings span ±X), so the roll and
+    // pitch coefficients must be routed to the correct axes. Rotate the
+    // world-space angular velocity into body frame, damp per axis, rotate back.
+    let ang_vel_body = rot.inverse() * ang_vel;
+    let damp_body = Vec3::new(cfg.aero_damp.z, cfg.aero_damp.y, cfg.aero_damp.x); // → (pitch, yaw, roll)
+    let aero_damp = rot * (-ang_vel_body * damp_body * lin_vel.length());
 
-    forces.apply_force(final_ft.force + thrust_force);
+    // Fuselage form drag ("drag box"): the bare body produces drag per body
+    // axis proportional to the air it presents there. The nose is streamlined
+    // (small Z·CdA) but the flanks (X) and belly/top (Y) are not, so a high-AoA
+    // pull or a skid broadsides the body and sheds energy. Force acts at the
+    // CoM (no moment); the fin/stabilizer supply the weathervaning. Per-axis
+    // v·|v| keeps the sign and gives the usual v² magnitude.
+    let v_body = rot.inverse() * lin_vel;
+    let drag_body = -0.5 * cfg.air_density * Vec3::new(
+        cfg.fuselage_drag.x * v_body.x * v_body.x.abs(),
+        cfg.fuselage_drag.y * v_body.y * v_body.y.abs(),
+        cfg.fuselage_drag.z * v_body.z * v_body.z.abs(),
+    );
+    let fuselage_drag = rot * drag_body;
+
+    forces.apply_force(final_ft.force + thrust_force + fuselage_drag);
     forces.apply_torque(final_ft.torque + aero_damp);
 
     // Update shared PlaneState for HUD / camera
     state.speed = lin_vel.length();
     state.thrust = cfg.thrust_max * root.throttle_percent;
-    state.drag = final_ft.force.dot(-lin_vel.normalize_or_zero()).max(0.0);
+    let drag_dir = -lin_vel.normalize_or_zero();
+    state.drag_surface = final_ft.force.dot(drag_dir).max(0.0);
+    state.drag_fuselage = fuselage_drag.dot(drag_dir).max(0.0);
+    state.drag = state.drag_surface + state.drag_fuselage;
     let lift_vertical = final_ft.force.dot(Vec3::Y).max(0.0);
     state.lift_pct = lift_vertical / (mass.0 * cfg.gravity).max(1.0);
 }

@@ -1,4 +1,4 @@
-use avian3d::prelude::{CenterOfMass, LinearVelocity};
+use avian3d::prelude::{AngularVelocity, CenterOfMass, LinearVelocity};
 use bevy::prelude::*;
 
 use crate::physics::aero_surface::AeroSurface;
@@ -19,7 +19,7 @@ pub fn draw_aero_gizmos(
     visible: Res<GizmosVisible>,
     cfg: Res<FlightModelConfig>,
     aircraft_q: Query<
-        (&Transform, &LinearVelocity, &CenterOfMass, &Children, &AircraftRoot),
+        (&Transform, &LinearVelocity, &AngularVelocity, &CenterOfMass, &Children, &AircraftRoot),
         With<Airplane>,
     >,
     surface_q: Query<(&AeroSurface, &Transform), Without<Airplane>>,
@@ -29,7 +29,7 @@ pub fn draw_aero_gizmos(
         return;
     }
 
-    let Ok((tf, lin_vel, com, children, root)) = aircraft_q.single() else {
+    let Ok((tf, lin_vel, ang_vel, com, children, root)) = aircraft_q.single() else {
         return;
     };
 
@@ -45,7 +45,7 @@ pub fn draw_aero_gizmos(
     }
 
     let nose = tf.rotation * Vec3::Z;
-    let thrust_n = cfg.thrust_max * root.throttle_percent;
+    let thrust_n = cfg.thrust_max * root.throttle_percent * 3.0;
     gizmos.arrow(
         com_world,
         com_world + nose * (thrust_n / 2000.0),
@@ -54,8 +54,38 @@ pub fn draw_aero_gizmos(
 
     gizmos.arrow(com_world, com_world + Vec3::NEG_Y * 3.0, Color::srgb(1.0, 0.2, 0.2));
 
-    let speed = vel.length();
-    let q = 0.5 * 1.2 * speed * speed;
+    // Fuselage drag box: a cuboid at the CoM whose extents are the per-axis
+    // Cd·A (X=flank, Y=belly/top, Z=nose). The thin forward dimension vs. the
+    // broad side/vertical faces visualises why pulls and skids bleed energy but
+    // level cruise stays slippery. Oriented with the body, sized in metres.
+    {
+        let h = cfg.fuselage_drag * 0.5 * 0.2; // half-extents
+        let drag_color = Color::srgb(1.0, 0.0, 0.8);
+        // 8 corners in body frame, transformed to world via the body rotation.
+        let corner = |sx: f32, sy: f32, sz: f32| {
+            com_world + tf.rotation * Vec3::new(sx * h.x, sy * h.y, sz * h.z)
+        };
+        let signs = [-1.0_f32, 1.0];
+        for &sy in &signs {
+            for &sz in &signs {
+                gizmos.line(corner(-1.0, sy, sz), corner(1.0, sy, sz), drag_color); // X edges
+            }
+        }
+        for &sx in &signs {
+            for &sz in &signs {
+                gizmos.line(corner(sx, -1.0, sz), corner(sx, 1.0, sz), drag_color); // Y edges
+            }
+        }
+        for &sx in &signs {
+            for &sy in &signs {
+                gizmos.line(corner(sx, sy, -1.0), corner(sx, sy, 1.0), drag_color); // Z edges
+            }
+        }
+    }
+
+    // Newtons → metres of arrow. Tuned so a wing at cruise reads ~1.5 m and a
+    // hard pull grows it visibly, capped so high-g loads don't fill the screen.
+    const FORCE_TO_M: f32 = 0.0004;
 
     for child in children {
         let Ok((surface, local_tf)) = surface_q.get(*child) else {
@@ -69,15 +99,22 @@ pub fn draw_aero_gizmos(
 
         gizmos.sphere(Isometry3d::from_translation(pos), 0.15, Color::srgb(1.0, 0.55, 0.0));
 
-        let lift_dir = rot * Vec3::Y;
-        let area = surface.config.chord * surface.config.span;
-        let lift_scale = (q * area * 0.0002).clamp(0.05, 5.0);
+        // Actual aerodynamic force this surface produces right now, using the
+        // same calculation as the physics step (so it tracks AoA, control
+        // deflection and stall). world_air_vel includes the rotation-induced
+        // flow, matching sum_aero_forces in aircraft_physics.rs.
+        let rel_pos = pos - com_world;
+        let world_air_vel = -vel - ang_vel.0.cross(rel_pos);
+        let force = surface
+            .calculate_forces(world_air_vel, cfg.air_density, rel_pos, rot)
+            .force;
+        let arrow_len = (force.length() * FORCE_TO_M).min(6.0);
         let lift_color = if surface.is_control_surface {
             Color::srgb(0.4, 1.0, 0.4)
         } else {
             Color::srgb(0.0, 0.8, 0.0)
         };
-        gizmos.arrow(pos, pos + lift_dir * lift_scale, lift_color);
+        gizmos.arrow(pos, pos + force.normalize_or_zero() * arrow_len, lift_color);
 
         gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.25));
     }

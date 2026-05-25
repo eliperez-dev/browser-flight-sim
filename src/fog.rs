@@ -25,9 +25,9 @@ fn make_fog() -> DistanceFog {
     DistanceFog {
         color: Color::srgba(0.55, 0.68, 0.82, 1.0),
         directional_light_color: Color::srgba(1.0, 0.95, 0.85, 0.5),
-        directional_light_exponent: 30.0,
+        directional_light_exponent: 20.0,
         falloff: FogFalloff::from_visibility_colors(
-            4000.0,
+            8000.0,
             Color::srgb(0.35, 0.5, 0.66),
             Color::srgb(0.8, 0.844, 1.0),
         ),

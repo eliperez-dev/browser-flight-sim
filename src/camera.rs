@@ -4,8 +4,8 @@ use crate::plane::Airplane;
 
 // Resolution of pixel canvas.
 // Default is 560 x 315
-pub const PIXEL_WIDTH: u32 = 560 * 2;
-pub const PIXEL_HEIGHT: u32 = 315 * 2;
+pub const PIXEL_WIDTH: u32 = 560;
+pub const PIXEL_HEIGHT: u32 = 315;
 
 pub const PIXEL_LAYER: RenderLayers = RenderLayers::layer(0);
 pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);

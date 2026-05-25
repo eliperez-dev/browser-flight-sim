@@ -63,7 +63,9 @@ pub fn airplane_controller(
             ControlInputType::Pitch => pitch * cfg.pitch_sensitivity * surface.input_multiplier * authority + cfg.elevator_trim,
             ControlInputType::Roll  => roll  * cfg.roll_sensitivity  * surface.input_multiplier * authority,
             // Rudder gets a small coordinated-turn mix from the ailerons.
-            ControlInputType::Yaw   => (yaw + roll * 0.55) * cfg.yaw_sensitivity * surface.input_multiplier * authority,
+            // Kept light: a large mix makes every roll input swing the nose,
+            // which reads as the aircraft pivoting about a point ahead of it.
+            ControlInputType::Yaw   => (yaw + roll * 0.2) * cfg.yaw_sensitivity * surface.input_multiplier * authority,
             ControlInputType::Flap  => 0.0,
         };
         let new_angle = surface.flap_angle + (target - surface.flap_angle) * alpha;

@@ -144,6 +144,14 @@ fn draw_menu(
                         .text("Aero damp yaw (Y)"));
                     ui.add(egui::Slider::new(&mut cfg.aero_damp.z, 0.0..=200.0)
                         .text("Aero damp pitch (Z)"));
+                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.z, 0.0..=2.0)
+                        .text("Fuselage drag fwd (CdA)"));
+                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.x, 0.0..=20.0)
+                        .text("Fuselage drag side (CdA)"));
+                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.y, 0.0..=20.0)
+                        .text("Fuselage drag vert (CdA)"));
+                    ui.add(egui::Slider::new(&mut cfg.skin_friction, 0.0..=0.2)
+                        .text("Surface drag (Cd)"));
                     ui.add(egui::Slider::new(&mut cfg.air_density, 0.1..=2.0)
                         .text("Air density (kg/m³)"));
                     ui.add(egui::Slider::new(&mut cfg.gravity, 0.0..=20.0)
@@ -172,6 +180,34 @@ fn draw_menu(
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.thrust_max, 0.0..=20_000.0)
                         .text("Max thrust (N)"));
+                });
+
+            // ---------------------------------------------------------------
+            // Visual (cosmetic mesh alignment, no effect on physics)
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Visual")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut cfg.model_offset.x, -50.0..=50.0)
+                        .text("Model offset X (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.model_offset.y, -50.0..=50.0)
+                        .text("Model offset Y (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.model_offset.z, -50.0..=50.0)
+                        .text("Model offset Z (local)"));
+                });
+
+            // ---------------------------------------------------------------
+            // Balance — rigid-body center of mass (local units, ×0.1 → metres)
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Balance (CoM)")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut cfg.center_of_mass.x, -20.0..=20.0)
+                        .text("CoM X (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.center_of_mass.y, -20.0..=20.0)
+                        .text("CoM Y up (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.center_of_mass.z, -30.0..=30.0)
+                        .text("CoM Z fwd (local)"));
                 });
         });
     Ok(())

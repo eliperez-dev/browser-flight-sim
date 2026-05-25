@@ -41,6 +41,17 @@ pub struct FlightModelConfig {
     /// Per-axis rotational damping (X=roll, Y=yaw, Z=pitch).
     /// Torque = -aero_damp * airspeed * ang_vel per axis.
     pub aero_damp: Vec3,
+    /// Fuselage form drag as Cd·A per *body* axis (X=side/flank, Y=belly/top,
+    /// Z=nose/forward). Drag = -0.5·ρ·v·|v|·CdA per axis, applied at the CoM.
+    /// The nose is streamlined (small Z); the flanks and belly are not, so a
+    /// high-AoA pull or a skid broadsides the body and bleeds energy. Without
+    /// this the body has no drag and the aircraft flies like a steerable
+    /// velocity vector.
+    pub fuselage_drag: Vec3,
+    /// Surface profile-drag coefficient (Cd at zero lift) applied to every
+    /// aerodynamic surface. Higher = draggier wings/tail. Synced into each
+    /// `AeroSurface` at runtime so it can be tuned live. C172-ish ≈ 0.02.
+    pub skin_friction: f32,
     /// Air density (kg/m³). Standard sea-level ISA = 1.225.
     pub air_density: f32,
     /// Gravitational acceleration (m/s²).
@@ -58,25 +69,45 @@ pub struct FlightModelConfig {
     // --- Engine ------------------------------------------------------------
     /// Maximum static thrust at full throttle (Newtons).
     pub thrust_max: f32,
+
+    // --- Visual ------------------------------------------------------------
+    /// Local-space offset (×0.1 → metres) of the GLTF mesh relative to the
+    /// physics origin. Purely cosmetic — lets the model be lined up with the
+    /// simulated wing/tail positions without touching the flight model.
+    pub model_offset: Vec3,
+    /// Local-space center of mass (×0.1 → metres). +Z forward (nose), +Y up.
+    /// Moving aft shortens the static margin (livelier pitch); moving down
+    /// increases pendulum roll stability. Synced to the rigid body at runtime.
+    pub center_of_mass: Vec3,
 }
 
 impl Default for FlightModelConfig {
     fn default() -> Self {
         Self {
-            pitch_sensitivity:    0.65,
-            roll_sensitivity:     0.65,
+            pitch_sensitivity:    0.50,
+            roll_sensitivity:     0.25,
             yaw_sensitivity:      0.30,
             throttle_rate:        0.5,
             servo_tau:            0.15,
-            elevator_trim:        0.035,
+            // Bumped up to match the smaller elevator (≈half the old area):
+            // the trim deflection now has to work harder for the same moment.
+            elevator_trim:        0.02,
 
             stall_speed:          28.0,
             authority_limit_speed: 66.0,
             vne_speed:            84.0,
             vne_authority:        0.35,
 
-            // X=roll (light), Y=yaw (heavy), Z=pitch (moderate)
-            aero_damp:            Vec3::new(3.0, 15.0, 8.0),
+            // X=roll (light), Y=yaw (heavy), Z=pitch (moderate).
+            // Kept low because the tail surfaces already produce physical
+            // rotational damping; this is only a small stabilizing top-up.
+            aero_damp:            Vec3::new(1.0, 9.0, 2.5),
+            // Cd·A per body axis: X=flank (large), Y=belly/top (large),
+            // Z=nose (small, streamlined). Forward value tuned so total cruise
+            // drag lands near the C172's ~1.1 kN; side/vertical make hard
+            // pulls and skids bleed energy and feel heavy.
+            fuselage_drag:        Vec3::new(20.0, 10.0, 0.15),
+            skin_friction:        0.02,
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
@@ -84,7 +115,10 @@ impl Default for FlightModelConfig {
             auto_level_strength:  18.0,
             bank_turn_strength:   12.0,
 
-            thrust_max:           4_800.0,
+            thrust_max:           2_600.0,
+
+            model_offset:         Vec3::new(0.0, -12.0, 11.0),
+            center_of_mass:       Vec3::new(0.0, 1.0, 15.0),
         }
     }
 }
