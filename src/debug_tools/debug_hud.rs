@@ -56,7 +56,7 @@ pub fn populate_debug_hud(
         CameraMode::Orbit => "ORBIT".into(),
         CameraMode::Chase => "CHASE".into(),
     }));
-    hud.entries.push(("FOG", if fog.0 { "ON  [1]" } else { "OFF [1]" }.into()));
+    hud.entries.push(("FOG", if fog.0 { "ON\t [1]" } else { "OFF \t[1]" }.into()));
 
     if let Ok(tf) = cam_query.single() {
         let p = tf.translation;
@@ -64,29 +64,23 @@ pub fn populate_debug_hud(
     }
 
     if let Ok((tf, state, root)) = plane_query.single() {
-        let (yaw, pitch, roll) = tf.rotation.to_euler(EulerRot::YXZ);
         hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("GND",    if state.on_ground { "ON GROUND" } else { "AIRBORNE" }.into()));
-        hud.entries.push(("BRK",    if state.braking { "ON  [B]" } else { "OFF [B]" }.into()));
-        let eng = match root.engine_state {
-            EngineState::Off      => "OFF  [I=start]",
+        hud.entries.push(("ENGINE", match root.engine_state {
+            EngineState::Off      => "OFF  \t[I]",
             EngineState::Cranking => "CRANKING...",
             EngineState::Running  => "RUNNING",
-        };
-        hud.entries.push(("ENG",    eng.into()));
-        hud.entries.push(("MIX",    format!("{:.0}%  [K/L]", root.mixture * 100.0)));
-        hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
+        }.into()));
+        hud.entries.push(("MIXTURE",    format!("{:.0}%\t[K/L]", root.mixture * 100.0)));
+        hud.entries.push(("THROTTLE",    format!("{:.0}%\t[-/+]",    root.throttle_percent * 100.0)));
+        hud.entries.push(("FLAPS",  format!("{:.0}     \t[</>]",    root.flap_setting.to_degrees())));
+        hud.entries.push(("BRK",    if state.braking { "ON  \t[B]" } else { "OFF \t[B]" }.into()));
         hud.entries.push(("RPM",    format!("{:.0}",     root.engine_rps * 60.0)));
-        hud.entries.push(("FLAPS",  format!("{:.0} degrees",    root.flap_setting.to_degrees())));
-        // Actual thrust from the spooled engine RPM, not the raw throttle.
+        hud.entries.push(("LIFT",   format!("{:.0}%",    state.lift_pct * 100.0)));
         hud.entries.push(("THRUST", format!("{:.0} N",   state.thrust)));
         hud.entries.push(("DRAG",   format!("{:.0} N",    state.drag)));
-        hud.entries.push(("  SURF", format!("{:.0} N",    state.drag_surface)));
-        hud.entries.push(("  FUSE", format!("{:.0} N",    state.drag_fuselage)));
-        hud.entries.push(("LIFT",   format!("{:.0}%",    state.lift_pct * 100.0)));
-        hud.entries.push(("PITCH",  format!("{:.1}",    pitch.to_degrees())));
-        hud.entries.push(("ROLL",   format!("{:.1}",    roll.to_degrees())));
-        hud.entries.push(("YAW",    format!("{:.1}",    yaw.to_degrees())));
+        hud.entries.push(("  SURFACE", format!("{:.0} N",    state.drag_surface)));
+        hud.entries.push(("  FUSELAGE", format!("{:.0} N",    state.drag_fuselage)));
     }
 }

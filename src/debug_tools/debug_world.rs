@@ -9,7 +9,7 @@ pub fn spawn_debug_world(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut ambient: ResMut<GlobalAmbientLight>,
 ) {
-    let scale = 100.0;
+    let scale = 500.0;
 
     // Low-level fill light so surfaces in shadow aren't pitch black.
     ambient.brightness = 400.0;
@@ -34,9 +34,12 @@ pub fn spawn_debug_world(
         ( 8.0,  0.5,  5.0,  1.0, 1.0, 1.0),
         (-6.0,  1.0, -4.0,  1.0, 2.0, 1.0),
         (15.0,  0.75, -10.0, 1.5, 1.5, 1.5),
-        (-12.0, 0.5,  8.0,  1.0, 1.0, 1.0),
+        (-12.0, 0.5,  8.0,  1.0, 3.0, 1.0),
         ( 3.0,  1.5,  18.0, 1.0, 3.0, 1.0),
-        (-20.0, 0.5, -15.0, 2.0, 1.0, 2.0),
+        (-20.0, 5.5, -15.0, 2.0, 10.0, 2.0),
+        (12.0, 0.5,  -8.0,  1.0, 5.0, 1.0),
+        ( -3.0,  1.5,  18.0, 1.0, 3.0, 1.0),
+        (20.0, 4.5, 15.0, 2.0, 2.0, 2.0),
     ];
 
     let cube_color = materials.add(Color::srgb(0.75, 0.45, 0.2));

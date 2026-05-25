@@ -192,7 +192,7 @@ impl Default for PropellerConfig {
             prop_spin_axis:       Vec3::Z,
             // Forward of the wing on the nose, on the centerline. Tune onto the
             // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
-            prop_position:        Vec3::new(0.0, 0.0, 60.0),
+            prop_position:        Vec3::new(0.0, 3.5, 33.0),
             prop_radius:          0.94,
         }
     }
@@ -281,7 +281,7 @@ impl Default for FlightModelConfig {
             roll_sensitivity:     0.25,
             yaw_sensitivity:      0.60,
             throttle_rate:        0.5,
-            servo_tau:            0.2,
+            servo_tau:            0.45,
   
             elevator_trim:        -0.06,
 

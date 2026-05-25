@@ -6,8 +6,8 @@
     <!-- Trunk links your Rust project here -->
     
 <script type="module">
-import init, * as bindings from '/browser-flight-sim-f066e84ba5a5897c.js';
-const wasm = await init({ module_or_path: '/browser-flight-sim-f066e84ba5a5897c_bg.wasm' });
+import init, * as bindings from '/browser-flight-sim-ee86178e2da5a24d.js';
+const wasm = await init({ module_or_path: '/browser-flight-sim-ee86178e2da5a24d_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -17,7 +17,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 
 </script>
     
-<link rel="modulepreload" href="/browser-flight-sim-f066e84ba5a5897c.js" crossorigin="anonymous" integrity="sha384-9xiIloqZm/yVC/svvR2EOd39emuhEIf2Hu57XgQNDAHNLKdnrsidPi2eCh0Jpbpc"><link rel="preload" href="/browser-flight-sim-f066e84ba5a5897c_bg.wasm" crossorigin="anonymous" integrity="sha384-T3nPZUK7Getxq7ME4/PFhbiRKTJkC3voT+lhqYyeglqeMWV8gPMw7qsqF8Ln4z8c" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/browser-flight-sim-ee86178e2da5a24d.js" crossorigin="anonymous" integrity="sha384-9xiIloqZm/yVC/svvR2EOd39emuhEIf2Hu57XgQNDAHNLKdnrsidPi2eCh0Jpbpc"><link rel="preload" href="/browser-flight-sim-ee86178e2da5a24d_bg.wasm" crossorigin="anonymous" integrity="sha384-8AVhufpTjYAPAIp8WNdFTVcbhl/l4XAzzqY05qjNUOJIlHWZK5uj2c1P9AC1+KOk" as="fetch" type="application/wasm"></head>
 <body>
     <!-- Bevy attaches its canvas automatically -->
 <script>"use strict";
