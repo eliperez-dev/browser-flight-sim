@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
+use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::FlightModelConfig;
 
 // ---------------------------------------------------------------------------
@@ -98,7 +99,7 @@ fn draw_menu(
             // Control surfaces
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Control")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.pitch_sensitivity, 0.0..=2.0)
                         .text("Pitch sensitivity"));
@@ -120,7 +121,7 @@ fn draw_menu(
             // Speed envelope
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Speed Envelope")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.stall_speed, 5.0..=80.0)
                         .text("Vs — stall (m/s)"));
@@ -136,7 +137,7 @@ fn draw_menu(
             // Aerodynamics
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Aerodynamics")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.aero_damp.x, 0.0..=200.0)
                         .text("Aero damp roll (X)"));
@@ -150,8 +151,6 @@ fn draw_menu(
                         .text("Fuselage drag side (CdA)"));
                     ui.add(egui::Slider::new(&mut cfg.fuselage_drag.y, 0.0..=100.0)
                         .text("Fuselage drag vert (CdA)"));
-                    ui.add(egui::Slider::new(&mut cfg.skin_friction, 0.0..=0.2)
-                        .text("Surface drag (Cd)"));
                     ui.add(egui::Slider::new(&mut cfg.air_density, 0.1..=2.0)
                         .text("Air density (kg/m³)"));
                     ui.add(egui::Slider::new(&mut cfg.gravity, 0.0..=20.0)
@@ -164,7 +163,7 @@ fn draw_menu(
             // Flight assists
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Flight Assists")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.auto_level_strength, 0.0..=500.0)
                         .text("Auto-level strength"));
@@ -176,7 +175,7 @@ fn draw_menu(
             // Engine
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Engine")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.thrust_max, 0.0..=20_000.0)
                         .text("Max thrust (N)"));
@@ -186,7 +185,7 @@ fn draw_menu(
             // Visual (cosmetic mesh alignment, no effect on physics)
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Visual")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.model_offset.x, -50.0..=50.0)
                         .text("Model offset X (local)"));
@@ -200,7 +199,7 @@ fn draw_menu(
             // Balance — rigid-body center of mass (local units, ×0.1 → metres)
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Balance (CoM)")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.center_of_mass.x, -20.0..=20.0)
                         .text("CoM X (local)"));
@@ -209,6 +208,48 @@ fn draw_menu(
                     ui.add(egui::Slider::new(&mut cfg.center_of_mass.z, -30.0..=30.0)
                         .text("CoM Z fwd (local)"));
                 });
+
+            // ---------------------------------------------------------------
+            // Aerodynamic surfaces — per-surface geometry & stall behaviour.
+            // Edits are pushed onto the live surfaces by apply_config_to_entities.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Surfaces")
+                .default_open(false)
+                .show(ui, |ui| {
+                    egui::CollapsingHeader::new("Wing")
+                        .show(ui, |ui| surface_controls(ui, &mut cfg.wing));
+                    egui::CollapsingHeader::new("Aileron")
+                        .show(ui, |ui| surface_controls(ui, &mut cfg.aileron));
+                    egui::CollapsingHeader::new("Elevator (h-stab)")
+                        .show(ui, |ui| surface_controls(ui, &mut cfg.elevator));
+                    egui::CollapsingHeader::new("Rudder (v-stab)")
+                        .show(ui, |ui| surface_controls(ui, &mut cfg.rudder));
+                    egui::CollapsingHeader::new("Body lift")
+                        .show(ui, |ui| surface_controls(ui, &mut cfg.body_lift));
+                });
         });
     Ok(())
+}
+
+/// Renders sliders for one aerodynamic surface's geometry and stall behaviour.
+/// Shared by every surface section so the controls stay consistent.
+fn surface_controls(ui: &mut egui::Ui, c: &mut AeroSurfaceConfig) {
+    ui.add(egui::Slider::new(&mut c.lift_slope, 0.1..=10.0)
+        .text("Lift slope (1/rad)"));
+    ui.add(egui::Slider::new(&mut c.skin_friction, 0.1..=0.2)
+        .text("Skin friction (Cd)"));
+    ui.add(egui::Slider::new(&mut c.zero_lift_aoa, -10.0..=10.0)
+        .text("Zero-lift AoA (°)"));
+    ui.add(egui::Slider::new(&mut c.stall_angle_high, 0.1..=30.0)
+        .text("Stall angle high (°)"));
+    ui.add(egui::Slider::new(&mut c.stall_angle_low, -30.0..=0.1)
+        .text("Stall angle low (°)"));
+    ui.add(egui::Slider::new(&mut c.chord, 0.1..=5.0)
+        .text("Chord (m)"));
+    ui.add(egui::Slider::new(&mut c.span, 0.1..=10.0)
+        .text("Span (m)"));
+    ui.add(egui::Slider::new(&mut c.aspect_ratio, 0.1..=15.0)
+        .text("Aspect ratio"));
+    ui.add(egui::Slider::new(&mut c.flap_fraction, 0.1..=1.0)
+        .text("Flap fraction"));
 }

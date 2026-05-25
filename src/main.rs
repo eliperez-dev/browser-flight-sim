@@ -27,7 +27,6 @@ use crate::fog::{FogEnabled, FogPlugin};
 use crate::plane::{Airplane, PlaneState, PlaneVisual};
 use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
-use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::aircraft_physics::{AircraftRoot, apply_aero_forces};
 use crate::physics::airplane_controller::airplane_controller;
 use crate::physics::flight_config::FlightModelConfig;
@@ -135,7 +134,11 @@ fn populate_debug_hud(
 
 /// Pushes debug-menu values that live on entities (not in the config resource)
 /// back onto those entities whenever the config changes: the visual mesh
-/// offset, the rigid-body center of mass, and each surface's drag coefficient.
+/// offset, the rigid-body center of mass, and each surface's full aero config.
+///
+/// Surfaces are matched to their config by control input type, mirroring how
+/// `spawn_aircraft` built them, so editing `cfg.wing` updates both wing panels,
+/// `cfg.aileron` updates both ailerons, and so on.
 fn apply_config_to_entities(
     cfg: Res<FlightModelConfig>,
     mut visual_q: Query<&mut Transform, With<PlaneVisual>>,
@@ -152,7 +155,14 @@ fn apply_config_to_entities(
         com.0 = cfg.center_of_mass;
     }
     for mut surface in &mut surface_q {
-        surface.config.skin_friction = cfg.skin_friction;
+        let new_config = match (surface.is_control_surface, surface.input_type) {
+            (true, ControlInputType::Flap)  => &cfg.wing,
+            (true, ControlInputType::Roll)  => &cfg.aileron,
+            (true, ControlInputType::Pitch) => &cfg.elevator,
+            (true, ControlInputType::Yaw)   => &cfg.rudder,
+            (false, _)                      => &cfg.body_lift,
+        };
+        surface.config = new_config.clone();
     }
 }
 
@@ -171,22 +181,13 @@ fn fit_canvas(
 /// Cessna 172 approximate surface layout.
 /// All local positions are in LOCAL space of the aircraft entity (scale 0.1),
 /// so local x=55 → world x=5.5 m, giving a realistic moment arm.
-fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity {
-    let wing_config = AeroSurfaceConfig {
-        lift_slope: std::f32::consts::TAU,
-        skin_friction: 0.02,
-        zero_lift_aoa: -3.0,
-        stall_angle_high: 15.0,
-        stall_angle_low: -15.0,
-        chord: 1.57,
-        flap_fraction: 0.2,
-        span: 3.65,  // (total 10.3 m span - 2×1.5 m ailerons) / 2 panels → area ≈ 16.2 m²
-        aspect_ratio: 7.0, // full-wing AR = 10.3/1.57 ≈ 6.6, round to 7.0
-    };
-
-    // Tail sized to a real C172: horizontal ≈ 3.4 m², vertical ≈ 1.8 m².
-    let stab_h = AeroSurfaceConfig::stabilizer(3.4, 1.0);
-    let stab_v = AeroSurfaceConfig::stabilizer(2.2, 0.8);
+fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer, cfg: &FlightModelConfig) -> Entity {
+    // All surface geometry lives in `FlightModelConfig` so the debug menu can
+    // tune it live; `apply_config_to_entities` keeps the spawned surfaces in
+    // sync afterwards.
+    let wing_config = cfg.wing.clone();
+    let stab_h = cfg.elevator.clone();
+    let stab_v = cfg.rudder.clone();
 
     // Children spawned separately so we can get their entity IDs
     // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
@@ -229,17 +230,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     )).id();
 
     // Ailerons: outer 28% of wing span, 35% chord flap — C172 ~1.5m span each
-    let aileron_config = AeroSurfaceConfig {
-        lift_slope: std::f32::consts::TAU,
-        skin_friction: 0.02,
-        zero_lift_aoa: -3.0,
-        stall_angle_high: 15.0,
-        stall_angle_low: -15.0,
-        chord: 1.57,
-        flap_fraction: 0.35,
-        span: 1.5,
-        aspect_ratio: 7.0,
-    };
+    let aileron_config = cfg.aileron.clone();
 
     // Outer ~30% of semispan (3.65+1.5=5.15 m total semispan, aileron centered at ~4.4 m = local 44)
     let aileron_dihedral_h = 44.0 * dihedral.tan();
@@ -255,20 +246,12 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
 
     // Body lift surfaces (non-control)
     let body_left = commands.spawn((
-        AeroSurface::wing(AeroSurfaceConfig {
-            lift_slope: std::f32::consts::TAU, skin_friction: 0.02,
-            zero_lift_aoa: -3.0, stall_angle_high: 15.0, stall_angle_low: -15.0,
-            chord: 1.57, flap_fraction: 0.0, span: 0.5, aspect_ratio: 0.5 / 1.57,
-        }),
+        AeroSurface::wing(cfg.body_lift.clone()),
         Transform::from_xyz(-10.0, WING_Y, 5.0).with_rotation(wing_rot),
     )).id();
 
     let body_right = commands.spawn((
-        AeroSurface::wing(AeroSurfaceConfig {
-            lift_slope: std::f32::consts::TAU, skin_friction: 0.02,
-            zero_lift_aoa: -3.0, stall_angle_high: 15.0, stall_angle_low: -15.0,
-            chord: 1.57, flap_fraction: 0.0, span: 0.5, aspect_ratio: 0.5 / 1.57,
-        }),
+        AeroSurface::wing(cfg.body_lift.clone()),
         Transform::from_xyz(10.0, WING_Y, 5.0).with_rotation(wing_rot),
     )).id();
 
@@ -326,6 +309,7 @@ fn setup(
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
+    cfg: Res<FlightModelConfig>,
 ) {
     let canvas_size = Extent3d { width: PIXEL_WIDTH, height: PIXEL_HEIGHT, ..default() };
     let mut canvas = Image {
@@ -347,7 +331,7 @@ fn setup(
     canvas.sampler = ImageSampler::nearest();
     let pixel_target = images.add(canvas);
 
-    spawn_aircraft(&mut commands, &asset_server);
+    spawn_aircraft(&mut commands, &asset_server, &cfg);
 
     commands.spawn((
         Camera3d::default(),

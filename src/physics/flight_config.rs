@@ -6,6 +6,8 @@
 
 use bevy::prelude::*;
 
+use super::aero_surface_config::AeroSurfaceConfig;
+
 /// All tunable constants for the flight model.
 ///
 /// Grouped by subsystem so the debug panel can display them in logical sections.
@@ -48,10 +50,6 @@ pub struct FlightModelConfig {
     /// this the body has no drag and the aircraft flies like a steerable
     /// velocity vector.
     pub fuselage_drag: Vec3,
-    /// Surface profile-drag coefficient (Cd at zero lift) applied to every
-    /// aerodynamic surface. Higher = draggier wings/tail. Synced into each
-    /// `AeroSurface` at runtime so it can be tuned live. C172-ish ≈ 0.02.
-    pub skin_friction: f32,
     /// Air density (kg/m³). Standard sea-level ISA = 1.225.
     pub air_density: f32,
     /// Gravitational acceleration (m/s²).
@@ -79,6 +77,22 @@ pub struct FlightModelConfig {
     /// Moving aft shortens the static margin (livelier pitch); moving down
     /// increases pendulum roll stability. Synced to the rigid body at runtime.
     pub center_of_mass: Vec3,
+
+    // --- Aerodynamic surfaces ---------------------------------------------
+    // Per-surface geometry and stall behaviour. `spawn_aircraft` builds the
+    // surfaces from these at startup, and `apply_config_to_entities` pushes
+    // any later edit back onto the matching live surfaces (keyed by control
+    // input type), so every wing/tail parameter is tunable at runtime.
+    /// Main wing panels (carry the flaps — `ControlInputType::Flap`).
+    pub wing: AeroSurfaceConfig,
+    /// Outboard aileron panels (`ControlInputType::Roll`).
+    pub aileron: AeroSurfaceConfig,
+    /// Horizontal stabilizer / elevator (`ControlInputType::Pitch`).
+    pub elevator: AeroSurfaceConfig,
+    /// Vertical stabilizer / rudder (`ControlInputType::Yaw`).
+    pub rudder: AeroSurfaceConfig,
+    /// Fuselage lift surfaces — small non-control panels at the body.
+    pub body_lift: AeroSurfaceConfig,
 }
 
 impl Default for FlightModelConfig {
@@ -100,7 +114,6 @@ impl Default for FlightModelConfig {
             aero_damp:            Vec3::new(1.0, 9.0, 2.5),
 
             fuselage_drag:        Vec3::new(60.0, 10.0, 0.15),
-            skin_friction:        0.02,
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
@@ -112,6 +125,31 @@ impl Default for FlightModelConfig {
 
             model_offset:         Vec3::new(0.0, -12.0, 11.0),
             center_of_mass:       Vec3::new(0.0, 1.0, 15.0),
+
+            // Main wing: ~16.2 m² per panel area, full-wing AR ≈ 7, 20% flaps.
+            wing: AeroSurfaceConfig {
+                flap_fraction: 0.2,
+                span: 3.65,
+                aspect_ratio: 7.0,
+                ..AeroSurfaceConfig::default()
+            },
+            // Ailerons: outer ~28% of span, 35% chord, ~1.5 m each.
+            aileron: AeroSurfaceConfig {
+                flap_fraction: 0.35,
+                span: 1.5,
+                aspect_ratio: 7.0,
+                ..AeroSurfaceConfig::default()
+            },
+            // Tail sized to a real C172: horizontal ≈ 3.4 m², vertical ≈ 2.2 m².
+            elevator: AeroSurfaceConfig::stabilizer(3.4, 1.0),
+            rudder:   AeroSurfaceConfig::stabilizer(2.2, 0.8),
+            // Small fuselage lift panels (no flaps).
+            body_lift: AeroSurfaceConfig {
+                flap_fraction: 0.0,
+                span: 0.5,
+                aspect_ratio: 0.5 / 1.57,
+                ..AeroSurfaceConfig::default()
+            },
         }
     }
 }
