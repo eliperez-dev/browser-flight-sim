@@ -40,6 +40,22 @@ pub fn airplane_controller(
         root.throttle_percent = (root.throttle_percent - cfg.throttle_rate * dt).max(0.0);
     }
 
+    // Engine spool: the throttle commands a target RPM (idle at 0% → max at
+    // 100%), and the engine's actual RPM lags toward it with first-order inertia
+    // — faster to wind up under power than to wind down on a closed throttle, so
+    // they get separate time constants. Both thrust and the prop's spin read
+    // `engine_rps`, so this is what makes cutting the throttle spin the prop (and
+    // thrust) down to a stop over a few seconds instead of instantly.
+    let target_rps = cfg.prop_idle_rps
+        + root.throttle_percent * (cfg.prop_max_rps - cfg.prop_idle_rps);
+    let spool_tau = if target_rps > root.engine_rps {
+        cfg.engine_spool_up_tau
+    } else {
+        cfg.engine_spool_down_tau
+    };
+    let spool_alpha = 1.0 - (-dt / spool_tau.max(1e-3)).exp();
+    root.engine_rps += (target_rps - root.engine_rps) * spool_alpha;
+
     let pitch = if keys.pressed(KeyCode::KeyW) { 1.0 } else if keys.pressed(KeyCode::KeyS) { -1.0 } else { 0.0 };
     let roll  = if keys.pressed(KeyCode::KeyD) { 1.0 } else if keys.pressed(KeyCode::KeyA) { -1.0 } else { 0.0 };
     let yaw   = if keys.pressed(KeyCode::KeyE) { 1.0 } else if keys.pressed(KeyCode::KeyQ) { -1.0 } else { 0.0 };

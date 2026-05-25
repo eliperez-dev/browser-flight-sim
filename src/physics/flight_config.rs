@@ -62,8 +62,34 @@ pub struct FlightModelConfig {
     pub bank_turn_strength: f32,
 
     // --- Engine ------------------------------------------------------------
-    /// Maximum static thrust at full throttle (Newtons).
+    /// Maximum static thrust at full throttle (Newtons), produced at `prop_max_rps`.
     pub thrust_max: f32,
+    /// Engine spool-UP time constant (seconds): how quickly RPM (and thus thrust)
+    /// climbs toward the throttle's target when you advance the throttle. Larger
+    /// = lazier acceleration. ~63% of the gap is closed every `tau` seconds.
+    pub engine_spool_up_tau: f32,
+    /// Engine spool-DOWN time constant (seconds): how slowly RPM bleeds off when
+    /// you pull the throttle back. Usually longer than spool-up — the prop coasts.
+    pub engine_spool_down_tau: f32,
+
+    // --- Propeller (visual only) -------------------------------------------
+    /// Propeller spin rate at zero throttle, in revolutions per second. The
+    /// engine idles rather than stopping, so the prop keeps turning on the
+    /// ground. Purely cosmetic — does not affect thrust.
+    pub prop_idle_rps: f32,
+    /// Propeller spin rate at full throttle (rev/s). The visual rate scales
+    /// linearly between `prop_idle_rps` and this with `throttle_percent`.
+    pub prop_max_rps: f32,
+    /// Local-space axis the propeller node spins about. The model faces +Z, so
+    /// the prop turns about Z; flip a component if the blades spin edge-on.
+    pub prop_spin_axis: Vec3,
+    /// Local-space position (×0.1 → metres) of the placeholder "debug propeller"
+    /// rectangle, relative to the aircraft origin. Slide it onto the nose; this
+    /// is the spot the real prop node should occupy once the model is ported.
+    pub prop_position: Vec3,
+    /// Propeller disc radius in metres — drives the prop gizmo (the circle swept
+    /// by the blades). C172 ≈ 0.94 m.
+    pub prop_radius: f32,
 
     // --- Landing gear ------------------------------------------------------
     // Spring-damper suspension feel, shared by every strut. Geometry (wheel
@@ -194,6 +220,19 @@ impl Default for FlightModelConfig {
             bank_turn_strength:   12.0,
 
             thrust_max:           2_600.0,
+            // Engine winds up in ~2 s, coasts down more slowly in ~4 s.
+            engine_spool_up_tau:   2.0,
+            engine_spool_down_tau: 4.0,
+
+            // Prop RPM: 0 at a closed throttle (so it spins down to a stop),
+            // ~2400 rpm at full. Raise prop_idle_rps for a running ground idle.
+            prop_idle_rps:        0.0,
+            prop_max_rps:         40.0,
+            prop_spin_axis:       Vec3::Z,
+            // Forward of the wing on the nose, on the centerline. Tune onto the
+            // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
+            prop_position:        Vec3::new(0.0, 0.0, 60.0),
+            prop_radius:          0.94,
 
             // Loaded C172 ≈ 1000 kg over 3 wheels (~330 kg each). gear_spring
             // ~60 kN/m squats ≈5 cm under that load; gear_damping ≈ 2·√(k·m)

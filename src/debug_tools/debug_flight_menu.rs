@@ -163,6 +163,35 @@ fn draw_menu(
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.thrust_max, 0.0..=20_000.0)
                         .text("Max thrust (N)"));
+                    ui.add(egui::Slider::new(&mut cfg.engine_spool_up_tau, 0.05..=10.0)
+                        .text("Spool-up tau (s)")
+                        .logarithmic(true));
+                    ui.add(egui::Slider::new(&mut cfg.engine_spool_down_tau, 0.05..=15.0)
+                        .text("Spool-down tau (s)")
+                        .logarithmic(true));
+                });
+
+            // ---------------------------------------------------------------
+            // Propeller (visual placeholder; G shows the gizmo)
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Propeller")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label("Position (local units, ×0.1 → m)");
+                    ui.add(egui::Slider::new(&mut cfg.prop_position.x, -30.0..=30.0)
+                        .text("Prop X (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.prop_position.y, -30.0..=30.0)
+                        .text("Prop Y up (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.prop_position.z, -30.0..=90.0)
+                        .text("Prop Z fwd (local)"));
+                    ui.add(egui::Slider::new(&mut cfg.prop_radius, 0.1..=3.0)
+                        .text("Prop radius (m)"));
+
+                    ui.separator();
+                    ui.add(egui::Slider::new(&mut cfg.prop_idle_rps, 0.0..=30.0)
+                        .text("Idle spin (rev/s)"));
+                    ui.add(egui::Slider::new(&mut cfg.prop_max_rps, 0.0..=80.0)
+                        .text("Full-throttle spin (rev/s)"));
                 });
 
             // ---------------------------------------------------------------

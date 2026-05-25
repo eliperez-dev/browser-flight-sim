@@ -21,6 +21,12 @@ pub const ROOT_SCALE: f32 = 0.1;
 #[derive(Component)]
 pub struct AircraftRoot {
     pub throttle_percent: f32,
+    /// Live engine speed (revolutions per second). The throttle sets a *target*
+    /// RPM; this value spools toward it with inertia (see `airplane_controller`),
+    /// and both thrust and the propeller's visual spin are driven from it — so
+    /// chopping the throttle winds the engine (and thrust) down over a few
+    /// seconds rather than cutting instantly.
+    pub engine_rps: f32,
     /// Commanded flap deflection (radians) — the notch the lever is set to.
     pub flap_target: f32,
     /// Actual flap deflection (radians), which moves toward `flap_target` at a
@@ -30,7 +36,7 @@ pub struct AircraftRoot {
 
 impl Default for AircraftRoot {
     fn default() -> Self {
-        Self { throttle_percent: 1.0, flap_target: 0.0, flap_setting: 0.0 }
+        Self { throttle_percent: 1.0, engine_rps: 0.0, flap_target: 0.0, flap_setting: 0.0 }
     }
 }
 
@@ -72,8 +78,12 @@ pub fn apply_aero_forces(
 
     let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
 
-    // thrust_max comes from the config; root only tracks the live throttle position
-    let thrust_force = nose * cfg.thrust_max * root.throttle_percent;
+    // Thrust follows engine RPM, not the throttle directly: the throttle sets a
+    // target RPM that the engine spools toward (airplane_controller), so thrust
+    // builds and decays with the engine instead of snapping. Normalised by
+    // prop_max_rps so full RPM = thrust_max.
+    let rpm_fraction = (root.engine_rps / cfg.prop_max_rps.max(1e-3)).clamp(0.0, 1.0);
+    let thrust_force = nose * cfg.thrust_max * rpm_fraction;
 
     // Predict velocity (trapezoidal, matching Unity AircraftPhysics.cs)
     let vel_pred = lin_vel
@@ -119,7 +129,7 @@ pub fn apply_aero_forces(
 
     // Update shared PlaneState for HUD / camera
     state.speed = lin_vel.length();
-    state.thrust = cfg.thrust_max * root.throttle_percent;
+    state.thrust = cfg.thrust_max * rpm_fraction;
     let drag_dir = -lin_vel.normalize_or_zero();
     state.drag_surface = final_ft.force.dot(drag_dir).max(0.0);
     state.drag_fuselage = fuselage_drag.dot(drag_dir).max(0.0);

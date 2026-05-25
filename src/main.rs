@@ -1,11 +1,11 @@
 use avian3d::prelude::{
-    AngularDamping, AngularInertia, AngularVelocity, CenterOfMass, Gravity,
-    LinearVelocity, Mass, PhysicsPlugins, RigidBody, TransformInterpolation,
+    AngularDamping, AngularInertia, CenterOfMass, Gravity,
+    Mass, PhysicsPlugins
 };
 use bevy::{
     asset::AssetMetaCheck,
     camera::RenderTarget,
-    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    diagnostic::FrameTimeDiagnosticsPlugin,
     image::ImageSampler,
     prelude::*,
     render::render_resource::{
@@ -14,20 +14,18 @@ use bevy::{
     window::WindowResized,
 };
 
-use crate::camera::{
-    CameraMode, FreeCam, OuterCamera, TrackCam,
-    PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER,
-    free_cam_control, track_cam_control, toggle_camera_mode,
-};
+use crate::{camera::{
+    CameraMode, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, free_cam_control, toggle_camera_mode, track_cam_control
+}, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
 use bevy_egui::PrimaryEguiContext;
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_tools::debug_world::spawn_debug_world;
-use crate::fog::{FogEnabled, FogPlugin};
-use crate::plane::{Airplane, PlaneState, PlaneVisual};
+use crate::fog::FogPlugin;
+use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller};
 use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, setup_gizmo_config, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
-use crate::physics::aircraft_physics::{AircraftRoot, apply_aero_forces};
+use crate::physics::aircraft_physics::apply_aero_forces;
 use crate::physics::airplane_controller::airplane_controller;
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::apply_landing_gear;
@@ -75,6 +73,8 @@ fn main() {
             update_fps,
             fit_canvas,
             apply_config_to_entities,
+            // Locate the propeller node once its scene loads, then spin it.
+            (tag_propeller, spin_propeller).chain(),
             (populate_debug_hud, render_debug_hud).chain(),
         ))
         // PostUpdate: transform propagation has already run, so GlobalTransform
@@ -83,57 +83,6 @@ fn main() {
         .run();
 }
 
-fn update_fps(
-    diagnostics: Res<DiagnosticsStore>,
-    mut query: Query<&mut Text, With<FpsText>>,
-) {
-    let Ok(mut text) = query.single_mut() else { return };
-    if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS)
-        && let Some(value) = fps.smoothed() {
-            **text = format!("FPS: {:.0}", value);
-        }
-}
-
-fn populate_debug_hud(
-    mut hud: ResMut<DebugHud>,
-    mode: Res<CameraMode>,
-    fog: Res<FogEnabled>,
-    cam_query: Query<&Transform, With<FreeCam>>,
-    plane_query: Query<(&Transform, &PlaneState, &AircraftRoot), With<Airplane>>,
-    cfg: Res<FlightModelConfig>,
-) {
-    hud.entries.clear();
-
-    hud.entries.push(("CAM", match &*mode {
-        CameraMode::Free  => "FREE".into(),
-        CameraMode::Orbit => "ORBIT".into(),
-        CameraMode::Chase => "CHASE".into(),
-    }));
-    hud.entries.push(("FOG", if fog.0 { "ON  [1]" } else { "OFF [1]" }.into()));
-
-    if let Ok(tf) = cam_query.single() {
-        let p = tf.translation;
-        hud.entries.push(("POS", format!("X={:.1}  Y={:.1}  Z={:.1}", p.x, p.y, p.z)));
-    }
-
-    if let Ok((tf, state, root)) = plane_query.single() {
-        let (yaw, pitch, roll) = tf.rotation.to_euler(EulerRot::YXZ);
-        hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
-        hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
-        hud.entries.push(("GND",    if state.on_ground { "ON GROUND" } else { "AIRBORNE" }.into()));
-        hud.entries.push(("BRK",    if state.braking { "ON  [B]" } else { "OFF [B]" }.into()));
-        hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
-        hud.entries.push(("FLAPS",  format!("{:.0} degrees",    root.flap_setting.to_degrees())));
-        hud.entries.push(("THRUST", format!("{:.0} N",   cfg.thrust_max * root.throttle_percent)));
-        hud.entries.push(("DRAG",   format!("{:.0} N",    state.drag)));
-        hud.entries.push(("  SURF", format!("{:.0} N",    state.drag_surface)));
-        hud.entries.push(("  FUSE", format!("{:.0} N",    state.drag_fuselage)));
-        hud.entries.push(("LIFT",   format!("{:.0}%",    state.lift_pct * 100.0)));
-        hud.entries.push(("PITCH",  format!("{:.1}",    pitch.to_degrees())));
-        hud.entries.push(("ROLL",   format!("{:.1}",    roll.to_degrees())));
-        hud.entries.push(("YAW",    format!("{:.1}",    yaw.to_degrees())));
-    }
-}
 
 /// Pushes debug-menu values that live outside the config resource back onto
 /// the world whenever the config changes: the visual mesh offset, the rigid-body
@@ -145,7 +94,10 @@ fn populate_debug_hud(
 /// `cfg.aileron` updates both ailerons, and so on.
 fn apply_config_to_entities(
     cfg: Res<FlightModelConfig>,
-    mut visual_q: Query<&mut Transform, With<PlaneVisual>>,
+    mut visual_q: Query<&mut Transform, (With<PlaneVisual>, Without<DebugPropeller>)>,
+    // Placeholder propeller — repositioned live from `prop_position`. Disjoint
+    // from `visual_q` (both touch Transform) via the marker filters.
+    mut debug_prop_q: Query<&mut Transform, (With<DebugPropeller>, Without<PlaneVisual>)>,
     mut body_q: Query<
         (&mut CenterOfMass, &mut Mass, &mut AngularInertia, &mut AngularDamping),
         With<Airplane>,
@@ -161,6 +113,10 @@ fn apply_config_to_entities(
     gravity.0 = Vec3::NEG_Y * cfg.gravity;
     for mut tf in &mut visual_q {
         tf.translation = cfg.model_offset;
+    }
+    // Move only the placeholder's translation; spin_propeller owns its rotation.
+    for mut tf in &mut debug_prop_q {
+        tf.translation = cfg.prop_position;
     }
     // Empty airframe + current fuel/cargo/occupant load → effective mass,
     // CoM (metres), and inertia. Avian recomputes its solver mass properties
@@ -196,141 +152,14 @@ fn fit_canvas(
     }
 }
 
-/// Cessna 172 approximate surface layout.
-/// All local positions are in LOCAL space of the aircraft entity (scale 0.1),
-/// so local x=55 → world x=5.5 m, giving a realistic moment arm.
-fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer, cfg: &FlightModelConfig) -> Entity {
-    // All surface geometry lives in `FlightModelConfig` so the debug menu can
-    // tune it live; `apply_config_to_entities` keeps the spawned surfaces in
-    // sync afterwards.
-    let wing_config = cfg.wing.clone();
-    let stab_h = cfg.elevator.clone();
-    let stab_v = cfg.rudder.clone();
 
-    // Children spawned separately so we can get their entity IDs
-    // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
-    // is perpendicular to the flight direction (+Z).  Without this rotation the
-    // aero code zeroes out the entire forward-flight velocity component as "span",
-    // leaving q = 0 and generating no lift.
-    let wing_rot = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-
-    // Rudder needs local Z = world Y (vertical span).
-    // Compose: first Ry(-90°) then Rz(-90°) gives the correct orientation.
-    let rudder_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
-        * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-
-    // C172 dihedral: 1.5° per side. Both wingtips sit above the root.
-    // Rz(+dihedral) tilts the surface so sideslip in a bank creates asymmetric AoA
-    // on the two wings, generating a natural restoring roll moment.
-    let dihedral = 1.5_f32.to_radians();
-    // Main wing panel is the inboard section (~2.0 m semispan center); the
-    // ailerons sit just outboard of it. Mounting the panel center at local 20
-    // keeps the wingtip near 5.5 m (≈11 m total span) instead of overlapping
-    // the aileron panels, and gives a realistic dihedral roll moment arm.
-    const WING_X: f32 = 20.0;
-    let dihedral_h = WING_X * dihedral.tan();
-    let dihedral_rot = Quat::from_rotation_z(dihedral) * wing_rot;
-
-    // Visual wings sit ~1 m (10 local units) above the entity origin after the mesh offset.
-    const WING_Y: f32 = 10.0;
-
-    // Inboard wing panels carry the flaps (flap_fraction 0.2), so they're Flap
-    // control surfaces; ailerons are separate smaller panels outboard. At flaps
-    // 0 the deflection is zero, so they behave exactly like fixed lift surfaces.
-    let left_wing = commands.spawn((
-        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
-        Transform::from_xyz(-WING_X, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
-    )).id();
-
-    let right_wing = commands.spawn((
-        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
-        Transform::from_xyz(WING_X, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
-    )).id();
-
-    // Ailerons: outer 28% of wing span, 35% chord flap — C172 ~1.5m span each
-    let aileron_config = cfg.aileron.clone();
-
-    // Outer ~30% of semispan (3.65+1.5=5.15 m total semispan, aileron centered at ~4.4 m = local 44)
-    let aileron_dihedral_h = 44.0 * dihedral.tan();
-    let aileron_l = commands.spawn((
-        AeroSurface::control(aileron_config.clone(), ControlInputType::Roll, -1.0),
-        Transform::from_xyz(-44.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
-    )).id();
-
-    let aileron_r = commands.spawn((
-        AeroSurface::control(aileron_config, ControlInputType::Roll, 1.0),
-        Transform::from_xyz(44.0, WING_Y + aileron_dihedral_h, 0.0).with_rotation(dihedral_rot),
-    )).id();
-
-    // Body lift surfaces (non-control)
-    let body_left = commands.spawn((
-        AeroSurface::wing(cfg.body_lift.clone()),
-        Transform::from_xyz(-10.0, WING_Y, 5.0).with_rotation(wing_rot),
-    )).id();
-
-    let body_right = commands.spawn((
-        AeroSurface::wing(cfg.body_lift.clone()),
-        Transform::from_xyz(10.0, WING_Y, 5.0).with_rotation(wing_rot),
-    )).id();
-
-    let elevator = commands.spawn((
-        AeroSurface::control(stab_h, ControlInputType::Pitch, 1.0),
-        Transform::from_xyz(0.0, WING_Y - 3.0, -58.0).with_rotation(wing_rot),
-    )).id();
-
-    let rudder = commands.spawn((
-        AeroSurface::control(stab_v, ControlInputType::Yaw, 1.0),
-        Transform::from_xyz(0.0, 10.0, -58.0).with_rotation(rudder_rot),
-    )).id();
-
-    // Visual mesh is a separate child so it can be offset independently of the physics origin.
-    // The model's Y origin is at the belly; shifting it down -10 local units (-1 m world)
-    // aligns the fuselage center with the CoM and the simulated wing positions.
-    let visual = commands.spawn((
-        SceneRoot(asset_server.load("low-poly-airplane/scene.gltf#Scene0")),
-        Transform::from_xyz(0.0, -10.0, 0.0),
-        PlaneVisual,
-        PIXEL_LAYER,
-    )).id();
-
-    let (mass_eff, com_eff, inertia_eff) = cfg.loaded_mass_properties();
-    commands.spawn((
-        // Airborne spawn (250 m up, 65 m/s forward) — kept for reference.
-        // Transform::from_xyz(0.0, 250.0, 0.0).with_scale(Vec3::splat(0.1)),
-        // Sit on the runway: gear rest_length - mount_height = 1.1 - (-0.15) = 1.25 m,
-        // so the struts just touch the ground and settle onto their springs.
-        // Near the -Z threshold (runway spans z = -1000..1000) so the full
-        // length is ahead for the takeoff roll in +Z.
-        Transform::from_xyz(0.0, 1.25, -900.0).with_scale(Vec3::splat(0.1)),
-        Visibility::default(),
-        Airplane,
-        PlaneState::default(),
-        // Spawn with the throttle closed (default is full thrust).
-        AircraftRoot { throttle_percent: 0.0, ..default() },
-        // Avian rigid body. Mass, inertia, and CoM are the empty airframe plus
-        // the current loadout (apply_config_to_entities keeps them in sync as
-        // the debug menu tunes them). Principal moments are about the BODY axes
-        // (X=pitch, Y=yaw, Z=roll); CoM is in metres.
-        RigidBody::Dynamic,
-        Mass(mass_eff),
-        AngularInertia::new(inertia_eff),
-        // Forward launch velocity — kept for reference.
-        // LinearVelocity(Vec3::new(0.0, 0.0, 65.0)),
-        LinearVelocity(Vec3::ZERO),
-        AngularVelocity(Vec3::ZERO),
-        AngularDamping(cfg.angular_damping),
-        CenterOfMass(com_eff),
-        TransformInterpolation,
-        PIXEL_LAYER,
-    ))
-    .add_children(&[visual, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder])
-    .id()
-}
 
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     windows: Query<&Window>,
     cfg: Res<FlightModelConfig>,
 ) {
@@ -354,7 +183,7 @@ fn setup(
     canvas.sampler = ImageSampler::nearest();
     let pixel_target = images.add(canvas);
 
-    spawn_aircraft(&mut commands, &asset_server, &cfg);
+    spawn_aircraft(&mut commands, &asset_server, &mut meshes, &mut materials, &cfg);
 
     commands.spawn((
         Camera3d::default(),

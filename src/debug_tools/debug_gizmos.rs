@@ -5,7 +5,7 @@ use crate::physics::aero_surface::AeroSurface;
 use crate::physics::aircraft_physics::AircraftRoot;
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::gear_legs;
-use crate::plane::Airplane;
+use crate::plane::{Airplane, Propeller};
 
 #[derive(Resource, Default)]
 pub struct GizmosVisible(pub bool);
@@ -33,10 +33,30 @@ pub fn draw_aero_gizmos(
         With<Airplane>,
     >,
     surface_q: Query<(&AeroSurface, &Transform), Without<Airplane>>,
+    // World transform of whatever is tagged as the propeller — the placeholder
+    // rectangle now, the real GLTF node once it's ported. GlobalTransform so the
+    // gizmo tracks the spin and the live `prop_position` without extra math.
+    prop_q: Query<&GlobalTransform, With<Propeller>>,
     mut gizmos: Gizmos,
 ) {
     if !visible.0 {
         return;
+    }
+
+    // Propeller gizmo: the disc the blades sweep (a circle in the prop's plane)
+    // plus a diameter line along the prop's local Y, so it visibly spins. The
+    // circle's local Z (its normal) is the prop's forward, matching the default
+    // spin axis. Radius comes from `prop_radius`.
+    for prop_gt in &prop_q {
+        let (_, prop_rot, prop_pos) = prop_gt.to_scale_rotation_translation();
+        let prop_color = Color::srgb(1.0, 0.4, 0.9);
+        gizmos.circle(
+            Isometry3d::new(prop_pos, prop_rot),
+            cfg.prop_radius,
+            prop_color,
+        );
+        let blade = prop_rot * Vec3::Y * cfg.prop_radius;
+        gizmos.line(prop_pos - blade, prop_pos + blade, prop_color);
     }
 
     let Ok((tf, lin_vel, ang_vel, com, children, root)) = aircraft_q.single() else {
