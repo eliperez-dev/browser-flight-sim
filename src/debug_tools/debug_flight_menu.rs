@@ -166,6 +166,39 @@ fn draw_menu(
                 });
 
             // ---------------------------------------------------------------
+            // Landing gear (spring-damper suspension feel)
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Landing Gear")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut cfg.gear_spring, 0.0..=200_000.0)
+                        .text("Spring stiffness (N/m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_damping, 0.0..=40_000.0)
+                        .text("Damping (N·s/m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_rest_length, 0.1..=2.0)
+                        .text("Main strut length (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_nose_rest_length, 0.1..=2.0)
+                        .text("Nose strut length (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_grip, 0.0..=20_000.0)
+                        .text("Lateral grip (N·s/m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_rolling_resistance, 0.0..=0.3)
+                        .text("Rolling resistance (Crr)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_brake_strength, 0.0..=2.0)
+                        .text("Brake strength (B)"));
+
+                    ui.separator();
+                    ui.label("Geometry (G to show struts)");
+                    ui.add(egui::Slider::new(&mut cfg.gear_nose_z, -3.0..=4.0)
+                        .text("Nose wheel fwd (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_main_z, -3.0..=4.0)
+                        .text("Main gear fwd (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_track, 0.0..=6.0)
+                        .text("Main gear track (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.gear_mount_height, -2.0..=1.0)
+                        .text("Mount height (m)"));
+                });
+
+            // ---------------------------------------------------------------
             // Mass & inertia (synced to the Avian rigid body at runtime)
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Mass & Inertia")

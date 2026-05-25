@@ -65,6 +65,54 @@ pub struct FlightModelConfig {
     /// Maximum static thrust at full throttle (Newtons).
     pub thrust_max: f32,
 
+    // --- Landing gear ------------------------------------------------------
+    // Spring-damper suspension feel, shared by every strut. Geometry (wheel
+    // positions) lives in `landing_gear.rs`; these set how the gear responds.
+    /// Suspension stiffness per strut (N/m). Higher = firmer, less squat under
+    /// load; too high makes touchdown jittery.
+    pub gear_spring: f32,
+    /// Suspension damping per strut (N·s/m). Soaks up the spring's bounce so the
+    /// aircraft settles instead of oscillating. Roughly critical near
+    /// `2·√(gear_spring · mass_per_wheel)`.
+    pub gear_damping: f32,
+    /// Main-gear strut natural (uncompressed) length in metres — the ride height
+    /// of the two rear wheels. Larger values park the tail higher.
+    pub gear_rest_length: f32,
+    /// Nose-gear strut natural (uncompressed) length in metres. Independent of
+    /// the mains so the resting pitch attitude can be set: longer than the mains
+    /// sits the aircraft nose-up, shorter sits it nose-down.
+    pub gear_nose_rest_length: f32,
+    /// Lateral tyre grip (N·s/m): viscous resistance to sliding sideways, so the
+    /// aircraft tracks straight on rollout. Capped by the strut's normal load.
+    pub gear_grip: f32,
+    /// Rolling resistance coefficient (Crr, dimensionless): fore-and-aft tyre
+    /// drag as a fraction of the strut's normal load. Real tyres are ~0.02–0.05,
+    /// so the wheels roll nearly freely and the drag fades as lift unloads the
+    /// gear on the takeoff roll. (Was a speed-proportional N·s/m term that grew
+    /// large enough to cancel thrust near rotate speed.)
+    pub gear_rolling_resistance: f32,
+    /// Brake strength: extra rolling-resistance coefficient added while the
+    /// brakes (B) are held. Like rolling resistance it scales with wheel load,
+    /// so ~0.5–0.8 gives a firm but realistic ground deceleration. Fades near a
+    /// standstill, so it slows the rollout rather than locking a parked aircraft.
+    pub gear_brake_strength: f32,
+
+    // Gear geometry — strut mount points in the body frame (metres). The struts
+    // hang straight down (body −Y) by `gear_rest_length` from these; the wheel
+    // layout is built in `landing_gear::gear_mounts`.
+    /// Nose-wheel station: distance forward of the origin (+Z), metres.
+    pub gear_nose_z: f32,
+    /// Main-gear station: distance forward of the origin (+Z), metres. Usually
+    /// just aft of the CoM so the aircraft sits slightly nose-up on its wheels.
+    pub gear_main_z: f32,
+    /// Main-gear track: lateral distance between the two main wheels (metres).
+    /// Each main sits at ±half this on the body X axis.
+    pub gear_track: f32,
+    /// Height of every strut mount above the origin (+Y), metres. Lower mounts
+    /// tuck the wheels closer to the belly; combined with `gear_rest_length`
+    /// this sets how far the wheels reach below the fuselage.
+    pub gear_mount_height: f32,
+
     // --- Mass & inertia ----------------------------------------------------
     /// Empty (zero-fuel, no occupants, no baggage) airframe mass (kg).
     /// C172 basic empty weight ≈ 767 kg. The fuel/cargo/occupant load is added
@@ -146,6 +194,24 @@ impl Default for FlightModelConfig {
             bank_turn_strength:   12.0,
 
             thrust_max:           2_600.0,
+
+            // Loaded C172 ≈ 1000 kg over 3 wheels (~330 kg each). gear_spring
+            // ~60 kN/m squats ≈5 cm under that load; gear_damping ≈ 2·√(k·m)
+            // ≈ 9 kN·s/m is near-critical so it settles without bouncing.
+            gear_spring:             100_000.0,
+            gear_damping:            15_000.0,
+            gear_rest_length:        1.1,
+            gear_nose_rest_length:   1.1,
+            gear_grip:               6_000.0,
+            gear_rolling_resistance: 0.03,
+            gear_brake_strength:     0.6,
+
+            // Tricycle layout: nose wheel forward, mains just aft of the CoM
+            // with a ~2.5 m track, mounts tucked just below the origin.
+            gear_nose_z:             2.35,
+            gear_main_z:             0.2,
+            gear_track:              2.5,
+            gear_mount_height:       -0.15,
 
             mass:                 767.0, // C172 basic empty weight
             angular_inertia:      Vec3::new(1825.0, 2667.0, 1285.0),

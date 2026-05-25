@@ -30,6 +30,7 @@ use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::{AircraftRoot, apply_aero_forces};
 use crate::physics::airplane_controller::airplane_controller;
 use crate::physics::flight_config::FlightModelConfig;
+use crate::physics::landing_gear::apply_landing_gear;
 
 mod camera;
 mod fog;
@@ -67,7 +68,7 @@ fn main() {
             // using the real frame delta rather than a fixed timestep.
             // Running them in FixedUpdate caused a rate mismatch that produced
             // the visible stepping / snapping artifacts.
-            (airplane_controller, apply_aero_forces).chain(),
+            (airplane_controller, apply_aero_forces, apply_landing_gear).chain(),
             toggle_camera_mode,
             toggle_gizmos,
             free_cam_control,
@@ -119,6 +120,8 @@ fn populate_debug_hud(
         let (yaw, pitch, roll) = tf.rotation.to_euler(EulerRot::YXZ);
         hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
+        hud.entries.push(("GND",    if state.on_ground { "ON GROUND" } else { "AIRBORNE" }.into()));
+        hud.entries.push(("BRK",    if state.braking { "ON  [B]" } else { "OFF [B]" }.into()));
         hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
         hud.entries.push(("FLAPS",  format!("{:.0} degrees",    root.flap_setting.to_degrees())));
         hud.entries.push(("THRUST", format!("{:.0} N",   cfg.thrust_max * root.throttle_percent)));
@@ -292,11 +295,18 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer, cfg: &Fli
 
     let (mass_eff, com_eff, inertia_eff) = cfg.loaded_mass_properties();
     commands.spawn((
-        Transform::from_xyz(0.0, 250.0, 0.0).with_scale(Vec3::splat(0.1)),
+        // Airborne spawn (250 m up, 65 m/s forward) — kept for reference.
+        // Transform::from_xyz(0.0, 250.0, 0.0).with_scale(Vec3::splat(0.1)),
+        // Sit on the runway: gear rest_length - mount_height = 1.1 - (-0.15) = 1.25 m,
+        // so the struts just touch the ground and settle onto their springs.
+        // Near the -Z threshold (runway spans z = -1000..1000) so the full
+        // length is ahead for the takeoff roll in +Z.
+        Transform::from_xyz(0.0, 1.25, -900.0).with_scale(Vec3::splat(0.1)),
         Visibility::default(),
         Airplane,
         PlaneState::default(),
-        AircraftRoot::default(),
+        // Spawn with the throttle closed (default is full thrust).
+        AircraftRoot { throttle_percent: 0.0, ..default() },
         // Avian rigid body. Mass, inertia, and CoM are the empty airframe plus
         // the current loadout (apply_config_to_entities keeps them in sync as
         // the debug menu tunes them). Principal moments are about the BODY axes
@@ -304,7 +314,9 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer, cfg: &Fli
         RigidBody::Dynamic,
         Mass(mass_eff),
         AngularInertia::new(inertia_eff),
-        LinearVelocity(Vec3::new(0.0, 0.0, 65.0)),
+        // Forward launch velocity — kept for reference.
+        // LinearVelocity(Vec3::new(0.0, 0.0, 65.0)),
+        LinearVelocity(Vec3::ZERO),
         AngularVelocity(Vec3::ZERO),
         AngularDamping(cfg.angular_damping),
         CenterOfMass(com_eff),

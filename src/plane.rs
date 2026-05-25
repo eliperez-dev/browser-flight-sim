@@ -24,4 +24,8 @@ pub struct PlaneState {
     pub drag_fuselage: f32,
     /// Fraction of cruise lift — 0 = stalled, 1 = cruise, >1 = excess speed.
     pub lift_pct: f32,
+    /// True while at least one landing-gear strut is touching the ground.
+    pub on_ground: bool,
+    /// True while the wheel brakes (B) are applied.
+    pub braking: bool,
 }

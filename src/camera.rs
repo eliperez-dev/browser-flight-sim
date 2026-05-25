@@ -85,8 +85,11 @@ pub fn free_cam_control(
         return;
     }
 
-    const MOVE_SPEED: f32 = 1000.0;
-    const LOOK_SPEED: f32 = 3.5;
+    let move_speed: f32 = match keys.pressed(KeyCode::ShiftLeft) {
+        false => 5.0,
+        true => 500.0
+    };
+    const LOOK_SPEED: f32 = 1.5;
 
     let Ok((mut transform, mut cam)) = query.single_mut() else { return };
     let dt = time.delta_secs();
@@ -116,12 +119,12 @@ pub fn free_cam_control(
     // WASD flies the camera along its local forward/right axes (no altitude change).
     // E/Q move straight up or down in world space regardless of camera tilt,
     // so vertical movement is always predictable.
-    if keys.pressed(KeyCode::KeyW) { transform.translation += forward * MOVE_SPEED * dt; }
-    if keys.pressed(KeyCode::KeyS) { transform.translation -= forward * MOVE_SPEED * dt; }
-    if keys.pressed(KeyCode::KeyA) { transform.translation -= right * MOVE_SPEED * dt; }
-    if keys.pressed(KeyCode::KeyD) { transform.translation += right * MOVE_SPEED * dt; }
-    if keys.pressed(KeyCode::KeyE) { transform.translation += Vec3::Y * MOVE_SPEED * dt; }
-    if keys.pressed(KeyCode::KeyQ) { transform.translation -= Vec3::Y * MOVE_SPEED * dt; }
+    if keys.pressed(KeyCode::KeyW) { transform.translation += forward * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyS) { transform.translation -= forward * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyA) { transform.translation -= right * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyD) { transform.translation += right * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyE) { transform.translation += Vec3::Y * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyQ) { transform.translation -= Vec3::Y * move_speed * dt; }
 }
 
 /// Orbit / Chase camera — only active when mode is Orbit or Chase.
@@ -153,11 +156,15 @@ pub fn track_cam_control(
             // Arrow keys orbit freely around the plane.
             if keys.pressed(KeyCode::ArrowLeft)  { track.yaw += LOOK_SPEED * dt; }
             if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
+            // Allow the orbit to swing well below the plane (negative pitch) so the
+            // camera can sit low and look up past the aircraft at the sky above it.
+            // Clamp stops just short of straight up/down to avoid the look_at
+            // gimbal flip at the poles.
             if keys.pressed(KeyCode::ArrowUp) {
-                track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(0.05, 1.4);
+                track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(-1.4, 1.4);
             }
             if keys.pressed(KeyCode::ArrowDown) {
-                track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(0.05, 1.4);
+                track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(-1.4, 1.4);
             }
 
             let offset = Quat::from_euler(EulerRot::YXZ, track.yaw, -track.pitch, 0.0)
