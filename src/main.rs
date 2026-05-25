@@ -20,12 +20,12 @@ use crate::camera::{
     free_cam_control, track_cam_control, toggle_camera_mode,
 };
 use bevy_egui::PrimaryEguiContext;
-use crate::debug_flight_menu::DebugFlightMenuPlugin;
-use crate::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
-use crate::debug_world::spawn_debug_world;
+use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
+use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
+use crate::debug_tools::debug_world::spawn_debug_world;
 use crate::fog::{FogEnabled, FogPlugin};
 use crate::plane::{Airplane, PlaneState, PlaneVisual};
-use crate::debug_gizmos::{GizmosVisible, draw_aero_gizmos, toggle_gizmos};
+use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::aircraft_physics::{AircraftRoot, apply_aero_forces};
@@ -33,12 +33,9 @@ use crate::physics::airplane_controller::airplane_controller;
 use crate::physics::flight_config::FlightModelConfig;
 
 mod camera;
-mod debug_flight_menu;
-mod debug_gizmos;
-mod debug_hud;
-mod debug_world;
 mod fog;
 mod physics;
+mod debug_tools;
 mod plane;
 
 #[derive(Component)]
@@ -91,11 +88,10 @@ fn update_fps(
     mut query: Query<&mut Text, With<FpsText>>,
 ) {
     let Ok(mut text) = query.single_mut() else { return };
-    if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
-        if let Some(value) = fps.smoothed() {
+    if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS)
+        && let Some(value) = fps.smoothed() {
             **text = format!("FPS: {:.0}", value);
         }
-    }
 }
 
 fn populate_debug_hud(
@@ -125,15 +121,15 @@ fn populate_debug_hud(
         hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
-        hud.entries.push(("FLAPS",  format!("{:.0}°",    root.flap_setting.to_degrees())));
+        hud.entries.push(("FLAPS",  format!("{:.0} degrees",    root.flap_setting.to_degrees())));
         hud.entries.push(("THRUST", format!("{:.0} N",   cfg.thrust_max * root.throttle_percent)));
         hud.entries.push(("DRAG",   format!("{:.0} N",    state.drag)));
         hud.entries.push(("  SURF", format!("{:.0} N",    state.drag_surface)));
         hud.entries.push(("  FUSE", format!("{:.0} N",    state.drag_fuselage)));
         hud.entries.push(("LIFT",   format!("{:.0}%",    state.lift_pct * 100.0)));
-        hud.entries.push(("PITCH",  format!("{:.1}°",    pitch.to_degrees())));
-        hud.entries.push(("ROLL",   format!("{:.1}°",    roll.to_degrees())));
-        hud.entries.push(("YAW",    format!("{:.1}°",    yaw.to_degrees())));
+        hud.entries.push(("PITCH",  format!("{:.1}",    pitch.to_degrees())));
+        hud.entries.push(("ROLL",   format!("{:.1}",    roll.to_degrees())));
+        hud.entries.push(("YAW",    format!("{:.1}",    yaw.to_degrees())));
     }
 }
 
@@ -177,7 +173,7 @@ fn fit_canvas(
 /// so local x=55 → world x=5.5 m, giving a realistic moment arm.
 fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity {
     let wing_config = AeroSurfaceConfig {
-        lift_slope: 6.28,
+        lift_slope: std::f32::consts::TAU,
         skin_friction: 0.02,
         zero_lift_aoa: -3.0,
         stall_angle_high: 15.0,
@@ -234,7 +230,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
 
     // Ailerons: outer 28% of wing span, 35% chord flap — C172 ~1.5m span each
     let aileron_config = AeroSurfaceConfig {
-        lift_slope: 6.28,
+        lift_slope: std::f32::consts::TAU,
         skin_friction: 0.02,
         zero_lift_aoa: -3.0,
         stall_angle_high: 15.0,
@@ -260,7 +256,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     // Body lift surfaces (non-control)
     let body_left = commands.spawn((
         AeroSurface::wing(AeroSurfaceConfig {
-            lift_slope: 6.28, skin_friction: 0.02,
+            lift_slope: std::f32::consts::TAU, skin_friction: 0.02,
             zero_lift_aoa: -3.0, stall_angle_high: 15.0, stall_angle_low: -15.0,
             chord: 1.57, flap_fraction: 0.0, span: 0.5, aspect_ratio: 0.5 / 1.57,
         }),
@@ -269,7 +265,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
 
     let body_right = commands.spawn((
         AeroSurface::wing(AeroSurfaceConfig {
-            lift_slope: 6.28, skin_friction: 0.02,
+            lift_slope: std::f32::consts::TAU, skin_friction: 0.02,
             zero_lift_aoa: -3.0, stall_angle_high: 15.0, stall_angle_low: -15.0,
             chord: 1.57, flap_fraction: 0.0, span: 0.5, aspect_ratio: 0.5 / 1.57,
         }),

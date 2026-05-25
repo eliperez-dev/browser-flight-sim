@@ -89,8 +89,7 @@ impl Default for FlightModelConfig {
             yaw_sensitivity:      0.40,
             throttle_rate:        0.5,
             servo_tau:            0.15,
-            // Bumped up to match the smaller elevator (≈half the old area):
-            // the trim deflection now has to work harder for the same moment.
+  
             elevator_trim:        0.02,
 
             stall_speed:          28.0,
@@ -98,14 +97,8 @@ impl Default for FlightModelConfig {
             vne_speed:            84.0,
             vne_authority:        0.35,
 
-            // X=roll (light), Y=yaw (heavy), Z=pitch (moderate).
-            // Kept low because the tail surfaces already produce physical
-            // rotational damping; this is only a small stabilizing top-up.
             aero_damp:            Vec3::new(1.0, 9.0, 2.5),
-            // Cd·A per body axis: X=flank (large), Y=belly/top (large),
-            // Z=nose (small, streamlined). Forward value tuned so total cruise
-            // drag lands near the C172's ~1.1 kN; side/vertical make hard
-            // pulls and skids bleed energy and feel heavy.
+
             fuselage_drag:        Vec3::new(60.0, 10.0, 0.15),
             skin_friction:        0.02,
             air_density:          1.2,

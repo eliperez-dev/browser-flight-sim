@@ -18,7 +18,7 @@ impl Default for AeroSurfaceConfig {
         let chord = 1.57_f32;
         let span = 2.1_f32;
         Self {
-            lift_slope: 6.28,
+            lift_slope: std::f32::consts::TAU,
             skin_friction: 0.02,
             zero_lift_aoa: -3.0,
             stall_angle_high: 15.0,
@@ -32,14 +32,9 @@ impl Default for AeroSurfaceConfig {
 }
 
 impl AeroSurfaceConfig {
-    pub fn with_flap(mut self, flap_fraction: f32) -> Self {
-        self.flap_fraction = flap_fraction.clamp(0.0, 0.4);
-        self
-    }
-
     pub fn stabilizer(span: f32, chord: f32) -> Self {
         Self {
-            lift_slope: 6.28,
+            lift_slope: std::f32::consts::TAU,
             skin_friction: 0.02,
             zero_lift_aoa: 0.0,
             stall_angle_high: 15.0,
