@@ -86,7 +86,7 @@ impl Default for FlightModelConfig {
         Self {
             pitch_sensitivity:    0.50,
             roll_sensitivity:     0.25,
-            yaw_sensitivity:      0.30,
+            yaw_sensitivity:      0.40,
             throttle_rate:        0.5,
             servo_tau:            0.15,
             // Bumped up to match the smaller elevator (≈half the old area):
@@ -106,7 +106,7 @@ impl Default for FlightModelConfig {
             // Z=nose (small, streamlined). Forward value tuned so total cruise
             // drag lands near the C172's ~1.1 kN; side/vertical make hard
             // pulls and skids bleed energy and feel heavy.
-            fuselage_drag:        Vec3::new(20.0, 10.0, 0.15),
+            fuselage_drag:        Vec3::new(60.0, 10.0, 0.15),
             skin_friction:        0.02,
             air_density:          1.2,
             gravity:              9.81,

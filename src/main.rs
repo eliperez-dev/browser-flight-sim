@@ -125,6 +125,7 @@ fn populate_debug_hud(
         hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("THR",    format!("{:.0}%",    root.throttle_percent * 100.0)));
+        hud.entries.push(("FLAPS",  format!("{:.0}°",    root.flap_setting.to_degrees())));
         hud.entries.push(("THRUST", format!("{:.0} N",   cfg.thrust_max * root.throttle_percent)));
         hud.entries.push(("DRAG",   format!("{:.0} N",    state.drag)));
         hud.entries.push(("  SURF", format!("{:.0} N",    state.drag_surface)));
@@ -218,14 +219,16 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
     // Visual wings sit ~1 m (10 local units) above the entity origin after the mesh offset.
     const WING_Y: f32 = 10.0;
 
-    // Wings are fixed lift surfaces; ailerons are separate smaller panels.
+    // Inboard wing panels carry the flaps (flap_fraction 0.2), so they're Flap
+    // control surfaces; ailerons are separate smaller panels outboard. At flaps
+    // 0 the deflection is zero, so they behave exactly like fixed lift surfaces.
     let left_wing = commands.spawn((
-        AeroSurface::wing(wing_config.clone()),
+        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
         Transform::from_xyz(-WING_X, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
     let right_wing = commands.spawn((
-        AeroSurface::wing(wing_config.clone()),
+        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
         Transform::from_xyz(WING_X, WING_Y + dihedral_h, 0.0).with_rotation(dihedral_rot),
     )).id();
 
@@ -306,7 +309,7 @@ fn spawn_aircraft(commands: &mut Commands, asset_server: &AssetServer) -> Entity
         // ±X, up is +Y, so: X = pitch axis, Y = yaw axis, Z = roll axis.
         // Real C172: roll 1285, pitch 1825, yaw 2667 → placed on their axes.
         AngularInertia::new(Vec3::new(1825.0, 2667.0, 1285.0)),
-        LinearVelocity(Vec3::new(0.0, 0.0, 75.0)),
+        LinearVelocity(Vec3::new(0.0, 0.0, 65.0)),
         AngularVelocity(Vec3::ZERO),
         AngularDamping(0.0),
         // Local space (×0.1 → metres). Nudged 0.2 m aft of the wing AC (Z=0)

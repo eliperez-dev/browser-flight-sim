@@ -146,9 +146,9 @@ fn draw_menu(
                         .text("Aero damp pitch (Z)"));
                     ui.add(egui::Slider::new(&mut cfg.fuselage_drag.z, 0.0..=2.0)
                         .text("Fuselage drag fwd (CdA)"));
-                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.x, 0.0..=20.0)
+                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.x, 0.0..=100.0)
                         .text("Fuselage drag side (CdA)"));
-                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.y, 0.0..=20.0)
+                    ui.add(egui::Slider::new(&mut cfg.fuselage_drag.y, 0.0..=100.0)
                         .text("Fuselage drag vert (CdA)"));
                     ui.add(egui::Slider::new(&mut cfg.skin_friction, 0.0..=0.2)
                         .text("Surface drag (Cd)"));

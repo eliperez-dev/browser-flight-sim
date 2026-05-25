@@ -16,11 +16,16 @@ use crate::plane::PlaneState;
 #[derive(Component)]
 pub struct AircraftRoot {
     pub throttle_percent: f32,
+    /// Commanded flap deflection (radians) — the notch the lever is set to.
+    pub flap_target: f32,
+    /// Actual flap deflection (radians), which moves toward `flap_target` at a
+    /// finite rate so flaps extend/retract over a couple of seconds.
+    pub flap_setting: f32,
 }
 
 impl Default for AircraftRoot {
     fn default() -> Self {
-        Self { throttle_percent: 1.0 }
+        Self { throttle_percent: 1.0, flap_target: 0.0, flap_setting: 0.0 }
     }
 }
 

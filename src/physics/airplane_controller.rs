@@ -53,6 +53,27 @@ pub fn airplane_controller(
     let roll  = if keys.pressed(KeyCode::KeyD) { 1.0 } else if keys.pressed(KeyCode::KeyA) { -1.0 } else { 0.0 };
     let yaw   = if keys.pressed(KeyCode::KeyE) { 1.0 } else if keys.pressed(KeyCode::KeyQ) { -1.0 } else { 0.0 };
 
+    // Flaps: notched lever like a C172 (0/10/20/30°). Period (>) extends a
+    // notch, Comma (<) retracts. The commanded notch is `flap_target`; the
+    // actual `flap_setting` chases it at a finite rate so flaps don't snap.
+    const FLAP_NOTCHES_DEG: [f32; 4] = [0.0, 10.0, 20.0, 30.0];
+    let cur_deg = root.flap_target.to_degrees();
+    let mut notch = FLAP_NOTCHES_DEG
+        .iter()
+        .position(|&n| (n - cur_deg).abs() < 0.5)
+        .unwrap_or(0);
+    if keys.just_pressed(KeyCode::Period) {
+        notch = (notch + 1).min(FLAP_NOTCHES_DEG.len() - 1);
+    }
+    if keys.just_pressed(KeyCode::Comma) {
+        notch = notch.saturating_sub(1);
+    }
+    root.flap_target = FLAP_NOTCHES_DEG[notch].to_radians();
+    let flap_rate = 15_f32.to_radians(); // flap travel speed (rad/s)
+    let flap_step = (root.flap_target - root.flap_setting).clamp(-flap_rate * dt, flap_rate * dt);
+    root.flap_setting += flap_step;
+    let flap_setting = root.flap_setting;
+
     // First-order lag coefficient for the servo animation.
     let alpha = 1.0 - (-dt / cfg.servo_tau).exp();
 
@@ -66,7 +87,9 @@ pub fn airplane_controller(
             // Kept light: a large mix makes every roll input swing the nose,
             // which reads as the aircraft pivoting about a point ahead of it.
             ControlInputType::Yaw   => (yaw + roll * 0.2) * cfg.yaw_sensitivity * surface.input_multiplier * authority,
-            ControlInputType::Flap  => 0.0,
+            // Flaps deflect symmetrically to the commanded setting (no speed
+            // authority scaling — they're a configuration, not a flight control).
+            ControlInputType::Flap  => flap_setting * surface.input_multiplier,
         };
         let new_angle = surface.flap_angle + (target - surface.flap_angle) * alpha;
         surface.set_flap_angle(new_angle);
