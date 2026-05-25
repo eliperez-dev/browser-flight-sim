@@ -11,6 +11,11 @@ use super::bi_vector3::BiVector3;
 use super::flight_config::FlightModelConfig;
 use crate::plane::PlaneState;
 
+/// The aircraft entity bakes `scale(0.1)` into its Transform, but Avian's
+/// `Position`/`Rotation` are world-space, so child local positions (and the
+/// local center of mass) must be multiplied by this to reach metres.
+pub const ROOT_SCALE: f32 = 0.1;
+
 /// Per-instance aircraft state. Only runtime-mutable values live here;
 /// fixed parameters (thrust_max, sensitivities, etc.) live in [`FlightModelConfig`].
 #[derive(Component)]
@@ -34,6 +39,7 @@ pub fn apply_aero_forces(
         Forces,
         &Mass,
         &AngularInertia,
+        &CenterOfMass,
         &Children,
         &AircraftRoot,
         &mut PlaneState,
@@ -42,23 +48,29 @@ pub fn apply_aero_forces(
     cfg: Res<FlightModelConfig>,
     time: Res<Time>,
 ) {
-    let Ok((mut forces, mass, inertia, children, root, mut state)) = aircraft_q.single_mut() else {
+    let Ok((mut forces, mass, inertia, center_of_mass, children, root, mut state)) = aircraft_q.single_mut() else {
         return;
     };
 
     let dt = time.delta_secs();
     let lin_vel: Vec3 = forces.linear_velocity();
     let ang_vel: Vec3 = forces.angular_velocity();
-    let com: Vec3 = forces.position().0;
+    // Avian's `position()` is the transform origin, *not* the center of mass.
+    // The body rotates about its CoM and Avian's velocities are CoM-relative, so
+    // every aerodynamic moment arm must be measured from the world CoM:
+    //   com_world = origin + rot * center_of_mass
+    // matching how Avian itself derives global_center_of_mass. We read the live
+    // `CenterOfMass` (already in metres, and shifted by the current loadout via
+    // apply_config_to_entities) so trim/stability track the load. Using the
+    // origin here (as the old code did) made the CoM cancel out entirely.
+    let origin: Vec3 = forces.position().0;
     let rot: Quat = forces.rotation().0;
-    // Aircraft entity has scale(0.1) baked into its Transform; Avian's Position/Rotation
-    // are world-space, so we need the scale separately to convert child local positions.
-    const ROOT_SCALE: f32 = 0.1;
+    let com: Vec3 = origin + rot * center_of_mass.0;
 
     // nose = aircraft local +Z in world space (model faces +Z, parent scale 0.1)
     let nose = rot * Vec3::Z;
 
-    let frame_ft = sum_aero_forces(lin_vel, ang_vel, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
+    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
 
     // thrust_max comes from the config; root only tracks the live throttle position
     let thrust_force = nose * cfg.thrust_max * root.throttle_percent;
@@ -75,7 +87,7 @@ pub fn apply_aero_forces(
     let ang_accel = inertia_world_rot * accel_local;
     let ang_vel_pred = ang_vel + dt * cfg.prediction_fraction * ang_accel;
 
-    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
+    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
@@ -119,6 +131,7 @@ pub fn apply_aero_forces(
 fn sum_aero_forces(
     lin_vel: Vec3,
     ang_vel: Vec3,
+    origin: Vec3,
     com: Vec3,
     root_rot: Quat,
     root_scale: f32,
@@ -129,8 +142,9 @@ fn sum_aero_forces(
     let mut total = BiVector3::default();
     for child in children {
         let Ok((surface, local_tf)) = surface_q.get(*child) else { continue };
-        // Reconstruct world position from current physics rotation — never stale.
-        let surface_pos = com + root_rot * (local_tf.translation * root_scale);
+        // World position is relative to the transform origin; the moment arm and
+        // the rotational airspeed term are relative to the center of mass.
+        let surface_pos = origin + root_rot * (local_tf.translation * root_scale);
         let rel_pos = surface_pos - com;
         let world_air_vel = -lin_vel - ang_vel.cross(rel_pos);
         let world_rot = root_rot * local_tf.rotation;

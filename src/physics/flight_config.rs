@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 
 use super::aero_surface_config::AeroSurfaceConfig;
+use super::aircraft_physics::ROOT_SCALE;
 
 /// All tunable constants for the flight model.
 ///
@@ -29,19 +30,15 @@ pub struct FlightModelConfig {
     /// Static elevator trim offset (radians). Positive pitches nose up.
     pub elevator_trim: f32,
 
-    // --- Speed envelope ----------------------------------------------------
-    /// Vs — clean stall speed (m/s).  Below this, control authority ramps to 0.
-    pub stall_speed: f32,
-    /// Vno — max structural cruise speed (m/s).  Authority is full below this.
-    pub authority_limit_speed: f32,
-    /// Vne — never-exceed speed (m/s).  Authority floor is reached here.
-    pub vne_speed: f32,
-    /// Authority fraction retained at Vne and above (0–1).
-    pub vne_authority: f32,
-
     // --- Aerodynamics ------------------------------------------------------
-    /// Per-axis rotational damping (X=roll, Y=yaw, Z=pitch).
+    /// Per-axis *supplemental* rotational damping (X=roll, Y=yaw, Z=pitch).
     /// Torque = -aero_damp * airspeed * ang_vel per axis.
+    ///
+    /// The primary pitch/yaw/roll rate damping already emerges from the aero
+    /// surfaces: when the body rotates, each surface's `ang_vel × rel_pos`
+    /// airflow changes its local AoA and produces a restoring moment. This term
+    /// is only a small numerical top-up on top of that — keep it low so it does
+    /// not double-count the physical damping.
     pub aero_damp: Vec3,
     /// Fuselage form drag as Cd·A per *body* axis (X=side/flank, Y=belly/top,
     /// Z=nose/forward). Drag = -0.5·ρ·v·|v|·CdA per axis, applied at the CoM.
@@ -68,14 +65,43 @@ pub struct FlightModelConfig {
     /// Maximum static thrust at full throttle (Newtons).
     pub thrust_max: f32,
 
+    // --- Mass & inertia ----------------------------------------------------
+    /// Empty (zero-fuel, no occupants, no baggage) airframe mass (kg).
+    /// C172 basic empty weight ≈ 767 kg. The fuel/cargo/occupant load is added
+    /// on top in [`FlightModelConfig::loaded_mass_properties`].
+    pub mass: f32,
+    /// Empty-airframe principal moments of inertia about the BODY axes (kg·m²):
+    /// X = pitch, Y = yaw, Z = roll (nose is +Z, wings span ±X, up is +Y).
+    /// Higher = more sluggish rotation on that axis. C172: pitch 1825, yaw 2667,
+    /// roll 1285. The load adds to these via the parallel-axis theorem.
+    pub angular_inertia: Vec3,
+    /// Avian's intrinsic angular damping (1/s). The aerodynamic rotational
+    /// damping is modelled separately in `aero_damp`; this is an extra
+    /// velocity-independent decay, normally left at 0.
+    pub angular_damping: f32,
+
+    // --- Loadout (mass that shifts CoM & inertia realistically) ------------
+    /// Left wing-tank fuel (kg), 0 → full (~75 kg). Independent of the right
+    /// tank so an imbalance offsets the CoM laterally and rolls the aircraft.
+    pub fuel_left_kg: f32,
+    /// Right wing-tank fuel (kg), 0 → full (~75 kg).
+    pub fuel_right_kg: f32,
+    /// Baggage load (kg), 0 → max (~54 kg / 120 lb). Sits aft of the rear seats.
+    pub cargo_kg: f32,
+    /// Number of occupants on board (1–4), filled pilot → front-R → rear seats.
+    /// Each is treated as a standard ~86 kg adult.
+    pub passengers: u32,
+
     // --- Visual ------------------------------------------------------------
     /// Local-space offset (×0.1 → metres) of the GLTF mesh relative to the
     /// physics origin. Purely cosmetic — lets the model be lined up with the
     /// simulated wing/tail positions without touching the flight model.
     pub model_offset: Vec3,
     /// Local-space center of mass (×0.1 → metres). +Z forward (nose), +Y up.
-    /// Moving aft shortens the static margin (livelier pitch); moving down
-    /// increases pendulum roll stability. Synced to the rigid body at runtime.
+    /// Moving aft shortens the static margin (livelier/less stable pitch);
+    /// moving down increases pendulum roll stability. Every aerodynamic moment
+    /// arm is measured from this point, so it genuinely sets the trim and
+    /// stability. Synced to the rigid body at runtime.
     pub center_of_mass: Vec3,
 
     // --- Aerodynamic surfaces ---------------------------------------------
@@ -98,20 +124,18 @@ pub struct FlightModelConfig {
 impl Default for FlightModelConfig {
     fn default() -> Self {
         Self {
-            pitch_sensitivity:    0.50,
+            pitch_sensitivity:    0.80,
             roll_sensitivity:     0.25,
-            yaw_sensitivity:      0.40,
+            yaw_sensitivity:      0.60,
             throttle_rate:        0.5,
-            servo_tau:            0.15,
+            servo_tau:            0.2,
   
-            elevator_trim:        0.02,
+            elevator_trim:        -0.06,
 
-            stall_speed:          28.0,
-            authority_limit_speed: 66.0,
-            vne_speed:            84.0,
-            vne_authority:        0.35,
-
-            aero_damp:            Vec3::new(1.0, 9.0, 2.5),
+            // Supplemental damping only — the tail/fin/wings already provide the
+            // primary rate damping aerodynamically. Halved from the old
+            // (1.0, 9.0, 2.5) to stop double-counting; re-tune via the slider.
+            aero_damp:            Vec3::new(0.5, 4.5, 1.25),
 
             fuselage_drag:        Vec3::new(60.0, 10.0, 0.15),
             air_density:          1.2,
@@ -123,8 +147,21 @@ impl Default for FlightModelConfig {
 
             thrust_max:           2_600.0,
 
+            mass:                 767.0, // C172 basic empty weight
+            angular_inertia:      Vec3::new(1825.0, 2667.0, 1285.0),
+            angular_damping:      0.0,
+
+            fuel_left_kg:         FUEL_TANK_MAX_KG / 2.0, // full tanks
+            fuel_right_kg:        FUEL_TANK_MAX_KG / 2.0,
+            cargo_kg:             0.0,
+            passengers:           1,           // pilot only
+
             model_offset:         Vec3::new(0.0, -12.0, 11.0),
-            center_of_mass:       Vec3::new(0.0, 1.0, 15.0),
+            // Local units (×0.1 → metres): 1.5 m forward of the wing AC (+Z) and
+            // 0.1 m up. A fairly forward CoM → large static margin, so the model
+            // is very pitch-stable / nose-heavy. Every aerodynamic moment arm is
+            // measured from here, so this directly sets trim and stability.
+            center_of_mass:       Vec3::new(0.0, 1.0, 8.0),
 
             // Main wing: ~16.2 m² per panel area, full-wing AR ≈ 7, 20% flaps.
             wing: AeroSurfaceConfig {
@@ -151,5 +188,87 @@ impl Default for FlightModelConfig {
                 ..AeroSurfaceConfig::default()
             },
         }
+    }
+}
+
+// Loadout geometry. Positions are in metres in the rigid-body frame
+// (+Z forward/nose, +Y up, +X right), relative to the transform origin — the
+// same frame as `center_of_mass * ROOT_SCALE`. These are approximate C172
+// stations, enough to make fuel/baggage/occupants shift the CoM and inertia
+// the way a real loadout does (e.g. aft baggage makes it tail-heavy).
+
+/// Standard adult occupant mass (kg) — FAA summer standard.
+pub const OCCUPANT_MASS: f32 = 86.0;
+/// Full usable fuel per wing tank (kg): ~28 US gal of avgas each, ~56 gal total.
+pub const FUEL_TANK_MAX_KG: f32 = 75.0;
+/// Maximum baggage (kg): the C172's 120 lb compartment limit.
+pub const CARGO_MAX_KG: f32 = 54.0;
+
+/// Seat positions in fill order: pilot (front-L), front-R, rear-L, rear-R.
+const SEAT_POS: [Vec3; 4] = [
+    Vec3::new(-0.28, 0.7, 0.3),
+    Vec3::new(0.28, 0.7, 0.3),
+    Vec3::new(-0.28, 0.7, -0.5),
+    Vec3::new(0.28, 0.7, -0.5),
+];
+/// Wing-tank fuel centroids — high (in the wings) and near the wing AC. The ±X
+/// lever arm is what turns a left/right fuel imbalance into a roll moment.
+const FUEL_POS_LEFT: Vec3 = Vec3::new(-2.0, 1.0, 0.1);
+const FUEL_POS_RIGHT: Vec3 = Vec3::new(2.0, 1.0, 0.1);
+/// Baggage compartment, aft of the rear seats.
+const CARGO_POS: Vec3 = Vec3::new(0.0, 0.3, -1.1);
+
+impl FlightModelConfig {
+    /// Effective mass properties of the empty airframe plus the current load.
+    ///
+    /// Returns `(mass_kg, center_of_mass_metres, principal_inertia)` where the
+    /// CoM is in metres in the rigid-body frame (ready for Avian's
+    /// `CenterOfMass`) and the inertia is the principal moments (X=pitch,
+    /// Y=yaw, Z=roll) about that loaded CoM. The empty airframe is treated as a
+    /// point mass at its CoM carrying `angular_inertia`; each load item is a
+    /// point mass at its station. CoM is the mass-weighted average and inertia
+    /// is combined via the parallel-axis theorem.
+    pub fn loaded_mass_properties(&self) -> (f32, Vec3, Vec3) {
+        let empty_com = self.center_of_mass * ROOT_SCALE; // local units → metres
+
+        // Gather (mass, position) for every load item present.
+        let mut loads: Vec<(f32, Vec3)> = Vec::new();
+        if self.fuel_left_kg > 0.0 {
+            loads.push((self.fuel_left_kg, FUEL_POS_LEFT));
+        }
+        if self.fuel_right_kg > 0.0 {
+            loads.push((self.fuel_right_kg, FUEL_POS_RIGHT));
+        }
+        if self.cargo_kg > 0.0 {
+            loads.push((self.cargo_kg, CARGO_POS));
+        }
+        for seat in SEAT_POS.iter().take(self.passengers.min(4) as usize) {
+            loads.push((OCCUPANT_MASS, *seat));
+        }
+
+        // Total mass and mass-weighted CoM.
+        let mut total_mass = self.mass;
+        let mut weighted = self.mass * empty_com;
+        for &(m, r) in &loads {
+            total_mass += m;
+            weighted += m * r;
+        }
+        let com = weighted / total_mass;
+
+        // Per-axis parallel-axis contribution of a point mass `m` at `r`.
+        let parallel_axis = |m: f32, r: Vec3| {
+            let d = r - com;
+            Vec3::new(
+                m * (d.y * d.y + d.z * d.z), // about X → pitch
+                m * (d.x * d.x + d.z * d.z), // about Y → yaw
+                m * (d.x * d.x + d.y * d.y), // about Z → roll
+            )
+        };
+        let mut inertia = self.angular_inertia + parallel_axis(self.mass, empty_com);
+        for &(m, r) in &loads {
+            inertia += parallel_axis(m, r);
+        }
+
+        (total_mass, com, inertia)
     }
 }

@@ -1,3 +1,4 @@
+use avian3d::prelude::LinearVelocity;
 use bevy::{camera::visibility::RenderLayers, prelude::*};
 
 use crate::plane::Airplane;
@@ -31,7 +32,11 @@ pub struct FreeCam {
 pub struct TrackCam {
     pub yaw: f32,
     pub pitch: f32,
+    /// Orbit-mode radius around the plane.
     pub distance: f32,
+    /// Chase-mode distance behind the plane (kept separate so zooming one mode
+    /// doesn't disturb the other).
+    pub chase_distance: f32,
 }
 
 /// Marker for the outer 2D camera that upscales the pixel canvas to the screen.
@@ -80,8 +85,8 @@ pub fn free_cam_control(
         return;
     }
 
-    const MOVE_SPEED: f32 = 50.0;
-    const LOOK_SPEED: f32 = 1.5;
+    const MOVE_SPEED: f32 = 1000.0;
+    const LOOK_SPEED: f32 = 3.5;
 
     let Ok((mut transform, mut cam)) = query.single_mut() else { return };
     let dt = time.delta_secs();
@@ -124,7 +129,7 @@ pub fn track_cam_control(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mode: Res<CameraMode>,
-    plane_query: Query<&Transform, With<Airplane>>,
+    plane_query: Query<(&Transform, &LinearVelocity), With<Airplane>>,
     mut cam_query: Query<(&mut Transform, &mut TrackCam), Without<Airplane>>,
 ) {
     if matches!(*mode, CameraMode::Free) {
@@ -132,19 +137,19 @@ pub fn track_cam_control(
     }
 
     const LOOK_SPEED: f32 = 1.5;
-    const ZOOM_SPEED: f32 = 100.0;
 
-    let Ok(plane_tf) = plane_query.single() else { return };
+    let Ok((plane_tf, plane_vel)) = plane_query.single() else { return };
     let Ok((mut cam_tf, mut track)) = cam_query.single_mut() else { return };
 
     let dt = time.delta_secs();
 
-    // [ / ] zoom in/out in both modes.
-    if keys.pressed(KeyCode::BracketLeft)  { track.distance = (track.distance - ZOOM_SPEED * dt).clamp(3.0, 100.0); }
-    if keys.pressed(KeyCode::BracketRight) { track.distance = (track.distance + ZOOM_SPEED * dt).clamp(3.0, 100.0); }
-
     match *mode {
         CameraMode::Orbit => {
+            // [ / ] zoom the orbit radius.
+            const ZOOM_SPEED: f32 = 100.0;
+            if keys.pressed(KeyCode::BracketLeft)  { track.distance = (track.distance - ZOOM_SPEED * dt).clamp(3.0, 100.0); }
+            if keys.pressed(KeyCode::BracketRight) { track.distance = (track.distance + ZOOM_SPEED * dt).clamp(3.0, 100.0); }
+
             // Arrow keys orbit freely around the plane.
             if keys.pressed(KeyCode::ArrowLeft)  { track.yaw += LOOK_SPEED * dt; }
             if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
@@ -161,39 +166,50 @@ pub fn track_cam_control(
             cam_tf.look_at(plane_tf.translation, Vec3::Y);
         }
         CameraMode::Chase => {
-            // Dynamic chase cam: pulls back at speed, looks ahead of velocity,
-            // smoothly lerps position and slerps rotation.
+            // Chase cam: sits just behind and above the plane, following its
+            // heading and pitch (roll-stabilized so the horizon stays level).
+            // Arrow keys nudge the view; [ / ] zoom.
+            const ZOOM_SPEED: f32 = 20.0;
+            if keys.pressed(KeyCode::BracketLeft)  { track.chase_distance = (track.chase_distance - ZOOM_SPEED * dt).clamp(2.0, 30.0); }
+            if keys.pressed(KeyCode::BracketRight) { track.chase_distance = (track.chase_distance + ZOOM_SPEED * dt).clamp(2.0, 30.0); }
+
             if keys.pressed(KeyCode::ArrowLeft)  { track.yaw += LOOK_SPEED * dt; }
             if keys.pressed(KeyCode::ArrowRight) { track.yaw -= LOOK_SPEED * dt; }
             if keys.pressed(KeyCode::ArrowUp) {
-                track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(0.05, 1.4);
+                track.pitch = (track.pitch + LOOK_SPEED * dt).clamp(-0.6, 1.2);
             }
             if keys.pressed(KeyCode::ArrowDown) {
-                track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(0.05, 1.4);
+                track.pitch = (track.pitch - LOOK_SPEED * dt).clamp(-0.6, 1.2);
             }
 
-            // Velocity-based look-ahead so the camera leads the aircraft.
-            let velocity = plane_tf.forward() * 75.0; // approximate from heading
-            let speed = velocity.length();
-            let look_ahead = velocity.normalize_or_zero() * (speed * 0.15).clamp(0.0, 8.0);
-            let look_target = plane_tf.translation + look_ahead;
+            // Follow the plane's yaw and pitch, but not its roll, so the offset
+            // stays anchored behind the tail through climbs and dives without
+            // the view rolling with the aircraft.
+            let (plane_yaw, plane_pitch, _) = plane_tf.rotation.to_euler(EulerRot::YXZ);
+            let follow_rot = Quat::from_euler(
+                EulerRot::YXZ,
+                plane_yaw + track.yaw,
+                plane_pitch - track.pitch,
+                0.0,
+            );
 
-            // Pull camera back proportionally to speed.
-            let speed_ratio = (speed / 75.0).clamp(0.0, 2.0);
-            let dynamic_dist = track.distance + 12.0 * speed_ratio.sqrt();
-
-            let (plane_yaw, _, _) = plane_tf.rotation.to_euler(EulerRot::YXZ);
-            let offset = Quat::from_euler(EulerRot::YXZ, plane_yaw + track.yaw, -track.pitch, 0.0)
-                * Vec3::new(0.0, 0.0, dynamic_dist);
+            // Behind (+Z) the plane; the pitch term above already raises the
+            // camera so it looks slightly down at the aircraft.
+            let offset = follow_rot * Vec3::new(0.0, 0.0, track.chase_distance);
             let target_pos = plane_tf.translation + offset;
 
-            // Smooth follow — faster at speed, lazier when slow.
-            let smoothness = 2.0 + speed_ratio * 1.5;
-            let t = (dt * smoothness).min(1.0);
-            cam_tf.translation = cam_tf.translation.lerp(target_pos, t);
+            // Look slightly ahead along the real velocity so the camera leads
+            // the aircraft into turns. Falls back to the plane's nose when slow.
+            let speed = plane_vel.0.length();
+            let lead_dir = plane_vel.0.normalize_or(plane_tf.forward().into());
+            let look_target = plane_tf.translation + lead_dir * (speed * 0.1).clamp(0.0, 6.0);
 
+            // Critically-damped-feeling smoothing, frame-rate independent.
+            let pos_t = 1.0 - (-dt * 8.0).exp();
+            let rot_t = 1.0 - (-dt * 10.0).exp();
+            cam_tf.translation = cam_tf.translation.lerp(target_pos, pos_t);
             let target_rot = cam_tf.looking_at(look_target, Vec3::Y).rotation;
-            cam_tf.rotation = cam_tf.rotation.slerp(target_rot, t);
+            cam_tf.rotation = cam_tf.rotation.slerp(target_rot, rot_t);
         }
         CameraMode::Free => {}
     }

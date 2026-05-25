@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
-use crate::physics::flight_config::FlightModelConfig;
+use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -118,22 +118,6 @@ fn draw_menu(
                 });
 
             // ---------------------------------------------------------------
-            // Speed envelope
-            // ---------------------------------------------------------------
-            egui::CollapsingHeader::new("Speed Envelope")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.add(egui::Slider::new(&mut cfg.stall_speed, 5.0..=80.0)
-                        .text("Vs — stall (m/s)"));
-                    ui.add(egui::Slider::new(&mut cfg.authority_limit_speed, 20.0..=150.0)
-                        .text("Vno — limit (m/s)"));
-                    ui.add(egui::Slider::new(&mut cfg.vne_speed, 40.0..=200.0)
-                        .text("Vne — never exceed (m/s)"));
-                    ui.add(egui::Slider::new(&mut cfg.vne_authority, 0.0..=1.0)
-                        .text("Authority at Vne"));
-                });
-
-            // ---------------------------------------------------------------
             // Aerodynamics
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Aerodynamics")
@@ -179,6 +163,52 @@ fn draw_menu(
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.thrust_max, 0.0..=20_000.0)
                         .text("Max thrust (N)"));
+                });
+
+            // ---------------------------------------------------------------
+            // Mass & inertia (synced to the Avian rigid body at runtime)
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Mass & Inertia")
+                .default_open(false)
+                .show(ui, |ui| {
+                    // Live readout of the empty airframe + current loadout.
+                    let (loaded_mass, loaded_com, loaded_inertia) =
+                        cfg.loaded_mass_properties();
+                    ui.label(format!("Loaded mass: {loaded_mass:.0} kg"));
+                    ui.label(format!(
+                        "Loaded CoM (m): {:.2}, {:.2}, {:.2}",
+                        loaded_com.x, loaded_com.y, loaded_com.z
+                    ));
+                    ui.label(format!(
+                        "Loaded inertia: {:.0} / {:.0} / {:.0}",
+                        loaded_inertia.x, loaded_inertia.y, loaded_inertia.z
+                    ));
+
+                    ui.separator();
+                    ui.label("Loadout");
+                    ui.add(egui::Slider::new(&mut cfg.fuel_left_kg, 0.0..=FUEL_TANK_MAX_KG)
+                        .text("Fuel L wing (kg)"));
+                    ui.add(egui::Slider::new(&mut cfg.fuel_right_kg, 0.0..=FUEL_TANK_MAX_KG)
+                        .text("Fuel R wing (kg)"));
+                    ui.add(egui::Slider::new(&mut cfg.cargo_kg, 0.0..=CARGO_MAX_KG)
+                        .text("Cargo (kg)"));
+                    ui.add(egui::Slider::new(&mut cfg.passengers, 1..=4)
+                        .text("Occupants")
+                        .integer());
+
+                    ui.separator();
+                    ui.label("Empty airframe");
+                    // Minimum mass avoids a divide-by-zero in F = ma.
+                    ui.add(egui::Slider::new(&mut cfg.mass, 50.0..=5_000.0)
+                        .text("Empty mass (kg)"));
+                    ui.add(egui::Slider::new(&mut cfg.angular_inertia.x, 50.0..=10_000.0)
+                        .text("Inertia pitch X (kg·m²)"));
+                    ui.add(egui::Slider::new(&mut cfg.angular_inertia.y, 50.0..=10_000.0)
+                        .text("Inertia yaw Y (kg·m²)"));
+                    ui.add(egui::Slider::new(&mut cfg.angular_inertia.z, 50.0..=10_000.0)
+                        .text("Inertia roll Z (kg·m²)"));
+                    ui.add(egui::Slider::new(&mut cfg.angular_damping, 0.0..=5.0)
+                        .text("Angular damping (1/s)"));
                 });
 
             // ---------------------------------------------------------------
