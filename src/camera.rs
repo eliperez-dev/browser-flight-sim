@@ -85,7 +85,10 @@ pub fn free_cam_control(
 
     let move_speed: f32 = match keys.pressed(KeyCode::ShiftLeft) {
         false => 5.0,
-        true => 500.0
+        true => match keys.pressed(KeyCode::ShiftRight) {
+            false => 300.0,
+            true => 2000.0,
+        },
     };
     const LOOK_SPEED: f32 = 1.5;
 

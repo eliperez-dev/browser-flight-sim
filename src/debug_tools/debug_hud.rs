@@ -1,6 +1,6 @@
 use bevy::{diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, prelude::*};
 
-use crate::{FpsText, camera::{CameraMode, FreeCam}, fog::FogEnabled, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
+use crate::{FpsText, camera::{CameraMode, FreeCam}, fog::FogSettings, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
 
 /// Shared debug overlay. Any system can push entries into `entries` each frame;
 /// `render_debug_hud` turns the vec into the on-screen text.
@@ -45,7 +45,7 @@ pub fn update_fps(
 pub fn populate_debug_hud(
     mut hud: ResMut<DebugHud>,
     mode: Res<CameraMode>,
-    fog: Res<FogEnabled>,
+    fog: Res<FogSettings>,
     cam_query: Query<&Transform, With<FreeCam>>,
     plane_query: Query<(&Transform, &PlaneState, &AircraftRoot), With<Airplane>>,
 ) {
@@ -55,7 +55,7 @@ pub fn populate_debug_hud(
         CameraMode::Free  => "FREE".into(),
         CameraMode::Orbit => "ORBIT".into(),
     }));
-    hud.entries.push(("FOG", if fog.0 { "ON\t [1]" } else { "OFF \t[1]" }.into()));
+    hud.entries.push(("FOG", if fog.enabled { "ON\t [1]" } else { "OFF \t[1]" }.into()));
 
     if let Ok(tf) = cam_query.single() {
         let p = tf.translation;

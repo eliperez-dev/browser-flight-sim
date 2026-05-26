@@ -1,34 +1,53 @@
-//! Seeded runway placement. Runway *layout* (positions, headings, elevations) is
-//! derived deterministically from the world seed so it matches the terrain and
-//! is identical for everyone on the same seed. The [`WorldGenerator`] owns the
-//! layout (it needs it to flatten terrain around each strip); this module also
-//! spawns the visible asphalt + markings and keeps them in sync with the seed.
+//! Seeded, streamed runway placement. Runways live on a 5 km grid: each cell
+//! deterministically yields one runway (jittered position, seeded heading) from
+//! the world seed, so the layout is infinite, matches the terrain, and is the
+//! same for everyone on a seed. Nothing is stored globally — a cell's runway is
+//! recomputed on demand wherever it's needed (terrain flattening, the gear,
+//! visual spawning).
+//!
+//! Terrain is levelled in an oriented *rectangle* around each strip (not a
+//! circle), so the flat ground hugs the runway shape. The visible asphalt +
+//! markings stream in around the camera and despawn behind it, like the chunks.
 
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 
 use crate::camera::PIXEL_LAYER;
 
-use super::generator::WorldGenerator;
+use super::chunk::ChunkManager;
+use super::generator::{WorldGenerator, CHUNK_SIZE};
+use super::TerrainCamera;
 
 /// Realistic light-GA runway: ~45 m wide, 2000 m long. Same size for every
 /// strip for now.
 pub const RUNWAY_WIDTH: f32 = 45.0;
 pub const RUNWAY_LENGTH: f32 = 2000.0;
 
-/// Terrain is fully levelled within this radius of a runway centre and ramps
-/// back to natural height by [`RUNWAY_BLEND_RADIUS`]. The flat radius must clear
-/// the 1000 m half-length so the whole strip sits on level ground; the blend
-/// radius stays well under the 5 km spacing so terrain survives between fields.
-pub const RUNWAY_FLAT_RADIUS: f32 = 1100.0;
-pub const RUNWAY_BLEND_RADIUS: f32 = 1700.0;
+/// Terrain is fully levelled within the runway rectangle expanded by this apron
+/// (metres beyond each edge), then ramps back to natural height over
+/// [`RUNWAY_BLEND_MARGIN`]. Keep the blend well under the spacing so terrain
+/// survives between fields.
+const RUNWAY_FLAT_APRON: f32 = 250.0;
+const RUNWAY_BLEND_MARGIN: f32 = 600.0;
 
-/// Nominal spacing between runways, and how far the grid extends from the origin.
-const RUNWAY_SPACING: f32 = 5000.0;
-const RUNWAY_GRID_RADIUS: i32 = 2; // ±2 cells ⇒ a 5×5 grid out to ±10 km
-/// Fraction of a cell a runway may wander from its grid point (keeps them off a
-/// perfect lattice without letting neighbours collide).
+/// How far the asphalt surface sits above the graded ground (metres). Gives the
+/// slab visible thickness and clean separation from the terrain (no coplanar
+/// z-fighting). The landing gear rests on this raised surface over the pavement,
+/// so wheels sit on the asphalt rather than sinking to the graded ground.
+const RUNWAY_SURFACE_LIFT: f32 = 0.3;
+
+/// Grid spacing between runways (one per cell).
+const RUNWAY_SPACING: f32 = 10000.0;
+/// Fraction of a cell a runway may wander from its grid point — keeps them off a
+/// perfect lattice. Bounded < 0.5 so a runway stays within its own cell.
 const RUNWAY_JITTER: f32 = 0.5;
+
+/// Sea level (world-Y). A cell whose natural ground is below this (plus a small
+/// margin) is water, so no runway is placed there — the strip would sit in the
+/// sea. The origin runway is exempt (it's the fixed spawn point at y=0).
+const WATER_LEVEL: f32 = 0.0;
+const RUNWAY_MIN_ABOVE_WATER: f32 = 3.0;
 
 /// One placed runway. `elevation` is the world-Y its asphalt sits at (and the
 /// height terrain is flattened to around it).
@@ -40,10 +59,55 @@ pub struct RunwayInstance {
     pub elevation: f32,
 }
 
-/// Marks a spawned runway root entity (its meshes are children) so the sync
-/// system can despawn the whole set when the seed changes.
+impl RunwayInstance {
+    /// Flatten weight at world (x, z): 1.0 inside the runway rectangle (plus
+    /// apron), ramping to 0.0 by [`RUNWAY_BLEND_MARGIN`] beyond it. Distance is
+    /// measured in the runway's own frame, so the levelled zone is a rounded
+    /// rectangle aligned to the strip rather than a circle.
+    fn flatten_weight(&self, x: f32, z: f32) -> f32 {
+        // World offset rotated into the runway's local frame (length along +Z).
+        let (s, c) = self.heading.sin_cos();
+        let px = x - self.x;
+        let pz = z - self.z;
+        let lx = px * c - pz * s;
+        let lz = px * s + pz * c;
+
+        let half_w = RUNWAY_WIDTH * 0.5 + RUNWAY_FLAT_APRON;
+        let half_l = RUNWAY_LENGTH * 0.5 + RUNWAY_FLAT_APRON;
+        let dx = (lx.abs() - half_w).max(0.0);
+        let dz = (lz.abs() - half_l).max(0.0);
+        let d = (dx * dx + dz * dz).sqrt();
+
+        let t = (d / RUNWAY_BLEND_MARGIN).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t) // smoothstep falloff
+    }
+
+    /// Whether world (x, z) lies on the paved rectangle (the asphalt itself, no
+    /// apron) — i.e. where the gear should rest on the raised asphalt surface.
+    fn on_pavement(&self, x: f32, z: f32) -> bool {
+        let (s, c) = self.heading.sin_cos();
+        let px = x - self.x;
+        let pz = z - self.z;
+        let lx = px * c - pz * s;
+        let lz = px * s + pz * c;
+        lx.abs() <= RUNWAY_WIDTH * 0.5 && lz.abs() <= RUNWAY_LENGTH * 0.5
+    }
+}
+
+/// Marks a spawned runway root entity (its meshes are children), tagged with its
+/// grid cell and world position so the streaming system can despawn it by actual
+/// distance when it leaves range.
 #[derive(Component)]
-pub struct RunwaySlab;
+pub struct RunwaySlab {
+    cell: (i32, i32),
+    pos: Vec2,
+}
+
+/// Grid cells whose runway is currently spawned (visually).
+#[derive(Resource, Default)]
+pub struct SpawnedRunways {
+    cells: HashSet<(i32, i32)>,
+}
 
 /// Shared asphalt/paint materials, built once so every runway batches together.
 #[derive(Resource)]
@@ -55,26 +119,23 @@ pub struct RunwayMaterials {
 impl RunwayMaterials {
     pub fn new(materials: &mut Assets<StandardMaterial>) -> Self {
         Self {
+            // The slab now sits physically above the graded terrain
+            // (RUNWAY_SURFACE_LIFT), so no depth bias is needed to avoid z-fighting.
             asphalt: materials.add(StandardMaterial {
                 base_color: Color::srgb(0.12, 0.12, 0.13),
                 perceptual_roughness: 1.0,
-                // The slab top is coplanar with the flattened terrain; a positive
-                // depth bias renders asphalt in front so terrain can't z-fight up
-                // through it. Paint gets a higher bias still.
-                depth_bias: 4.0,
                 ..default()
             }),
             paint: materials.add(StandardMaterial {
                 base_color: Color::srgb(0.9, 0.9, 0.9),
                 perceptual_roughness: 1.0,
-                depth_bias: 8.0,
                 ..default()
             }),
         }
     }
 }
 
-// --- Deterministic hashing ---------------------------------------------------
+// --- Deterministic per-cell layout -------------------------------------------
 
 /// Integer avalanche hash (lowbias32 by Chris Wellons).
 fn hash_u32(mut x: u32) -> u32 {
@@ -98,56 +159,154 @@ fn cell_hash(seed: u32, gx: i32, gz: i32) -> u32 {
     hash_u32(b.wrapping_add(gz as u32).wrapping_mul(0xc2b2_ae35))
 }
 
-/// Builds the runway layout for `seed`. Always includes one at the origin with
-/// elevation 0 (the aircraft spawns there and the physics datum is y=0); the
-/// rest sit on a jittered 5 km grid, each rotated to a seeded heading and placed
-/// at the natural terrain height at its centre. `generator` supplies that height
-/// — it must already have its noise layers built (runways don't affect it).
-pub fn generate_runways(seed: u32, generator: &WorldGenerator) -> Vec<RunwayInstance> {
-    let mut out = Vec::new();
-    out.push(RunwayInstance { x: 0.0, z: 0.0, heading: 0.0, elevation: 0.0 });
+/// The runway for grid cell `(gx, gz)`, or `None` if the cell is water (its
+/// natural ground is below sea level) so no strip is placed there. Cell (0,0) is
+/// always present (the aircraft spawn point) and keeps heading 0; every runway,
+/// origin included, sits level with the natural terrain at its centre. Others
+/// are also jittered and seed-rotated. `generator` supplies that height (it
+/// ignores runways, so no cycle).
+fn runway_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Option<RunwayInstance> {
+    if gx == 0 && gz == 0 {
+        // The origin strip sits level with the terrain like any other runway, but
+        // keeps heading 0 (the aircraft spawns aligned to it) and is always
+        // present (it's the spawn point, exempt from the water check).
+        return Some(RunwayInstance {
+            x: 0.0,
+            z: 0.0,
+            heading: 0.0,
+            elevation: generator.natural_height(0.0, 0.0),
+        });
+    }
+    let h = cell_hash(generator.seed(), gx, gz);
+    let jitter_x = (hash01(h) - 0.5) * RUNWAY_SPACING * RUNWAY_JITTER;
+    let jitter_z = (hash01(h ^ 0x68bc_21eb) - 0.5) * RUNWAY_SPACING * RUNWAY_JITTER;
+    let x = gx as f32 * RUNWAY_SPACING + jitter_x;
+    let z = gz as f32 * RUNWAY_SPACING + jitter_z;
+    let elevation = generator.natural_height(x, z);
+    // Skip water: don't put a runway where the sea is supposed to be.
+    if elevation < WATER_LEVEL + RUNWAY_MIN_ABOVE_WATER {
+        return None;
+    }
+    // A runway is bidirectional, so a half-turn covers every distinct heading.
+    let heading = hash01(h ^ 0x2545_f491) * std::f32::consts::PI;
+    Some(RunwayInstance { x, z, heading, elevation })
+}
 
-    for gx in -RUNWAY_GRID_RADIUS..=RUNWAY_GRID_RADIUS {
-        for gz in -RUNWAY_GRID_RADIUS..=RUNWAY_GRID_RADIUS {
-            if gx == 0 && gz == 0 {
-                continue; // origin handled above
+/// Runways for every cell overlapping the world-space box, padded by one cell so
+/// strips whose influence reaches in from a neighbour are included (water cells
+/// yield nothing). Used to resolve a chunk's runways once, before the per-vertex
+/// flatten.
+pub fn runways_in_region(
+    generator: &WorldGenerator,
+    min_x: f32,
+    min_z: f32,
+    max_x: f32,
+    max_z: f32,
+) -> Vec<RunwayInstance> {
+    let gx0 = (min_x / RUNWAY_SPACING).round() as i32 - 1;
+    let gx1 = (max_x / RUNWAY_SPACING).round() as i32 + 1;
+    let gz0 = (min_z / RUNWAY_SPACING).round() as i32 - 1;
+    let gz1 = (max_z / RUNWAY_SPACING).round() as i32 + 1;
+    let mut out = Vec::new();
+    for gx in gx0..=gx1 {
+        for gz in gz0..=gz1 {
+            if let Some(inst) = runway_for_cell(generator, gx, gz) {
+                out.push(inst);
             }
-            let h = cell_hash(seed, gx, gz);
-            let jitter_x = (hash01(h) - 0.5) * RUNWAY_SPACING * RUNWAY_JITTER;
-            let jitter_z = (hash01(h ^ 0x68bc_21eb) - 0.5) * RUNWAY_SPACING * RUNWAY_JITTER;
-            let x = gx as f32 * RUNWAY_SPACING + jitter_x;
-            let z = gz as f32 * RUNWAY_SPACING + jitter_z;
-            // A runway is bidirectional, so a half-turn of heading covers every
-            // distinct orientation.
-            let heading = hash01(h ^ 0x2545_f491) * std::f32::consts::PI;
-            let elevation = generator.natural_height(x, z);
-            out.push(RunwayInstance { x, z, heading, elevation });
         }
     }
     out
 }
 
-/// Respawns all runway meshes whenever the [`WorldGenerator`] changes (startup
-/// and every seed/scale edit), so the visible strips always match the layout the
-/// terrain was flattened for.
-pub fn sync_runways(
+/// Blends `natural` height toward the nearest runway's elevation using the
+/// rectangle weight. The strongest (nearest) runway wins where they overlap.
+/// Cheap: pure rectangle math, no noise — the caller resolves `runways` once.
+pub fn flatten_against(runways: &[RunwayInstance], x: f32, z: f32, natural: f32) -> f32 {
+    let mut best_w = 0.0_f32;
+    let mut best_e = 0.0_f32;
+    for r in runways {
+        let w = r.flatten_weight(x, z);
+        if w > best_w {
+            best_w = w;
+            best_e = r.elevation;
+        }
+    }
+    natural + (best_e - natural) * best_w
+}
+
+/// The walkable ground height the landing gear should rest on at a single point:
+/// the flattened terrain, raised to the asphalt surface where the point is over
+/// pavement (so wheels sit on the runway, not the graded ground beneath it).
+/// Resolves the nearby runways once; for one-off gear queries, not the per-vertex
+/// mesh path (which uses [`flatten_against`] — no lift, since the slab mesh
+/// provides the raised surface visually).
+pub fn ground_height(generator: &WorldGenerator, x: f32, z: f32, natural: f32) -> f32 {
+    let runways = runways_in_region(generator, x, z, x, z);
+    let mut ground = flatten_against(&runways, x, z, natural);
+    for r in &runways {
+        if r.on_pavement(x, z) {
+            ground = ground.max(r.elevation + RUNWAY_SURFACE_LIFT);
+        }
+    }
+    ground
+}
+
+// --- Streaming the visible strips --------------------------------------------
+
+/// Spawns runways near the camera and despawns ones that fall out of range, so
+/// only a handful exist at once regardless of how far you fly. The streamed
+/// radius tracks the terrain render distance so strips don't appear beyond the
+/// terrain edge. A seed/scale change (generator rebuilt) wipes the set so the
+/// new layout repopulates next frame.
+pub fn stream_runways(
     mut commands: Commands,
     generator: Res<WorldGenerator>,
+    manager: Res<ChunkManager>,
     materials: Res<RunwayMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    existing: Query<Entity, With<RunwaySlab>>,
-    mut spawned: Local<bool>,
+    camera: Query<&Transform, With<TerrainCamera>>,
+    existing: Query<(Entity, &RunwaySlab)>,
+    mut spawned: ResMut<SpawnedRunways>,
 ) {
-    if *spawned && !generator.is_changed() {
-        return;
+    if generator.is_changed() {
+        for (entity, _) in &existing {
+            commands.entity(entity).despawn();
+        }
+        spawned.cells.clear();
+        return; // repopulate around the camera next frame
     }
-    *spawned = true;
 
-    for entity in &existing {
-        commands.entity(entity).despawn();
+    let Ok(cam) = camera.single() else { return };
+    let cam_xz = Vec2::new(cam.translation.x, cam.translation.z);
+    let cam_cx = (cam.translation.x / RUNWAY_SPACING).round() as i32;
+    let cam_cz = (cam.translation.z / RUNWAY_SPACING).round() as i32;
+
+    // Cull by actual distance (not cell count) so strips disappear right around
+    // the terrain edge. Spawn within the view radius, despawn a little past it —
+    // the gap is hysteresis so a strip at the boundary doesn't flicker.
+    let view_m = manager.render_distance as f32 * CHUNK_SIZE;
+    let keep_sq = view_m * view_m;
+    let drop_sq = (view_m * 1.15).powi(2);
+    let cell_radius = (view_m * 1.15 / RUNWAY_SPACING).ceil() as i32 + 1;
+
+    for gx in (cam_cx - cell_radius)..=(cam_cx + cell_radius) {
+        for gz in (cam_cz - cell_radius)..=(cam_cz + cell_radius) {
+            if spawned.cells.contains(&(gx, gz)) {
+                continue;
+            }
+            let Some(inst) = runway_for_cell(&generator, gx, gz) else { continue };
+            if Vec2::new(inst.x, inst.z).distance_squared(cam_xz) <= keep_sq {
+                spawn_runway(&mut commands, &mut meshes, &materials, &inst, (gx, gz));
+                spawned.cells.insert((gx, gz));
+            }
+        }
     }
-    for inst in generator.runways() {
-        spawn_runway(&mut commands, &mut meshes, &materials, inst);
+
+    for (entity, slab) in &existing {
+        if slab.pos.distance_squared(cam_xz) > drop_sq {
+            commands.entity(entity).despawn();
+            spawned.cells.remove(&slab.cell);
+        }
     }
 }
 
@@ -160,28 +319,31 @@ fn spawn_runway(
     meshes: &mut Assets<Mesh>,
     materials: &RunwayMaterials,
     inst: &RunwayInstance,
+    cell: (i32, i32),
 ) {
-    const SURFACE_Y: f32 = 0.0; // local: slab top
-    const PAINT_Y: f32 = 0.1;
-    const THICKNESS: f32 = 3.0; // slab depth; top at SURFACE_Y, rest buried
+    // Local slab-top sits RUNWAY_SURFACE_LIFT above the root (which is at the
+    // graded ground elevation), so the asphalt is a raised pad with the rest of
+    // its THICKNESS buried — visible thickness, no coplanar z-fight with terrain.
+    const PAINT_Y: f32 = 0.1; // markings above the asphalt top
+    const THICKNESS: f32 = 3.0;
+    let surface_y = RUNWAY_SURFACE_LIFT;
 
     let root = Transform::from_xyz(inst.x, inst.elevation, inst.z)
         .with_rotation(Quat::from_rotation_y(inst.heading));
 
+    let slab = RunwaySlab { cell, pos: Vec2::new(inst.x, inst.z) };
     commands
-        .spawn((root, Visibility::default(), RunwaySlab, PIXEL_LAYER))
+        .spawn((root, Visibility::default(), slab, PIXEL_LAYER))
         .with_children(|parent| {
-            // Volumetric asphalt slab (top face at local SURFACE_Y).
+            // Volumetric asphalt slab (top face at local surface_y).
             parent.spawn((
                 Mesh3d(meshes.add(Cuboid::new(RUNWAY_WIDTH, THICKNESS, RUNWAY_LENGTH))),
                 MeshMaterial3d(materials.asphalt.clone()),
-                Transform::from_xyz(0.0, SURFACE_Y - THICKNESS * 0.5, 0.0),
+                Transform::from_xyz(0.0, surface_y - THICKNESS * 0.5, 0.0),
                 PIXEL_LAYER,
             ));
 
-            // Dashed centreline. `NoFrustumCulling` on the zero-thickness paint
-            // planes: their bounding box has no height, so Bevy's frustum test
-            // wrongly culls them at shallow angles.
+            // Dashed centreline.
             const DASH_LEN: f32 = 30.0;
             const GAP_LEN: f32 = 20.0;
             const DASH_W: f32 = 1.0;
@@ -193,13 +355,14 @@ fn spawn_runway(
                 parent.spawn((
                     Mesh3d(meshes.add(Plane3d::default().mesh().size(DASH_W, DASH_LEN))),
                     MeshMaterial3d(materials.paint.clone()),
-                    Transform::from_xyz(0.0, PAINT_Y, z),
-                    NoFrustumCulling,
+                    Transform::from_xyz(0.0, surface_y + PAINT_Y, z),
                     PIXEL_LAYER,
                 ));
             }
 
-            // Threshold "piano key" bars at each end.
+            // Threshold "piano key" bars at each end. `NoFrustumCulling` on the
+            // zero-thickness paint planes: their bounding box has no height, so
+            // Bevy's frustum test wrongly culls them at shallow angles.
             const BAR_W: f32 = 2.5;
             const BAR_LEN: f32 = 20.0;
             const BAR_GAP: f32 = 2.0;
@@ -214,7 +377,7 @@ fn spawn_runway(
                     parent.spawn((
                         Mesh3d(meshes.add(Plane3d::default().mesh().size(BAR_W, BAR_LEN))),
                         MeshMaterial3d(materials.paint.clone()),
-                        Transform::from_xyz(k as f32 * bar_stride, PAINT_Y, z),
+                        Transform::from_xyz(k as f32 * bar_stride, surface_y + PAINT_Y, z),
                         NoFrustumCulling,
                         PIXEL_LAYER,
                     ));

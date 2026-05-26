@@ -10,9 +10,11 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
+use crate::fog::FogSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
 use crate::terrain::WorldGenConfig;
+use crate::water::WaterSettings;
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -78,6 +80,8 @@ fn draw_menu(
     visible: Res<DebugMenuVisible>,
     mut cfg: ResMut<FlightModelConfig>,
     mut world: ResMut<WorldGenConfig>,
+    mut fog: ResMut<FogSettings>,
+    mut water: ResMut<WaterSettings>,
 ) -> Result {
     if !visible.0 { return Ok(()); }
 
@@ -124,6 +128,16 @@ fn draw_menu(
                         .text("Height scale (relief)"));
 
                     ui.separator();
+                    ui.label("Oceans (where & how deep water sits)");
+                    // Lower threshold = wetter map = more sea. Edits rebuild the world.
+                    ui.add(egui::Slider::new(&mut w.ocean_humidity_threshold, 0.1..=0.95)
+                        .text("Ocean humidity threshold"));
+                    ui.add(egui::Slider::new(&mut w.ocean_transition_width, 0.02..=0.6)
+                        .text("Coastline width"));
+                    ui.add(egui::Slider::new(&mut w.ocean_depth, 0.0..=10.0)
+                        .text("Basin depth (raw units)"));
+
+                    ui.separator();
                     ui.label("Streaming");
                     ui.add(egui::Slider::new(&mut w.render_distance, 2..=100)
                         .text("Render distance (chunks)")
@@ -133,8 +147,85 @@ fn draw_menu(
                         .integer());
 
                     ui.separator();
+                    ui.label("LOD bands (near → far): max distance & detail");
+                    // Each band: chunks-distance cutoff + mesh subdivisions. Lower
+                    // subdivisions = coarser. These apply live (no world rebuild).
+                    for (i, (dist, subs)) in w.lod_levels.iter_mut().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("L{i}"));
+                            ui.add(egui::Slider::new(dist, 0.5..=40.0)
+                                .text("dist"));
+                            ui.add(egui::Slider::new(subs, 1..=32)
+                                .text("subdiv")
+                                .integer());
+                        });
+                    }
+
+                    ui.separator();
                     if ui.button("Reset world gen").clicked() {
                         w = WorldGenConfig::default();
+                    }
+                });
+
+            // ---------------------------------------------------------------
+            // Fog — edits apply live to the camera's DistanceFog.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Fog")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.checkbox(&mut fog.enabled, "Enabled (1)");
+                    ui.add(egui::Slider::new(&mut fog.visibility, 200.0..=100_000.0)
+                        .text("Visibility (m)")
+                        .logarithmic(true));
+                    ui.add(egui::Slider::new(&mut fog.directional_light_exponent, 1.0..=50.0)
+                        .text("Sun glow exponent"));
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_rgb(&mut fog.color);
+                        ui.label("Fog color");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_rgb(&mut fog.extinction_color);
+                        ui.label("Extinction (near)");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_rgb(&mut fog.inscattering_color);
+                        ui.label("Inscattering (far)");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_rgb(&mut fog.directional_light_color);
+                        ui.label("Sun glow color");
+                    });
+
+                    ui.separator();
+                    if ui.button("Reset fog").clicked() {
+                        *fog = FogSettings::default();
+                    }
+                });
+
+            // ---------------------------------------------------------------
+            // Water — a single shiny plane at sea level; edits apply live.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Water")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.checkbox(&mut water.enabled, "Enabled");
+                    ui.add(egui::Slider::new(&mut water.sea_level, -600.0..=200.0)
+                        .text("Sea level (m)"));
+                    ui.add(egui::Slider::new(&mut water.perceptual_roughness, 0.0..=1.0)
+                        .text("Roughness (glossiness)"));
+                    ui.add(egui::Slider::new(&mut water.metallic, 0.0..=1.0)
+                        .text("Metallic"));
+
+                    ui.horizontal(|ui| {
+                        ui.color_edit_button_rgb(&mut water.color);
+                        ui.label("Water color");
+                    });
+
+                    ui.separator();
+                    if ui.button("Reset water").clicked() {
+                        *water = WaterSettings::default();
                     }
                 });
 

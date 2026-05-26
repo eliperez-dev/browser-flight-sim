@@ -21,6 +21,7 @@ use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_tools::debug_world::spawn_debug_world;
 use crate::fog::FogPlugin;
+use crate::water::WaterPlugin;
 use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller, wing_panel_rotation};
 use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, setup_gizmo_config, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
@@ -35,8 +36,9 @@ mod physics;
 mod debug_tools;
 mod plane;
 mod terrain;
+mod water;
 
-use crate::terrain::{TerrainCamera, TerrainPlugin};
+use crate::terrain::{TerrainCamera, TerrainPlugin, WorldGenerator};
 
 #[derive(Component)]
 struct FpsText;
@@ -53,6 +55,7 @@ fn main() {
             PhysicsPlugins::default(),
             DebugFlightMenuPlugin,
             TerrainPlugin,
+            WaterPlugin,
         ))
         // Initial gravity; kept in sync with cfg.gravity by
         // apply_config_to_entities so the debug slider drives the real force.
@@ -159,6 +162,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     windows: Query<&Window>,
     cfg: Res<FlightModelConfig>,
+    world_gen: Res<WorldGenerator>,
 ) {
     let canvas_size = Extent3d { width: PIXEL_WIDTH, height: PIXEL_HEIGHT, ..default() };
     let mut canvas = Image {
@@ -180,7 +184,21 @@ fn setup(
     canvas.sampler = ImageSampler::nearest();
     let pixel_target = images.add(canvas);
 
-    spawn_aircraft(&mut commands, &asset_server, &mut meshes, &mut materials, &cfg);
+    // Spawn the aircraft on the origin runway, which now sits at the natural
+    // terrain height. `get_terrain_height` returns the runway surface here (the
+    // spawn point is on the pavement); add the gear standoff so the struts settle.
+    const SPAWN_X: f32 = 0.0;
+    const SPAWN_Z: f32 = -900.0;
+    const GEAR_STANDOFF: f32 = 1.25;
+    let spawn_y = world_gen.get_terrain_height(SPAWN_X, SPAWN_Z) + GEAR_STANDOFF;
+    spawn_aircraft(
+        &mut commands,
+        &asset_server,
+        &mut meshes,
+        &mut materials,
+        &cfg,
+        Vec3::new(SPAWN_X, spawn_y, SPAWN_Z),
+    );
 
     commands.spawn((
         Camera3d::default(),

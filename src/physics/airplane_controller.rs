@@ -19,9 +19,10 @@ pub fn airplane_controller(
     time: Res<Time>,
     camera_mode: Res<CameraMode>,
 ) {
-    if *camera_mode == CameraMode::Free {
-        return;
-    }
+    // In free-cam, WASD/QE drive the camera, so the matching attitude controls
+    // are suppressed below — but throttle, mixture, the engine state machine and
+    // the RPM spool must keep running regardless of which camera is active.
+    let in_free_cam = *camera_mode == CameraMode::Free;
     let Ok((children, tf, mut root)) = aircraft_q.single_mut() else { return };
 
     let dt = time.delta_secs();
@@ -119,9 +120,17 @@ pub fn airplane_controller(
     let spool_alpha = 1.0 - (-dt / spool_tau.max(1e-3)).exp();
     root.engine_rps += (target_rps - root.engine_rps) * spool_alpha;
 
-    let pitch = if keys.pressed(KeyCode::KeyW) { 1.0 } else if keys.pressed(KeyCode::KeyS) { -1.0 } else { 0.0 };
-    let roll  = if keys.pressed(KeyCode::KeyD) { 1.0 } else if keys.pressed(KeyCode::KeyA) { -1.0 } else { 0.0 };
-    let yaw   = if keys.pressed(KeyCode::KeyE) { 1.0 } else if keys.pressed(KeyCode::KeyQ) { -1.0 } else { 0.0 };
+    // Attitude inputs share keys with the free camera, so they go neutral while
+    // it's active (the engine/throttle handling above still runs).
+    let (pitch, roll, yaw) = if in_free_cam {
+        (0.0, 0.0, 0.0)
+    } else {
+        (
+            if keys.pressed(KeyCode::KeyW) { 1.0 } else if keys.pressed(KeyCode::KeyS) { -1.0 } else { 0.0 },
+            if keys.pressed(KeyCode::KeyD) { 1.0 } else if keys.pressed(KeyCode::KeyA) { -1.0 } else { 0.0 },
+            if keys.pressed(KeyCode::KeyE) { 1.0 } else if keys.pressed(KeyCode::KeyQ) { -1.0 } else { 0.0 },
+        )
+    };
 
     // Flaps: notched lever like a C172 (0/10/20/30°). Period (>) extends a
     // notch, Comma (<) retracts. The commanded notch is `flap_target`; the

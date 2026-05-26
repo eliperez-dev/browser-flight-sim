@@ -75,6 +75,7 @@ pub fn spawn_aircraft(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     cfg: &FlightModelConfig,
+    spawn_pos: Vec3,
 ) -> Entity {
     // All surface geometry lives in `FlightModelConfig` so the debug menu can
     // tune it live; `apply_config_to_entities` keeps the spawned surfaces in
@@ -201,13 +202,12 @@ pub fn spawn_aircraft(
 
     let (mass_eff, com_eff, inertia_eff) = cfg.loaded_mass_properties();
     commands.spawn((
-        // Airborne spawn (250 m up, 65 m/s forward) — kept for reference.
-        // Transform::from_xyz(0.0, 250.0, 0.0).with_scale(Vec3::splat(0.1)),
-        // Sit on the runway: gear rest_length - mount_height = 1.1 - (-0.15) = 1.25 m,
-        // so the struts just touch the ground and settle onto their springs.
-        // Near the -Z threshold (runway spans z = -1000..1000) so the full
-        // length is ahead for the takeoff roll in +Z.
-        Transform::from_xyz(0.0, 1.25, -900.0).with_scale(Vec3::splat(0.1)),
+        // Spawn on the runway: `spawn_pos` is positioned by the caller at the
+        // origin strip's surface plus the gear standoff (rest_length - mount_height
+        // = 1.1 - (-0.15) = 1.25 m), so the struts just touch the ground and settle
+        // onto their springs. It sits near the -Z threshold (runway spans
+        // z = -1000..1000) so the full length is ahead for the takeoff roll in +Z.
+        Transform::from_translation(spawn_pos).with_scale(Vec3::splat(0.1)),
         Visibility::default(),
         Airplane,
         PlaneState::default(),

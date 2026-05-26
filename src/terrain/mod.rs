@@ -15,7 +15,7 @@ pub use generator::{WorldGenConfig, WorldGenerator};
 use bevy::prelude::*;
 
 use chunk::{ChunkManager, SharedTerrainMaterial, WorldGenerationSettings};
-use runway::RunwayMaterials;
+use runway::{RunwayMaterials, SpawnedRunways};
 
 /// Marks the 3D camera that terrain streams around. Exactly one entity should
 /// carry this (the `PIXEL_LAYER` `Camera3d` in `main::setup`).
@@ -31,6 +31,7 @@ impl Plugin for TerrainPlugin {
             .insert_resource(config)
             .init_resource::<ChunkManager>()
             .init_resource::<WorldGenerationSettings>()
+            .init_resource::<SpawnedRunways>()
             .add_systems(Startup, setup_terrain_material)
             .add_systems(
                 Update,
@@ -39,7 +40,7 @@ impl Plugin for TerrainPlugin {
                     // generate_chunks repopulates from the new generator;
                     // sync_runways then rebuilds the strips for the new layout.
                     streaming::regenerate_terrain,
-                    runway::sync_runways,
+                    runway::stream_runways,
                     streaming::generate_chunks,
                     streaming::displace_new_chunks,
                     streaming::apply_chunk_meshes,

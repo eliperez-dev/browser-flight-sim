@@ -12,7 +12,6 @@ use bevy::color::Mix;
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 
-use super::runway::{RunwayInstance, RUNWAY_BLEND_RADIUS, RUNWAY_FLAT_RADIUS};
 
 /// Metres per chunk edge. 500 m balances draw-call count (fewer, bigger chunks)
 /// against per-chunk mesh-gen cost — the dominant constraint on WASM, where the
@@ -22,12 +21,24 @@ pub const CHUNK_SIZE: f32 = 500.0;
 /// Default vertical exaggeration applied to the (biome-shaped) noise. With the
 /// biome multipliers, taiga becomes tall mountains while desert/grass stay
 /// near-flat; this one knob scales the whole world's relief.
-pub const DEFAULT_HEIGHT_SCALE: f32 = 200.0;
+pub const DEFAULT_HEIGHT_SCALE: f32 = 220.0;
 
 /// Default horizontal frequency multiplier on every layer. Higher = tighter,
 /// more rugged terrain (and smaller biomes) for the same world distance. 3.0
 /// packs features ~3× tighter than the parent sim's authored scale.
-pub const DEFAULT_HORIZONTAL_SCALE: f32 = 3.0;
+pub const DEFAULT_HORIZONTAL_SCALE: f32 = 2.5;
+
+/// Default humidity (0..1) past which climate blends toward open ocean. Lower =
+/// more of the map is sea. See [`WorldGenerator::ocean_factor`].
+pub const DEFAULT_OCEAN_HUMIDITY_THRESHOLD: f32 = 0.60;
+
+/// Default width (in climate units) of the land→ocean blend. Wider = gentler,
+/// broader coastlines; narrower = abrupt shorelines.
+pub const DEFAULT_OCEAN_TRANSITION_WIDTH: f32 = 0.30;
+
+/// Default depth (raw units, pre-`height_scale`) the ocean basin sinks below the
+/// land baseline. Deeper basins sit further under the water plane's sea level.
+pub const DEFAULT_OCEAN_DEPTH: f32 = 2.5;
 
 /// Editable world-generation settings, surfaced as debug sliders (F3 panel).
 /// Mutating this resource triggers a debounced world rebuild — see
@@ -44,6 +55,18 @@ pub struct WorldGenConfig {
     pub render_distance: i32,
     /// Chunk-builds started per frame; keep low on WASM (single-threaded tasks).
     pub max_chunks_per_frame: usize,
+    /// LOD bands as `(max_distance_in_chunks, subdivisions)`, ascending distance.
+    /// A chunk uses the subdivisions of the first band it falls within; nearest
+    /// is capped low so no single chunk's noise pass hitches the WASM main thread.
+    /// Mirrored live into `ChunkManager` (no world rebuild — chunks just re-mesh).
+    pub lod_levels: [(f32, u32); 5],
+    /// Humidity past which climate turns to ocean; see
+    /// [`DEFAULT_OCEAN_HUMIDITY_THRESHOLD`].
+    pub ocean_humidity_threshold: f32,
+    /// Land→ocean blend width; see [`DEFAULT_OCEAN_TRANSITION_WIDTH`].
+    pub ocean_transition_width: f32,
+    /// Ocean basin depth in raw units; see [`DEFAULT_OCEAN_DEPTH`].
+    pub ocean_depth: f32,
 }
 
 impl Default for WorldGenConfig {
@@ -52,17 +75,27 @@ impl Default for WorldGenConfig {
             seed: 3,
             horizontal_scale: DEFAULT_HORIZONTAL_SCALE,
             height_scale: DEFAULT_HEIGHT_SCALE,
-            render_distance: 12,
-            max_chunks_per_frame: 3,
+            render_distance: 35,
+            max_chunks_per_frame: 4,
+            lod_levels: [
+                (2.0, 15),
+                (6.0, 9),
+                (13.0, 6),
+                (15.0, 4),
+                (25.0, 2),
+            ],
+            ocean_humidity_threshold: DEFAULT_OCEAN_HUMIDITY_THRESHOLD,
+            ocean_transition_width: DEFAULT_OCEAN_TRANSITION_WIDTH,
+            ocean_depth: DEFAULT_OCEAN_DEPTH,
         }
     }
 }
 
 // --- Ocean shaping thresholds (in normalised 0..1 climate space) -------------
-const OCEAN_HUMIDITY_THRESHOLD: f32 = 0.60;
+// Humidity threshold and transition width are now per-world config (see
+// `WorldGenConfig`); the temperature extremes stay fixed constants.
 const OCEAN_HOT_TEMP_THRESHOLD: f32 = 0.95;
 const OCEAN_COLD_TEMP_THRESHOLD: f32 = 0.0;
-const OCEAN_TRANSITION_WIDTH: f32 = 0.30;
 
 /// Multi-octave Perlin terrain shaped by a coarse climate field. Built from a
 /// [`WorldGenConfig`] snapshot; the horizontal scale is baked into the layers
@@ -70,21 +103,26 @@ const OCEAN_TRANSITION_WIDTH: f32 = 0.30;
 /// does on config change).
 #[derive(Resource, Clone)]
 pub struct WorldGenerator {
+    seed: u32,
     height_scale: f32,
+    ocean_humidity_threshold: f32,
+    ocean_transition_width: f32,
+    ocean_depth: f32,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
-    /// Seeded runway layout. Terrain is flattened toward each runway's elevation
-    /// near it (see [`Self::flatten`]); the runway spawner reads the same list.
-    runways: Vec<RunwayInstance>,
 }
 
 impl WorldGenerator {
     pub fn from_config(cfg: &WorldGenConfig) -> Self {
         let seed = cfg.seed;
         let hs = cfg.horizontal_scale;
-        let mut generator = Self {
+        Self {
+            seed,
             height_scale: cfg.height_scale,
+            ocean_humidity_threshold: cfg.ocean_humidity_threshold,
+            ocean_transition_width: cfg.ocean_transition_width,
+            ocean_depth: cfg.ocean_depth,
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             terrain_layers: vec![
                 PerlinLayer::new(seed,       0.08 * hs, 4.5),
@@ -96,17 +134,12 @@ impl WorldGenerator {
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, 0.06 * hs, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, 0.06 * hs, 1.0),
-            runways: Vec::new(),
-        };
-        // Layers are built, so natural_height works; derive the runway layout
-        // (which samples it) and store it for flattening.
-        generator.runways = super::runway::generate_runways(seed, &generator);
-        generator
+        }
     }
 
-    /// The seeded runway layout, for the spawner to mirror visually.
-    pub fn runways(&self) -> &[RunwayInstance] {
-        &self.runways
+    /// World seed, used to derive the per-cell runway layout deterministically.
+    pub fn seed(&self) -> u32 {
+        self.seed
     }
 
     /// Normalised climate at (x, z): `(temperature, humidity)`, each clamped 0..1.
@@ -123,7 +156,7 @@ impl WorldGenerator {
     #[allow(dead_code)]
     pub fn get_biome(&self, x: f32, z: f32) -> Biome {
         let (temp, hum) = self.get_climate(x, z);
-        if hum > OCEAN_HUMIDITY_THRESHOLD + 0.1
+        if hum > self.ocean_humidity_threshold + 0.1
             || temp > OCEAN_HOT_TEMP_THRESHOLD
             || temp < OCEAN_COLD_TEMP_THRESHOLD
         {
@@ -141,7 +174,7 @@ impl WorldGenerator {
     /// to find the ground under each strut, so it must match the mesh exactly —
     /// both go through [`Self::field`].
     pub fn get_terrain_height(&self, x: f32, z: f32) -> f32 {
-        self.flatten(x, z, self.natural_height(x, z))
+        super::runway::ground_height(self, x, z, self.natural_height(x, z))
     }
 
     /// Natural terrain height (metres) ignoring runway flattening. Used to seed
@@ -150,14 +183,17 @@ impl WorldGenerator {
         self.natural_raw(x, z).0 * self.height_scale
     }
 
-    /// Everything the mesh needs at one point: world-space height (metres) and
-    /// the linear-RGBA surface colour. One evaluation, no duplicated noise work.
-    pub fn surface(&self, x: f32, z: f32) -> (f32, [f32; 4]) {
+    /// Natural (un-flattened) height + colour at one point, for the chunk-mesh
+    /// kernel. The mesh applies runway flattening separately, against runways it
+    /// resolves once per chunk (see `runway::runways_in_region`), so this stays
+    /// off the per-vertex runway path.
+    pub fn sample_natural(&self, x: f32, z: f32) -> (f32, [f32; 4]) {
         let (raw, temp, hum) = self.natural_raw(x, z);
-        let height = self.flatten(x, z, raw * self.height_scale);
-        (height, terrain_color(raw, temp, hum))
+        (raw * self.height_scale, terrain_color(raw, temp, hum))
     }
 
+    /// Everything the mesh needs at one point: world-space height (metres) and
+    /// the linear-RGBA surface colour. One evaluation, no duplicated noise work.
     /// Core noise evaluation: the raw (pre-`height_scale`) natural height plus
     /// the climate that shaped it. Raw height is what the colour palettes are
     /// keyed to. No runway flattening — that's applied in world-height space.
@@ -169,28 +205,65 @@ impl WorldGenerator {
             base += layer.get(x, z);
         }
 
-        let raw = base * biome_height_multiplier(temp, hum) + biome_elevation_offset(temp, hum);
+        let raw =
+            base * self.biome_height_multiplier(temp, hum) + self.biome_elevation_offset(temp, hum);
         (raw, temp, hum)
     }
 
-    /// Blends a natural world height toward the nearest runway's elevation:
-    /// fully levelled within [`RUNWAY_FLAT_RADIUS`], ramping back to natural by
-    /// [`RUNWAY_BLEND_RADIUS`]. The strongest (nearest) runway wins where their
-    /// influence circles overlap.
-    fn flatten(&self, x: f32, z: f32, natural: f32) -> f32 {
-        let mut best_weight = 0.0_f32;
-        let mut best_elev = 0.0_f32;
-        for r in &self.runways {
-            let d = ((x - r.x).powi(2) + (z - r.z).powi(2)).sqrt();
-            let t = ((d - RUNWAY_FLAT_RADIUS) / (RUNWAY_BLEND_RADIUS - RUNWAY_FLAT_RADIUS))
-                .clamp(0.0, 1.0);
-            let weight = 1.0 - t * t * (3.0 - 2.0 * t); // 1 at runway → 0 past blend
-            if weight > best_weight {
-                best_weight = weight;
-                best_elev = r.elevation;
-            }
-        }
-        natural + (best_elev - natural) * best_weight
+    /// How strongly biome blends toward ocean (0 = land, 1 = full ocean) given the
+    /// climate — wet, or temperature past either extreme. Shared by the height
+    /// multiplier and elevation offset so they agree on where coastlines fall.
+    /// Uses the per-world humidity threshold and transition width.
+    fn ocean_factor(&self, temp: f32, humidity: f32) -> f32 {
+        let width = self.ocean_transition_width.max(1e-3);
+        let wet = if humidity > self.ocean_humidity_threshold {
+            ((humidity - self.ocean_humidity_threshold) / width).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let hot = if temp > OCEAN_HOT_TEMP_THRESHOLD - width {
+            ((temp - (OCEAN_HOT_TEMP_THRESHOLD - width)) / width).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let cold = if temp < OCEAN_COLD_TEMP_THRESHOLD + width {
+            ((OCEAN_COLD_TEMP_THRESHOLD + width - temp) / width).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        wet.max(hot).max(cold)
+    }
+
+    /// Vertical offset added to the noise sum, per biome, blended bilinearly across
+    /// the climate square and then toward a deep ocean basin (`ocean_depth`).
+    fn biome_elevation_offset(&self, temp: f32, humidity: f32) -> f32 {
+        const DESERT: f32 = 0.0;
+        const GRASS: f32 = 0.04;
+        const FOREST: f32 = 0.5;
+        const TAIGA: f32 = 8.0;
+        let ocean = -self.ocean_depth;
+
+        let cold_blend = GRASS + (TAIGA - GRASS) * humidity;
+        let hot_blend = DESERT + (FOREST - DESERT) * humidity;
+        let land = cold_blend + (hot_blend - cold_blend) * temp;
+
+        land + (ocean - land) * self.ocean_factor(temp, humidity)
+    }
+
+    /// Amplitude applied to the noise sum, per biome — taiga is mountainous, desert
+    /// and grass nearly flat, oceans flat. Bilinear across climate, then toward ocean.
+    fn biome_height_multiplier(&self, temp: f32, humidity: f32) -> f32 {
+        const DESERT: f32 = 0.01;
+        const GRASS: f32 = 0.02;
+        const FOREST: f32 = 0.05;
+        const TAIGA: f32 = 1.5;
+        const OCEAN: f32 = 0.01;
+
+        let cold_blend = GRASS + (TAIGA - GRASS) * humidity;
+        let hot_blend = DESERT + (FOREST - DESERT) * humidity;
+        let land = cold_blend + (hot_blend - cold_blend) * temp;
+
+        land + (OCEAN - land) * self.ocean_factor(temp, humidity)
     }
 }
 
@@ -232,64 +305,6 @@ impl PerlinLayer {
         ]) as f32;
         n * self.vertical_scale
     }
-}
-
-// --- Biome shaping ------------------------------------------------------------
-
-/// How strongly biome blends toward ocean (0 = land, 1 = full ocean) given the
-/// climate — wet, or temperature past either extreme. Shared by the height
-/// multiplier and elevation offset so they agree on where coastlines fall.
-fn ocean_factor(temp: f32, humidity: f32) -> f32 {
-    let wet = if humidity > OCEAN_HUMIDITY_THRESHOLD {
-        ((humidity - OCEAN_HUMIDITY_THRESHOLD) / OCEAN_TRANSITION_WIDTH).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let hot = if temp > OCEAN_HOT_TEMP_THRESHOLD - OCEAN_TRANSITION_WIDTH {
-        ((temp - (OCEAN_HOT_TEMP_THRESHOLD - OCEAN_TRANSITION_WIDTH)) / OCEAN_TRANSITION_WIDTH)
-            .clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let cold = if temp < OCEAN_COLD_TEMP_THRESHOLD + OCEAN_TRANSITION_WIDTH {
-        ((OCEAN_COLD_TEMP_THRESHOLD + OCEAN_TRANSITION_WIDTH - temp) / OCEAN_TRANSITION_WIDTH)
-            .clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    wet.max(hot).max(cold)
-}
-
-/// Vertical offset added to the noise sum, per biome, blended bilinearly across
-/// the climate square and then toward a deep ocean basin.
-fn biome_elevation_offset(temp: f32, humidity: f32) -> f32 {
-    const DESERT: f32 = 0.0;
-    const GRASS: f32 = 0.04;
-    const FOREST: f32 = 0.5;
-    const TAIGA: f32 = 8.0;
-    const OCEAN: f32 = -2.5;
-
-    let cold_blend = GRASS + (TAIGA - GRASS) * humidity;
-    let hot_blend = DESERT + (FOREST - DESERT) * humidity;
-    let land = cold_blend + (hot_blend - cold_blend) * temp;
-
-    land + (OCEAN - land) * ocean_factor(temp, humidity)
-}
-
-/// Amplitude applied to the noise sum, per biome — taiga is mountainous, desert
-/// and grass nearly flat, oceans flat. Bilinear across climate, then toward ocean.
-fn biome_height_multiplier(temp: f32, humidity: f32) -> f32 {
-    const DESERT: f32 = 0.01;
-    const GRASS: f32 = 0.02;
-    const FOREST: f32 = 0.05;
-    const TAIGA: f32 = 1.5;
-    const OCEAN: f32 = 0.01;
-
-    let cold_blend = GRASS + (TAIGA - GRASS) * humidity;
-    let hot_blend = DESERT + (FOREST - DESERT) * humidity;
-    let land = cold_blend + (hot_blend - cold_blend) * temp;
-
-    land + (OCEAN - land) * ocean_factor(temp, humidity)
 }
 
 // --- Colour -------------------------------------------------------------------

@@ -30,11 +30,12 @@ use super::TerrainCamera;
 /// generator every frame, short enough to feel immediate when you let go.
 const REGEN_DEBOUNCE: f32 = 0.25;
 
-/// Rebuilds the world when [`WorldGenConfig`] changes. Streaming params
-/// (render distance, chunks/frame) are mirrored into their runtime resources
-/// immediately; a seed/scale change additionally rebuilds the [`WorldGenerator`]
-/// and clears every chunk so [`generate_chunks`] repopulates from scratch. The
-/// rebuild is debounced so dragging a slider settles before the world rebuilds.
+/// Applies [`WorldGenConfig`] edits. Streaming params (render distance, LOD
+/// bands, chunks/frame) are mirrored into their runtime resources immediately and
+/// take effect without a world rebuild — chunks just re-scan / re-mesh, so
+/// dragging those sliders updates smoothly. Generation params (seed, scales) do
+/// need a fresh world, so they rebuild the [`WorldGenerator`] and clear every
+/// chunk, debounced so dragging settles first.
 pub fn regenerate_terrain(
     config: Res<WorldGenConfig>,
     time: Res<Time>,
@@ -44,25 +45,39 @@ pub fn regenerate_terrain(
     chunks: Query<Entity, With<Chunk>>,
     mut commands: Commands,
     mut pending: Local<Option<f32>>,
-    mut initialized: Local<bool>,
+    mut last: Local<Option<WorldGenConfig>>,
 ) {
-    // Cheap params can update live without a rebuild; mirror them every time the
-    // config changes (and once on startup).
     if config.is_changed() {
+        // Mirror cheap streaming params live (read by the streaming systems).
         manager.render_distance = config.render_distance;
+        manager.lod_levels = config.lod_levels;
         settings.max_chunks_per_frame = config.max_chunks_per_frame;
+
+        if let Some(prev) = last.as_ref() {
+            // Render-distance / LOD edits only need a re-scan, not a rebuild:
+            // forcing a fresh spawn scan fills any new ring, and update_chunk_lod
+            // re-meshes chunks whose band changed. (First sighting on startup has
+            // no `prev` — the generator already matches the config.)
+            if config.render_distance != prev.render_distance
+                || config.lod_levels != prev.lod_levels
+            {
+                manager.last_camera_chunk = None;
+            }
+            // Generation params changed → schedule a debounced full rebuild.
+            if config.seed != prev.seed
+                || config.horizontal_scale != prev.horizontal_scale
+                || config.height_scale != prev.height_scale
+                || config.ocean_humidity_threshold != prev.ocean_humidity_threshold
+                || config.ocean_transition_width != prev.ocean_transition_width
+                || config.ocean_depth != prev.ocean_depth
+            {
+                *pending = Some(REGEN_DEBOUNCE);
+            }
+        }
+        *last = Some(config.clone());
     }
 
-    // The resource is "changed" the frame it's inserted; treat that first sighting
-    // as setup (generator already matches the config) rather than a rebuild.
-    if !*initialized {
-        *initialized = true;
-        return;
-    }
-
-    if config.is_changed() {
-        *pending = Some(REGEN_DEBOUNCE);
-    }
+    // Debounced full rebuild for generation changes only.
     let Some(remaining) = *pending else { return };
     let remaining = remaining - time.delta_secs();
     if remaining > 0.0 {
@@ -203,6 +218,17 @@ pub fn displace_new_chunks(
 /// than a blurry gradient — without it the GPU smoothly interpolates the three
 /// corner colours across every triangle.
 fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
+    // Resolve the chunk's runways once (each samples noise for its elevation) so
+    // the per-vertex flatten below is cheap rectangle math, not noise.
+    let half = CHUNK_SIZE * 0.5;
+    let runways = super::runway::runways_in_region(
+        world_gen,
+        origin.x - half,
+        origin.z - half,
+        origin.x + half,
+        origin.z + half,
+    );
+
     // 1. Displace each vertex to its terrain height and record its colour.
     let mut colors: Vec<[f32; 4]> = Vec::new();
     if let Some(VertexAttributeValues::Float32x3(positions)) =
@@ -210,8 +236,9 @@ fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
     {
         colors.reserve(positions.len());
         for pos in positions.iter_mut() {
-            let (h, color) = world_gen.surface(pos[0] + origin.x, pos[2] + origin.z);
-            pos[1] = h;
+            let (wx, wz) = (pos[0] + origin.x, pos[2] + origin.z);
+            let (natural, color) = world_gen.sample_natural(wx, wz);
+            pos[1] = super::runway::flatten_against(&runways, wx, wz, natural);
             colors.push(color);
         }
     }
@@ -303,11 +330,16 @@ pub fn update_chunk_lod(
     mut manager: ResMut<ChunkManager>,
     settings: Res<WorldGenerationSettings>,
     mut last_cam: Local<Option<(i32, i32)>>,
+    mut last_lods: Local<Option<[(f32, u32); 5]>>,
 ) {
     let Some((cam_x, cam_z)) = camera_chunk(&camera) else { return };
 
-    if *last_cam != Some((cam_x, cam_z)) {
+    // Re-scan when the camera enters a new chunk, or when the LOD bands were
+    // edited (so live LOD tweaks re-mesh existing chunks, not just new ones).
+    let lods_changed = *last_lods != Some(manager.lod_levels);
+    if *last_cam != Some((cam_x, cam_z)) || lods_changed {
         *last_cam = Some((cam_x, cam_z));
+        *last_lods = Some(manager.lod_levels);
 
         let mut candidates: Vec<(Entity, f32)> = Vec::new();
         for (entity, chunk, _) in &chunks {
