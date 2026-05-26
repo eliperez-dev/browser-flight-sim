@@ -55,6 +55,19 @@ pub struct FlightModelConfig {
     /// 0.5 = midpoint (second-order accurate), 0 = forward-Euler.
     pub prediction_fraction: f32,
 
+    /// Ground-effect strength (0 = off). On the deck the wing's effective aspect
+    /// ratio is multiplied by `1 + strength`, which both raises the lift-curve
+    /// slope (more lift) and cuts induced drag — the "float" in the flare and a
+    /// slightly earlier unstick. `1.0` roughly matches the physical maximum;
+    /// higher values exaggerate it for feel. The boost fades with height (see
+    /// `ground_effect_span`) to nothing at altitude, so cruise is unaffected.
+    pub ground_effect_strength: f32,
+    /// Reference wingspan (m). Sets how high the cushion reaches: the boost is a
+    /// Gaussian in height that's ~full on the deck, ~37% at half this span up,
+    /// and gone by one span. Use the full wingspan (≈ 7.3 m here); raise it to
+    /// make ground effect linger higher, lower it to keep it near the surface.
+    pub ground_effect_span: f32,
+
     // --- Flight assists ----------------------------------------------------
     /// TODO: Actually implement this, this is dead code for now
     /// Roll auto-level strength. Torque = -coeff * bank_angle * airspeed.
@@ -309,6 +322,13 @@ impl Default for FlightModelConfig {
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
+
+            // Realistic ground effect: strength 1.0 is the physical ceiling (a
+            // clear flare float, not arcade), and the span is the real C172
+            // wingspan (~11 m) since ground-effect reach scales with the actual
+            // wingspan and starts being felt about one span above the ground.
+            ground_effect_strength: 3.0,
+            ground_effect_span:     11.0,
 
             auto_level_strength:  18.0,
             bank_turn_strength:   12.0,

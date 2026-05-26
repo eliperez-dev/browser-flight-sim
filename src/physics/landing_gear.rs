@@ -27,7 +27,7 @@ use crate::plane::{Airplane, PlaneState};
 /// World height of the (flat) ground plane, in metres. Matches the visual
 /// ground spawned in `debug_world.rs`. When the world gains real terrain this
 /// becomes a per-wheel height lookup instead of a constant.
-const GROUND_Y: f32 = 0.0;
+pub const GROUND_Y: f32 = 0.0;
 
 /// One landing-gear strut: where it mounts to the airframe and how far it hangs
 /// when uncompressed. The nose strut carries an independent rest length from the

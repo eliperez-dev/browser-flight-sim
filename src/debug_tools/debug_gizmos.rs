@@ -2,9 +2,9 @@ use avian3d::prelude::{AngularVelocity, CenterOfMass, LinearVelocity};
 use bevy::prelude::*;
 
 use crate::physics::aero_surface::AeroSurface;
-use crate::physics::aircraft_physics::AircraftRoot;
+use crate::physics::aircraft_physics::{AircraftRoot, ground_effect_factor};
 use crate::physics::flight_config::FlightModelConfig;
-use crate::physics::landing_gear::gear_legs;
+use crate::physics::landing_gear::{GROUND_Y, gear_legs};
 use crate::plane::{Airplane, Propeller};
 
 #[derive(Resource, Default)]
@@ -157,13 +157,17 @@ pub fn draw_aero_gizmos(
         // flow, matching sum_aero_forces in aircraft_physics.rs.
         let rel_pos = pos - com_world;
         let world_air_vel = -vel - ang_vel.0.cross(rel_pos);
+        // Match the physics step: scale the induced term by the same
+        // ground-effect factor so the force arrow tracks the cushion near the
+        // runway instead of diverging from what the aircraft actually feels.
+        let ge = ground_effect_factor(pos.y - GROUND_Y, cfg.ground_effect_span, cfg.ground_effect_strength);
         let force = surface
-            .calculate_forces(world_air_vel, cfg.air_density, rel_pos, rot)
+            .calculate_forces(world_air_vel, cfg.air_density, rel_pos, rot, ge)
             .force;
 
         // AC sampling: uniform freestream (no rotation term), base vs perturbed AoA.
-        let fb = surface.calculate_forces(base_wind, cfg.air_density, rel_pos, rot).force;
-        let fp = surface.calculate_forces(pert_wind, cfg.air_density, rel_pos, rot).force;
+        let fb = surface.calculate_forces(base_wind, cfg.air_density, rel_pos, rot, ge).force;
+        let fp = surface.calculate_forces(pert_wind, cfg.air_density, rel_pos, rot, ge).force;
         f_base += fb;
         m_base += rel_pos.cross(fb);
         f_pert += fp;

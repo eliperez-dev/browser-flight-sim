@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use super::aero_surface::AeroSurface;
 use super::bi_vector3::BiVector3;
 use super::flight_config::FlightModelConfig;
+use super::landing_gear::GROUND_Y;
 use crate::plane::PlaneState;
 
 /// The aircraft entity bakes `scale(0.1)` into its Transform, but Avian's
@@ -103,7 +104,7 @@ pub fn apply_aero_forces(
     // nose = aircraft local +Z in world space (model faces +Z, parent scale 0.1)
     let nose = rot * Vec3::Z;
 
-    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
+    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
 
     // Thrust follows engine RPM, not the throttle directly: the throttle sets a
     // target RPM that the engine spools toward (airplane_controller), so thrust
@@ -127,7 +128,7 @@ pub fn apply_aero_forces(
     let ang_accel = inertia_world_rot * accel_local;
     let ang_vel_pred = ang_vel + dt * cfg.prediction_fraction * ang_accel;
 
-    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density);
+    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
@@ -179,6 +180,8 @@ fn sum_aero_forces(
     children: &Children,
     surface_q: &Query<(&AeroSurface, &Transform), Without<AircraftRoot>>,
     air_density: f32,
+    ground_effect_strength: f32,
+    ground_effect_span: f32,
 ) -> BiVector3 {
     let mut total = BiVector3::default();
     for child in children {
@@ -189,7 +192,33 @@ fn sum_aero_forces(
         let rel_pos = surface_pos - com;
         let world_air_vel = -lin_vel - ang_vel.cross(rel_pos);
         let world_rot = root_rot * local_tf.rotation;
-        total += surface.calculate_forces(world_air_vel, air_density, rel_pos, world_rot);
+        let ground_effect = ground_effect_factor(
+            surface_pos.y - GROUND_Y, ground_effect_span, ground_effect_strength,
+        );
+        total += surface.calculate_forces(world_air_vel, air_density, rel_pos, world_rot, ground_effect);
     }
     total
+}
+
+/// Effective-aspect-ratio multiplier modelling proximity to the ground.
+///
+/// Returns `1.0` (free air) when the surface is high up or the effect is
+/// disabled, rising toward `1.0 + strength` as it approaches the ground. The
+/// aero model multiplies the surface's aspect ratio by this, which raises both
+/// the lift-curve slope (more lift) and the effective span efficiency (less
+/// induced drag) — the float you feel in the flare.
+///
+/// `proximity` falls off as a Gaussian in height: it's ~1 on the deck, ~0.37 at
+/// half a span up, and effectively gone (~0.02) by one full span. `span` is the
+/// reference wingspan and also sets how high the cushion reaches — a bigger span
+/// makes the effect linger higher. (The textbook `(16·h/b)²` influence factor is
+/// tuned for a low wing right at the surface; this gentler falloff is what lets
+/// a high-wing aircraft — whose wing sits a couple of metres up — actually feel
+/// it, and `strength` lets you exaggerate it past the physical ~1.3× ceiling.)
+pub fn ground_effect_factor(height: f32, span: f32, strength: f32) -> f32 {
+    if strength <= 0.0 || span <= 0.0 {
+        return 1.0;
+    }
+    let proximity = (-(2.0 * height.max(0.0) / span).powi(2)).exp();
+    1.0 + strength * proximity
 }

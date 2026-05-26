@@ -31,19 +31,32 @@ impl AeroSurface {
     /// `world_air_velocity` = air velocity relative to this surface in world space
     /// `air_density` = kg/m³
     /// `rel_pos` = surface world position minus aircraft center of mass
+    /// `ground_effect` = effective-aspect-ratio multiplier, `>= 1.0`. `1.0` is
+    ///   free air; larger values model proximity to the ground, where the
+    ///   wingtip vortices/downwash are suppressed and the wing acts like a
+    ///   longer, more slender one. Raising the effective aspect ratio increases
+    ///   the lift-curve slope (MORE lift for a given AoA) and shrinks the induced
+    ///   angle (LESS induced drag) together. Computed by the caller from
+    ///   height/span; see `aircraft_physics::ground_effect_factor`.
     pub fn calculate_forces(
         &self,
         world_air_velocity: Vec3,
         air_density: f32,
         rel_pos: Vec3,
         surface_rotation: Quat,
+        ground_effect: f32,
     ) -> BiVector3 {
         let mut result = BiVector3::default();
         let c = &self.config;
 
+        // Effective aspect ratio, raised by ground effect (1.0 = free air). Both
+        // the lift slope below and the induced angle in the coefficient helpers
+        // use this, so the ground cushion adds lift and cuts induced drag at once.
+        let aspect_ratio = c.aspect_ratio * ground_effect;
+
         // Aspect ratio correction on lift slope
-        let corrected_lift_slope = c.lift_slope * c.aspect_ratio
-            / (c.aspect_ratio + 2.0 * (c.aspect_ratio + 4.0) / (c.aspect_ratio + 2.0));
+        let corrected_lift_slope = c.lift_slope * aspect_ratio
+            / (aspect_ratio + 2.0 * (aspect_ratio + 4.0) / (aspect_ratio + 2.0));
 
         // Flap deflection effect on zero-lift AoA and stall angles
         let theta = (2.0 * c.flap_fraction - 1.0).acos();
@@ -83,7 +96,7 @@ impl AeroSurface {
         // atan2(y, -x) gives positive AoA when flow comes from below (+Y side).
         let aoa = f32::atan2(local_vel.y, -local_vel.x);
 
-        let coeffs = self.calculate_coefficients(aoa, corrected_lift_slope, zero_lift_aoa, stall_high, stall_low);
+        let coeffs = self.calculate_coefficients(aoa, corrected_lift_slope, zero_lift_aoa, stall_high, stall_low, aspect_ratio);
 
         let lift = lift_dir * coeffs.x * q * area;
         let drag = drag_dir * coeffs.y * q * area;
@@ -101,6 +114,7 @@ impl AeroSurface {
         zero_lift_aoa: f32,
         stall_high: f32,
         stall_low: f32,
+        effective_aspect_ratio: f32,
     ) -> Vec3 {
         let padding_high = f32::to_radians(f32::lerp(
             15.0, 5.0, (self.flap_angle.to_degrees() + 50.0) / 100.0,
@@ -112,18 +126,18 @@ impl AeroSurface {
         let padded_low = stall_low - padding_low;
 
         if aoa < stall_high && aoa > stall_low {
-            self.coeffs_low_aoa(aoa, lift_slope, zero_lift_aoa)
+            self.coeffs_low_aoa(aoa, lift_slope, zero_lift_aoa, effective_aspect_ratio)
         } else if aoa > padded_high || aoa < padded_low {
-            self.coeffs_stall(aoa, lift_slope, zero_lift_aoa, stall_high, stall_low)
+            self.coeffs_stall(aoa, lift_slope, zero_lift_aoa, stall_high, stall_low, effective_aspect_ratio)
         } else {
             let (low, stall, t) = if aoa > stall_high {
-                let low = self.coeffs_low_aoa(stall_high, lift_slope, zero_lift_aoa);
-                let stall = self.coeffs_stall(padded_high, lift_slope, zero_lift_aoa, stall_high, stall_low);
+                let low = self.coeffs_low_aoa(stall_high, lift_slope, zero_lift_aoa, effective_aspect_ratio);
+                let stall = self.coeffs_stall(padded_high, lift_slope, zero_lift_aoa, stall_high, stall_low, effective_aspect_ratio);
                 let t = (aoa - stall_high) / (padded_high - stall_high);
                 (low, stall, t)
             } else {
-                let low = self.coeffs_low_aoa(stall_low, lift_slope, zero_lift_aoa);
-                let stall = self.coeffs_stall(padded_low, lift_slope, zero_lift_aoa, stall_high, stall_low);
+                let low = self.coeffs_low_aoa(stall_low, lift_slope, zero_lift_aoa, effective_aspect_ratio);
+                let stall = self.coeffs_stall(padded_low, lift_slope, zero_lift_aoa, stall_high, stall_low, effective_aspect_ratio);
                 let t = (aoa - stall_low) / (padded_low - stall_low);
                 (low, stall, t)
             };
@@ -131,9 +145,13 @@ impl AeroSurface {
         }
     }
 
-    fn coeffs_low_aoa(&self, aoa: f32, lift_slope: f32, zero_lift_aoa: f32) -> Vec3 {
+    fn coeffs_low_aoa(&self, aoa: f32, lift_slope: f32, zero_lift_aoa: f32, effective_aspect_ratio: f32) -> Vec3 {
+        // `lift_slope` is already the ground-effect-boosted corrected slope, so a
+        // higher effective AR shows up directly as more lift here.
         let cl = lift_slope * (aoa - zero_lift_aoa);
-        let induced_angle = cl / (std::f32::consts::PI * self.config.aspect_ratio);
+        // The induced angle uses the same effective AR, so the cushion that adds
+        // lift also sheds induced drag.
+        let induced_angle = cl / (std::f32::consts::PI * effective_aspect_ratio);
         let eff = aoa - zero_lift_aoa - induced_angle;
         let ct = self.config.skin_friction * eff.cos();
         let cn = (cl + eff.sin() * ct) / eff.cos();
@@ -142,13 +160,13 @@ impl AeroSurface {
         Vec3::new(cl, cd, cm)
     }
 
-    fn coeffs_stall(&self, aoa: f32, lift_slope: f32, zero_lift_aoa: f32, stall_high: f32, stall_low: f32) -> Vec3 {
+    fn coeffs_stall(&self, aoa: f32, lift_slope: f32, zero_lift_aoa: f32, stall_high: f32, stall_low: f32, effective_aspect_ratio: f32) -> Vec3 {
         let cl_low = if aoa > stall_high {
             lift_slope * (stall_high - zero_lift_aoa)
         } else {
             lift_slope * (stall_low - zero_lift_aoa)
         };
-        let induced = cl_low / (std::f32::consts::PI * self.config.aspect_ratio);
+        let induced = cl_low / (std::f32::consts::PI * effective_aspect_ratio);
         let t = if aoa > stall_high {
             (std::f32::consts::FRAC_PI_2 - aoa.clamp(-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2))
                 / (std::f32::consts::FRAC_PI_2 - stall_high)

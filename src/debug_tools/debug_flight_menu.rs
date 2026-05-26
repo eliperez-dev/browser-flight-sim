@@ -141,6 +141,10 @@ fn draw_menu(
                         .text("Gravity (m/s²)"));
                     ui.add(egui::Slider::new(&mut cfg.prediction_fraction, 0.0..=1.0)
                         .text("Prediction fraction"));
+                    ui.add(egui::Slider::new(&mut cfg.ground_effect_strength, 0.0..=10.0)
+                        .text("Ground effect strength"));
+                    ui.add(egui::Slider::new(&mut cfg.ground_effect_span, 1.0..=20.0)
+                        .text("Ground effect span (m)"));
                 });
 
             // ---------------------------------------------------------------
