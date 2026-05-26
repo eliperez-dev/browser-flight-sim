@@ -312,6 +312,9 @@ fn draw_menu(
             egui::CollapsingHeader::new("Surfaces")
                 .default_open(false)
                 .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut cfg.wing_incidence, -5.0..=10.0)
+                        .text("Wing incidence (°)"));
+                    ui.separator();
                     egui::CollapsingHeader::new("Wing")
                         .show(ui, |ui| surface_controls(ui, &mut cfg.wing));
                     egui::CollapsingHeader::new("Aileron")

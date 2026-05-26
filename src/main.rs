@@ -21,7 +21,7 @@ use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::debug_tools::debug_world::spawn_debug_world;
 use crate::fog::FogPlugin;
-use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller};
+use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller, wing_panel_rotation};
 use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, setup_gizmo_config, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
@@ -101,7 +101,10 @@ fn apply_config_to_entities(
         (&mut CenterOfMass, &mut Mass, &mut AngularInertia, &mut AngularDamping),
         With<Airplane>,
     >,
-    mut surface_q: Query<&mut AeroSurface>,
+    // Surfaces also carry their own Transform (the mounted orientation); the
+    // Without filters keep this disjoint from the visual/propeller Transform
+    // queries above so Bevy can run them together.
+    mut surface_q: Query<(&mut AeroSurface, &mut Transform), (Without<PlaneVisual>, Without<DebugPropeller>)>,
     mut gravity: ResMut<Gravity>,
 ) {
     if !cfg.is_changed() {
@@ -127,7 +130,7 @@ fn apply_config_to_entities(
         inertia.principal = inertia_eff;
         damping.0 = cfg.angular_damping;
     }
-    for mut surface in &mut surface_q {
+    for (mut surface, mut tf) in &mut surface_q {
         let new_config = match (surface.is_control_surface, surface.input_type) {
             (true, ControlInputType::Flap)  => &cfg.wing,
             (true, ControlInputType::Roll)  => &cfg.aileron,
@@ -136,6 +139,11 @@ fn apply_config_to_entities(
             (false, _)                      => &cfg.body_lift,
         };
         surface.config = new_config.clone();
+        // Re-apply the wing rigging incidence live to the main-wing (Flap) and
+        // aileron (Roll) panels. Other surfaces keep their spawned orientation.
+        if matches!(surface.input_type, ControlInputType::Flap | ControlInputType::Roll) {
+            tf.rotation = wing_panel_rotation(cfg.wing_incidence);
+        }
     }
 }
 
@@ -182,7 +190,7 @@ fn setup(
         PIXEL_LAYER,
         Transform::from_xyz(0.0, 8.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         FreeCam { yaw: 0.0, pitch: -0.3 },
-        TrackCam { yaw: 0.0, pitch: 0.3, distance: 15.0, chase_distance: 6.0 },
+        TrackCam { yaw: 0.0, pitch: 0.3, distance: 15.0 },
     ));
 
     commands.spawn((Sprite::from_image(pixel_target), SCREEN_LAYER));

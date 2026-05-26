@@ -54,7 +54,6 @@ pub fn populate_debug_hud(
     hud.entries.push(("CAM", match &*mode {
         CameraMode::Free  => "FREE".into(),
         CameraMode::Orbit => "ORBIT".into(),
-        CameraMode::Chase => "CHASE".into(),
     }));
     hud.entries.push(("FOG", if fog.0 { "ON\t [1]" } else { "OFF \t[1]" }.into()));
 
@@ -64,7 +63,9 @@ pub fn populate_debug_hud(
     }
 
     if let Ok((tf, state, root)) = plane_query.single() {
+        // 1 m/s = 1.943_844 knots (1 kt = 1 nautical mile/hr = 1852 m / 3600 s).
         hud.entries.push(("SPD",    format!("{:.1} m/s", state.speed)));
+        hud.entries.push(("KTS",    format!("{:.1} kt",  state.speed * 1.943_844)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("GND",    if state.on_ground { "ON GROUND" } else { "AIRBORNE" }.into()));
         hud.entries.push(("ENGINE", match root.engine_state {

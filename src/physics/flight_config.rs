@@ -117,6 +117,16 @@ pub struct FlightModelConfig {
     /// stability. Synced to the rigid body at runtime.
     pub center_of_mass: Vec3,
 
+    /// Wing rigging incidence (degrees): the angle the wing chord is mounted at
+    /// relative to the fuselage reference line, nose-up positive. A real wing is
+    /// bolted on at a small positive incidence (C172 ≈ 1.5°) so it flies at a
+    /// useful angle of attack while the fuselage sits level — that's what lets it
+    /// lift off and cruise without a permanently nose-high attitude. Higher
+    /// incidence makes more lift at any given pitch, so the aircraft unsticks
+    /// sooner and feels lighter, at the cost of a more nose-down cruise. Applied
+    /// to the main wing and aileron panels (pitch about their span axis).
+    pub wing_incidence: f32,
+
     // --- Aerodynamic surfaces ---------------------------------------------
     // Per-surface geometry and stall behaviour. `spawn_aircraft` builds the
     // surfaces from these at startup, and `apply_config_to_entities` pushes
@@ -151,7 +161,7 @@ pub struct CargoConfig {
 impl Default for CargoConfig {
     fn default() -> Self {
         Self { 
-            fuel_left_kg:         FUEL_TANK_MAX_KG / 2.0, // full tanks
+            fuel_left_kg:         FUEL_TANK_MAX_KG / 2.0, // half tanks (light load)
             fuel_right_kg:        FUEL_TANK_MAX_KG / 2.0,
             cargo_kg:             0.0,
             passengers:           1, // pilot only
@@ -252,16 +262,16 @@ pub struct LandingGearConfig {
 impl Default for LandingGearConfig {
     fn default() -> Self {
         Self {
-            // Loaded C172 ≈ 1000 kg over 3 wheels (~330 kg each). gear_spring
-            // ~60 kN/m squats ≈5 cm under that load; gear_damping ≈ 2·√(k·m)
-            // ≈ 9 kN·s/m is near-critical so it settles without bouncing.
+            // Sized for a loaded light single over three wheels: firm enough to
+            // squat only a few cm under load, with damping near-critical
+            // (≈ 2·√(k · mass-per-wheel)) so it settles without bouncing.
             gear_spring:             100_000.0,
             gear_damping:            15_000.0,
             gear_rest_length:        1.1,
             gear_nose_rest_length:   1.1,
             gear_grip:               6_000.0,
-            gear_rolling_resistance: 0.03,
-            gear_brake_strength:     0.6,
+            gear_rolling_resistance: 0.01,
+            gear_brake_strength:     0.65,
 
             // Tricycle layout: nose wheel forward, mains just aft of the CoM
             // with a ~2.5 m track, mounts tucked just below the origin.
@@ -283,14 +293,19 @@ impl Default for FlightModelConfig {
             throttle_rate:        0.5,
             servo_tau:            0.45,
   
-            elevator_trim:        -0.06,
+            elevator_trim:        0.00,
 
             // Supplemental damping only — the tail/fin/wings already provide the
-            // primary rate damping aerodynamically. Halved from the old
-            // (1.0, 9.0, 2.5) to stop double-counting; re-tune via the slider.
+            // primary rate damping aerodynamically, so keep this low to avoid
+            // double-counting; re-tune via the slider.
             aero_damp:            Vec3::new(0.5, 4.5, 1.25),
 
-            fuselage_drag:        Vec3::new(60.0, 10.0, 0.15),
+            // Cd·A per body axis (side X, belly Y, nose Z). The nose is
+            // streamlined (small Z) and is the only term that acts in normal
+            // flight; the flank/belly terms bite in a skid or a high-AoA mush.
+            // Roughly broadside Cd·A for a light-aircraft fuselage, not the huge
+            // penalty value it used to be.
+            fuselage_drag:        Vec3::new(10.0, 10.0, 0.15),
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
@@ -318,13 +333,21 @@ impl Default for FlightModelConfig {
             cargo: CargoConfig::default(),
 
             model_offset:         Vec3::new(0.0, -12.0, 11.0),
-            // Local units (×0.1 → metres): 1.5 m forward of the wing AC (+Z) and
-            // 0.1 m up. A fairly forward CoM → large static margin, so the model
-            // is very pitch-stable / nose-heavy. Every aerodynamic moment arm is
-            // measured from here, so this directly sets trim and stability.
+            // Local units (×0.1 → metres), +Z forward / +Y up. Sits just ahead of
+            // the wing for a small positive static margin (pitch-stable without
+            // being nose-heavy). Every aerodynamic moment arm is measured from
+            // here, so it directly sets trim and stability — but keep it forward of
+            // the main gear or the aircraft tips back on its tail on the ground.
             center_of_mass:       Vec3::new(0.0, 1.0, 8.0),
 
-            // Main wing: ~16.2 m² per panel area, full-wing AR ≈ 7, 20% flaps.
+            // ~2° rigging incidence (real C172 is ~1.5°): wing flies at a useful
+            // AoA with the fuselage level, so it lifts off near book speed and
+            // cruises slightly nose-down. Bump up for an earlier/lighter takeoff.
+            wing_incidence:       2.0,
+
+            // Main wing panels: full-wing AR ≈ 7, 20%-chord flaps. (Area is
+            // derived from chord × span; the two panels together sit near a real
+            // C172's wing area.)
             wing: AeroSurfaceConfig {
                 flap_fraction: 0.2,
                 span: 3.65,
