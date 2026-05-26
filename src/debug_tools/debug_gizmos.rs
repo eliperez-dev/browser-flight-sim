@@ -5,7 +5,7 @@ use crate::physics::aero_surface::AeroSurface;
 use crate::physics::aircraft_physics::{AircraftRoot, ground_effect_factor};
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::{GROUND_Y, gear_legs};
-use crate::plane::{Airplane, Propeller};
+use crate::plane::Airplane;
 
 #[derive(Resource, Default)]
 pub struct GizmosVisible(pub bool);

@@ -12,6 +12,8 @@ use bevy::color::Mix;
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 
+use super::runway::{RunwayInstance, RUNWAY_BLEND_RADIUS, RUNWAY_FLAT_RADIUS};
+
 /// Metres per chunk edge. 500 m balances draw-call count (fewer, bigger chunks)
 /// against per-chunk mesh-gen cost — the dominant constraint on WASM, where the
 /// "async" task pool actually runs on the main thread (see [`super::streaming`]).
@@ -72,13 +74,16 @@ pub struct WorldGenerator {
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
+    /// Seeded runway layout. Terrain is flattened toward each runway's elevation
+    /// near it (see [`Self::flatten`]); the runway spawner reads the same list.
+    runways: Vec<RunwayInstance>,
 }
 
 impl WorldGenerator {
     pub fn from_config(cfg: &WorldGenConfig) -> Self {
         let seed = cfg.seed;
         let hs = cfg.horizontal_scale;
-        Self {
+        let mut generator = Self {
             height_scale: cfg.height_scale,
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             terrain_layers: vec![
@@ -91,7 +96,17 @@ impl WorldGenerator {
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, 0.06 * hs, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, 0.06 * hs, 1.0),
-        }
+            runways: Vec::new(),
+        };
+        // Layers are built, so natural_height works; derive the runway layout
+        // (which samples it) and store it for flattening.
+        generator.runways = super::runway::generate_runways(seed, &generator);
+        generator
+    }
+
+    /// The seeded runway layout, for the spawner to mirror visually.
+    pub fn runways(&self) -> &[RunwayInstance] {
+        &self.runways
     }
 
     /// Normalised climate at (x, z): `(temperature, humidity)`, each clamped 0..1.
@@ -126,21 +141,27 @@ impl WorldGenerator {
     /// to find the ground under each strut, so it must match the mesh exactly —
     /// both go through [`Self::field`].
     pub fn get_terrain_height(&self, x: f32, z: f32) -> f32 {
-        self.field(x, z).0 * self.height_scale
+        self.flatten(x, z, self.natural_height(x, z))
+    }
+
+    /// Natural terrain height (metres) ignoring runway flattening. Used to seed
+    /// each runway's elevation; `get_terrain_height` flattens on top of it.
+    pub fn natural_height(&self, x: f32, z: f32) -> f32 {
+        self.natural_raw(x, z).0 * self.height_scale
     }
 
     /// Everything the mesh needs at one point: world-space height (metres) and
     /// the linear-RGBA surface colour. One evaluation, no duplicated noise work.
     pub fn surface(&self, x: f32, z: f32) -> (f32, [f32; 4]) {
-        let (raw, temp, hum) = self.field(x, z);
-        let height = raw * self.height_scale;
+        let (raw, temp, hum) = self.natural_raw(x, z);
+        let height = self.flatten(x, z, raw * self.height_scale);
         (height, terrain_color(raw, temp, hum))
     }
 
-    /// Core field evaluation: the raw (pre-`height_scale`) height plus the
-    /// climate that shaped it. Raw height is what the colour palettes are keyed
-    /// to. Flattened toward 0 near the origin so the runway airfield stays level.
-    fn field(&self, x: f32, z: f32) -> (f32, f32, f32) {
+    /// Core noise evaluation: the raw (pre-`height_scale`) natural height plus
+    /// the climate that shaped it. Raw height is what the colour palettes are
+    /// keyed to. No runway flattening — that's applied in world-height space.
+    fn natural_raw(&self, x: f32, z: f32) -> (f32, f32, f32) {
         let (temp, hum) = self.get_climate(x, z);
 
         let mut base = 0.0;
@@ -148,9 +169,28 @@ impl WorldGenerator {
             base += layer.get(x, z);
         }
 
-        let raw = (base * biome_height_multiplier(temp, hum) + biome_elevation_offset(temp, hum))
-            * origin_flatten(x, z);
+        let raw = base * biome_height_multiplier(temp, hum) + biome_elevation_offset(temp, hum);
         (raw, temp, hum)
+    }
+
+    /// Blends a natural world height toward the nearest runway's elevation:
+    /// fully levelled within [`RUNWAY_FLAT_RADIUS`], ramping back to natural by
+    /// [`RUNWAY_BLEND_RADIUS`]. The strongest (nearest) runway wins where their
+    /// influence circles overlap.
+    fn flatten(&self, x: f32, z: f32, natural: f32) -> f32 {
+        let mut best_weight = 0.0_f32;
+        let mut best_elev = 0.0_f32;
+        for r in &self.runways {
+            let d = ((x - r.x).powi(2) + (z - r.z).powi(2)).sqrt();
+            let t = ((d - RUNWAY_FLAT_RADIUS) / (RUNWAY_BLEND_RADIUS - RUNWAY_FLAT_RADIUS))
+                .clamp(0.0, 1.0);
+            let weight = 1.0 - t * t * (3.0 - 2.0 * t); // 1 at runway → 0 past blend
+            if weight > best_weight {
+                best_weight = weight;
+                best_elev = r.elevation;
+            }
+        }
+        natural + (best_elev - natural) * best_weight
     }
 }
 
@@ -192,21 +232,6 @@ impl PerlinLayer {
         ]) as f32;
         n * self.vertical_scale
     }
-}
-
-// --- Origin airfield flattening ----------------------------------------------
-
-/// Fully flat (runway) out to this radius in metres. Must clear the 2000 m
-/// runway's half-length so the whole strip stays level.
-const FLAT_RADIUS: f32 = 1100.0;
-/// Beyond this radius terrain is at full height; between the two it ramps up.
-const BLEND_RADIUS: f32 = 2600.0;
-
-/// 0.0 at the origin airfield, 1.0 past [`BLEND_RADIUS`], smoothstep between.
-fn origin_flatten(x: f32, z: f32) -> f32 {
-    let d = (x * x + z * z).sqrt();
-    let t = ((d - FLAT_RADIUS) / (BLEND_RADIUS - FLAT_RADIUS)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t) // smoothstep
 }
 
 // --- Biome shaping ------------------------------------------------------------

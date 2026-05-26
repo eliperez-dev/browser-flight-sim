@@ -98,6 +98,7 @@ fn draw_menu(
 
             if ui.button("Reset to defaults").clicked() {
                 *cfg = defaults.clone();
+                w = WorldGenConfig::default();
             }
 
             ui.separator();
@@ -124,10 +125,10 @@ fn draw_menu(
 
                     ui.separator();
                     ui.label("Streaming");
-                    ui.add(egui::Slider::new(&mut w.render_distance, 2..=30)
+                    ui.add(egui::Slider::new(&mut w.render_distance, 2..=100)
                         .text("Render distance (chunks)")
                         .integer());
-                    ui.add(egui::Slider::new(&mut w.max_chunks_per_frame, 1..=20)
+                    ui.add(egui::Slider::new(&mut w.max_chunks_per_frame, 1..=50)
                         .text("Max chunk builds / frame")
                         .integer());
 

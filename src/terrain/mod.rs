@@ -7,6 +7,7 @@
 
 mod chunk;
 mod generator;
+mod runway;
 mod streaming;
 
 pub use generator::{WorldGenConfig, WorldGenerator};
@@ -14,6 +15,7 @@ pub use generator::{WorldGenConfig, WorldGenerator};
 use bevy::prelude::*;
 
 use chunk::{ChunkManager, SharedTerrainMaterial, WorldGenerationSettings};
+use runway::RunwayMaterials;
 
 /// Marks the 3D camera that terrain streams around. Exactly one entity should
 /// carry this (the `PIXEL_LAYER` `Camera3d` in `main::setup`).
@@ -34,8 +36,10 @@ impl Plugin for TerrainPlugin {
                 Update,
                 (
                     // Regen first so a config change clears stale chunks before
-                    // generate_chunks repopulates from the new generator.
+                    // generate_chunks repopulates from the new generator;
+                    // sync_runways then rebuilds the strips for the new layout.
                     streaming::regenerate_terrain,
+                    runway::sync_runways,
                     streaming::generate_chunks,
                     streaming::displace_new_chunks,
                     streaming::apply_chunk_meshes,
@@ -60,4 +64,5 @@ fn setup_terrain_material(
             ..default()
         }),
     });
+    commands.insert_resource(RunwayMaterials::new(&mut materials));
 }
