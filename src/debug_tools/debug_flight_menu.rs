@@ -12,6 +12,7 @@ use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContext
 
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
+use crate::terrain::WorldGenConfig;
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -76,10 +77,16 @@ fn draw_menu(
     mut contexts: EguiContexts,
     visible: Res<DebugMenuVisible>,
     mut cfg: ResMut<FlightModelConfig>,
+    mut world: ResMut<WorldGenConfig>,
 ) -> Result {
     if !visible.0 { return Ok(()); }
 
     let defaults = FlightModelConfig::default();
+
+    // Edit a snapshot of the world config and write it back only if a value
+    // actually changed. Touching `world` mutably (as egui sliders do every frame)
+    // would otherwise flag it changed continuously and defeat the regen debounce.
+    let mut w = world.clone();
 
     egui::SidePanel::right("flight_debug_panel")
         .resizable(true)
@@ -94,6 +101,41 @@ fn draw_menu(
             }
 
             ui.separator();
+
+            // ---------------------------------------------------------------
+            // World generation — edits trigger a debounced terrain rebuild
+            // (see terrain::streaming::regenerate_terrain).
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("World Generation")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Seed:");
+                        ui.add(egui::DragValue::new(&mut w.seed).speed(1.0));
+                        if ui.button("Randomize").clicked() {
+                            // LCG step: a fresh pseudo-random seed each click.
+                            w.seed = w.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                        }
+                    });
+                    ui.add(egui::Slider::new(&mut w.horizontal_scale, 0.5..=10.0)
+                        .text("Horizontal scale (tightness)"));
+                    ui.add(egui::Slider::new(&mut w.height_scale, 10.0..=600.0)
+                        .text("Height scale (relief)"));
+
+                    ui.separator();
+                    ui.label("Streaming");
+                    ui.add(egui::Slider::new(&mut w.render_distance, 2..=30)
+                        .text("Render distance (chunks)")
+                        .integer());
+                    ui.add(egui::Slider::new(&mut w.max_chunks_per_frame, 1..=20)
+                        .text("Max chunk builds / frame")
+                        .integer());
+
+                    ui.separator();
+                    if ui.button("Reset world gen").clicked() {
+                        w = WorldGenConfig::default();
+                    }
+                });
 
             // ---------------------------------------------------------------
             // Control surfaces
@@ -331,6 +373,12 @@ fn draw_menu(
                         .show(ui, |ui| surface_controls(ui, &mut cfg.body_lift));
                 });
         });
+
+    // Commit world-gen edits only when something actually changed, so the
+    // resource's change-detection drives the (debounced) terrain rebuild.
+    if w != *world {
+        *world = w;
+    }
     Ok(())
 }
 

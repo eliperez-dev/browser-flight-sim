@@ -9,38 +9,8 @@ pub fn spawn_debug_world(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut ambient: ResMut<GlobalAmbientLight>,
 ) {
-    let scale = 500.0;
-
     // Low-level fill light so surfaces in shadow aren't pitch black.
     ambient.brightness = 400.0;
-    // The large green ground plane that used to live here is gone — the streaming
-    // chunk terrain (`TerrainPlugin`) now fills the world. The runway below still
-    // sits at y=0; terrain near the origin is flattened/handled separately.
-
-    // Cubes scattered on the ground — vary size and position for a rough landmark grid
-    let cubes: &[(f32, f32, f32, f32, f32, f32)] = &[
-        // x,    y_half, z,    w,   h,   d
-        ( 8.0,  0.5,  5.0,  1.0, 1.0, 1.0),
-        (-6.0,  1.0, -4.0,  1.0, 2.0, 1.0),
-        (15.0,  0.75, -10.0, 1.5, 1.5, 1.5),
-        (-12.0, 0.5,  8.0,  1.0, 3.0, 1.0),
-        ( 3.0,  1.5,  18.0, 1.0, 3.0, 1.0),
-        (-20.0, 5.5, -15.0, 2.0, 10.0, 2.0),
-        (12.0, 0.5,  -8.0,  1.0, 5.0, 1.0),
-        ( -3.0,  1.5,  18.0, 1.0, 3.0, 1.0),
-        (20.0, 4.5, 15.0, 2.0, 2.0, 2.0),
-    ];
-
-    let cube_color = materials.add(Color::srgb(0.75, 0.45, 0.2));
-
-    for &(x, y_half, z, w, h, d) in cubes {
-        commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(w * scale, h * scale, d * scale))),
-            MeshMaterial3d(cube_color.clone()),
-            Transform::from_xyz(x * scale, y_half * scale, z * scale),
-            PIXEL_LAYER,
-        ));
-    }
 
     spawn_runway(&mut commands, &mut meshes, &mut materials);
 
@@ -67,34 +37,39 @@ fn spawn_runway(
     // Realistic light-GA runway: ~45 m wide, 2000 m long.
     const WIDTH: f32 = 45.0;
     const LENGTH: f32 = 2000.0;
-    // Asphalt sits at the physics ground level (y=0) where the wheels rest, a
-    // full 1 m above the lowered green ground plane. Marking paint sits a little
-    // above the asphalt; that 0.1 m gap is plenty now that nothing competes with
-    // it at the same depth.
+    // Asphalt surface sits at the physics ground level (y=0) where the wheels
+    // rest — the terrain is flattened to y=0 across the airfield, so the slab and
+    // the ground are coplanar. Marking paint sits a little above the asphalt.
     const SURFACE_Y: f32 = 0.0;
     const PAINT_Y: f32 = 0.1;
+    // The slab is a real box `THICKNESS` deep (top face at SURFACE_Y, the rest
+    // buried) so it reads as a volumetric pad rather than a paper-thin plane —
+    // and so its sides hide the terrain edge wherever the ground isn't dead flat.
+    const THICKNESS: f32 = 3.0;
 
     let asphalt = materials.add(StandardMaterial {
         base_color: Color::srgb(0.12, 0.12, 0.13),
         perceptual_roughness: 1.0,
+        // The slab top is coplanar with the flat y=0 terrain; a positive depth
+        // bias renders the asphalt in front so the terrain can't z-fight through
+        // it ("clipping up through the runway"). Paint gets a higher bias still.
+        depth_bias: 4.0,
         ..default()
     });
     let paint = materials.add(StandardMaterial {
         base_color: Color::srgb(0.9, 0.9, 0.9),
         perceptual_roughness: 1.0,
+        depth_bias: 8.0,
         ..default()
     });
 
-    // Asphalt slab (a flat plane, so we don't need a tall box).
-    // `NoFrustumCulling` on every runway piece: these meshes are zero-thickness
-    // in Y, so their bounding box has no height and Bevy's frustum test wrongly
-    // culls them at shallow camera angles / distances, making the runway flicker
-    // out. Forcing them to always render is cheap here and fixes that.
+    // Volumetric asphalt slab: a box whose top face is at SURFACE_Y. Because it
+    // has real height its bounding box is correct, so (unlike the old zero-Y
+    // plane) it doesn't need NoFrustumCulling to stop flickering out.
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(WIDTH, LENGTH))),
+        Mesh3d(meshes.add(Cuboid::new(WIDTH, THICKNESS, LENGTH))),
         MeshMaterial3d(asphalt.clone()),
-        Transform::from_xyz(0.0, SURFACE_Y, 0.0),
-        NoFrustumCulling,
+        Transform::from_xyz(0.0, SURFACE_Y - THICKNESS * 0.5, 0.0),
         PIXEL_LAYER,
     ));
 

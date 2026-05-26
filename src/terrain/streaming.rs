@@ -22,8 +22,65 @@ use super::chunk::{
     lod_for_distance_sq, Chunk, ChunkManager, ChunkTask, SharedTerrainMaterial,
     WorldGenerationSettings,
 };
-use super::generator::{terrain_color, WorldGenerator, CHUNK_SIZE};
+use super::generator::{WorldGenConfig, WorldGenerator, CHUNK_SIZE};
 use super::TerrainCamera;
+
+/// Seconds the config must sit unchanged before a rebuild fires. Long enough
+/// that dragging a slider doesn't thrash the (single-threaded, on WASM) chunk
+/// generator every frame, short enough to feel immediate when you let go.
+const REGEN_DEBOUNCE: f32 = 0.25;
+
+/// Rebuilds the world when [`WorldGenConfig`] changes. Streaming params
+/// (render distance, chunks/frame) are mirrored into their runtime resources
+/// immediately; a seed/scale change additionally rebuilds the [`WorldGenerator`]
+/// and clears every chunk so [`generate_chunks`] repopulates from scratch. The
+/// rebuild is debounced so dragging a slider settles before the world rebuilds.
+pub fn regenerate_terrain(
+    config: Res<WorldGenConfig>,
+    time: Res<Time>,
+    mut generator: ResMut<WorldGenerator>,
+    mut manager: ResMut<ChunkManager>,
+    mut settings: ResMut<WorldGenerationSettings>,
+    chunks: Query<Entity, With<Chunk>>,
+    mut commands: Commands,
+    mut pending: Local<Option<f32>>,
+    mut initialized: Local<bool>,
+) {
+    // Cheap params can update live without a rebuild; mirror them every time the
+    // config changes (and once on startup).
+    if config.is_changed() {
+        manager.render_distance = config.render_distance;
+        settings.max_chunks_per_frame = config.max_chunks_per_frame;
+    }
+
+    // The resource is "changed" the frame it's inserted; treat that first sighting
+    // as setup (generator already matches the config) rather than a rebuild.
+    if !*initialized {
+        *initialized = true;
+        return;
+    }
+
+    if config.is_changed() {
+        *pending = Some(REGEN_DEBOUNCE);
+    }
+    let Some(remaining) = *pending else { return };
+    let remaining = remaining - time.delta_secs();
+    if remaining > 0.0 {
+        *pending = Some(remaining);
+        return;
+    }
+    *pending = None;
+
+    // Rebuild and wipe — generate_chunks (next in the chain) refills the disc.
+    *generator = WorldGenerator::from_config(&config);
+    for entity in &chunks {
+        commands.entity(entity).despawn();
+    }
+    manager.spawned_chunks.clear();
+    manager.to_spawn.clear();
+    manager.lod_to_update.clear();
+    manager.last_camera_chunk = None; // force a full rescan
+}
 
 /// Camera position rounded to chunk coordinates, or `None` if the camera isn't
 /// available this frame.
@@ -140,24 +197,50 @@ pub fn displace_new_chunks(
 }
 
 /// Shared mesh-displacement kernel used by both the initial build and LOD
-/// rebuilds: lift each vertex to its terrain height and colour it, then recompute
-/// flat normals (cheaper than smooth, and the faceted look reads fine at speed).
+/// rebuilds: lift each vertex to its terrain height and colour it, split the mesh
+/// into independent triangles, then give each face a single flat colour and flat
+/// normal. The per-face colour is what makes terrain read as crisp facets rather
+/// than a blurry gradient — without it the GPU smoothly interpolates the three
+/// corner colours across every triangle.
 fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
+    // 1. Displace each vertex to its terrain height and record its colour.
     let mut colors: Vec<[f32; 4]> = Vec::new();
     if let Some(VertexAttributeValues::Float32x3(positions)) =
         mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
     {
         colors.reserve(positions.len());
         for pos in positions.iter_mut() {
-            let wx = pos[0] + origin.x;
-            let wz = pos[2] + origin.z;
-            let h = world_gen.get_terrain_height(wx, wz);
+            let (h, color) = world_gen.surface(pos[0] + origin.x, pos[2] + origin.z);
             pos[1] = h;
-            colors.push(terrain_color(h));
+            colors.push(color);
         }
     }
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+
+    // 2. Split shared vertices so every triangle owns its three corners. This is
+    //    required for both flat normals and flat colours.
     mesh.duplicate_vertices();
+
+    // 3. Collapse each triangle's three colours to their average, so the whole
+    //    facet is one solid colour (crisp, low-poly look).
+    if let Some(VertexAttributeValues::Float32x4(cols)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
+    {
+        for tri in cols.chunks_mut(3) {
+            if let [a, b, c] = tri {
+                let avg = [
+                    (a[0] + b[0] + c[0]) / 3.0,
+                    (a[1] + b[1] + c[1]) / 3.0,
+                    (a[2] + b[2] + c[2]) / 3.0,
+                    (a[3] + b[3] + c[3]) / 3.0,
+                ];
+                *a = avg;
+                *b = avg;
+                *c = avg;
+            }
+        }
+    }
+
+    // 4. One normal per face — flat (faceted) shading.
     mesh.compute_flat_normals();
 }
 

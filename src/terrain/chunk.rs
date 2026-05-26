@@ -54,11 +54,11 @@ impl Default for ChunkManager {
             lod_to_update: Vec::new(),
             render_distance: 12, // ~6 km at CHUNK_SIZE = 500 m
             lod_levels: [
-                (2.0, 24),  // 0–1 km   : 25×25 verts
-                (4.0, 12),  // 1–2 km
-                (7.0, 6),   // 2–3.5 km
-                (10.0, 3),  //
-                (12.0, 1),  // horizon
+                (2.0, 24), 
+                (4.0, 12), 
+                (10.0, 6), 
+                (15.0, 3), 
+                (25.0, 1), 
             ],
         }
     }

@@ -9,7 +9,7 @@ mod chunk;
 mod generator;
 mod streaming;
 
-pub use generator::WorldGenerator;
+pub use generator::{WorldGenConfig, WorldGenerator};
 
 use bevy::prelude::*;
 
@@ -20,20 +20,22 @@ use chunk::{ChunkManager, SharedTerrainMaterial, WorldGenerationSettings};
 #[derive(Component)]
 pub struct TerrainCamera;
 
-/// Seed for the world. Fixed for now; expose later if we want regenerate-on-demand.
-const WORLD_SEED: u32 = 3;
-
 pub struct TerrainPlugin;
 
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(WorldGenerator::new(WORLD_SEED))
+        let config = WorldGenConfig::default();
+        app.insert_resource(WorldGenerator::from_config(&config))
+            .insert_resource(config)
             .init_resource::<ChunkManager>()
             .init_resource::<WorldGenerationSettings>()
             .add_systems(Startup, setup_terrain_material)
             .add_systems(
                 Update,
                 (
+                    // Regen first so a config change clears stale chunks before
+                    // generate_chunks repopulates from the new generator.
+                    streaming::regenerate_terrain,
                     streaming::generate_chunks,
                     streaming::displace_new_chunks,
                     streaming::apply_chunk_meshes,
