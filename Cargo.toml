@@ -7,6 +7,7 @@ edition = "2024"
 avian3d = "0.6.1"
 bevy = { version = "0.18.1" }
 bevy_egui = "0.39"
+noise = "0.9.0"
 osmpbf = "0.3.8"
 
 # Enable a small amount of optimization in the dev profile.

@@ -34,6 +34,9 @@ mod fog;
 mod physics;
 mod debug_tools;
 mod plane;
+mod terrain;
+
+use crate::terrain::{TerrainCamera, TerrainPlugin};
 
 #[derive(Component)]
 struct FpsText;
@@ -49,6 +52,7 @@ fn main() {
             FogPlugin,
             PhysicsPlugins::default(),
             DebugFlightMenuPlugin,
+            TerrainPlugin,
         ))
         // Initial gravity; kept in sync with cfg.gravity by
         // apply_config_to_entities so the debug slider drives the real force.
@@ -188,6 +192,7 @@ fn setup(
         RenderTarget::Image(pixel_target.clone().into()),
         Msaa::Off,
         PIXEL_LAYER,
+        TerrainCamera,
         Transform::from_xyz(0.0, 8.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         FreeCam { yaw: 0.0, pitch: -0.3 },
         TrackCam { yaw: 0.0, pitch: 0.3, distance: 15.0 },

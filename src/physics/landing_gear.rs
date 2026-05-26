@@ -23,10 +23,12 @@ use bevy::prelude::*;
 
 use super::flight_config::FlightModelConfig;
 use crate::plane::{Airplane, PlaneState};
+use crate::terrain::WorldGenerator;
 
-/// World height of the (flat) ground plane, in metres. Matches the visual
-/// ground spawned in `debug_world.rs`. When the world gains real terrain this
-/// becomes a per-wheel height lookup instead of a constant.
+/// Reference ground height, in metres. The streaming terrain is flattened to
+/// y=0 around the runway, so this stays the datum for ground-effect lift
+/// (aircraft_physics) and the gizmos. Actual wheel contact samples the real
+/// terrain height per strut instead — see `apply_landing_gear`.
 pub const GROUND_Y: f32 = 0.0;
 
 /// One landing-gear strut: where it mounts to the airframe and how far it hangs
@@ -81,6 +83,7 @@ pub fn apply_landing_gear(
     mut aircraft_q: Query<(Forces, &CenterOfMass, &mut PlaneState), With<Airplane>>,
     flight_model: Res<FlightModelConfig>,
     keys: Res<ButtonInput<KeyCode>>,
+    world_gen: Res<WorldGenerator>,
 ) {
     let Ok((mut forces, center_of_mass, mut state)) = aircraft_q.single_mut() else {
         return;
@@ -115,9 +118,15 @@ pub fn apply_landing_gear(
 
         let mount_world = origin + rot * leg.mount;
 
-        // Distance along the strut from the mount to the ground plane:
-        //   (mount_world + down * t).y == GROUND_Y
-        let t = (GROUND_Y - mount_world.y) / down.y;
+        // Ground height under this strut, sampled from the terrain field at the
+        // mount's horizontal position (the strut is near-vertical at touchdown,
+        // so sampling at the mount x/z rather than the exact contact point is a
+        // negligible approximation).
+        let ground_y = world_gen.get_terrain_height(mount_world.x, mount_world.z);
+
+        // Distance along the strut from the mount to the local ground plane:
+        //   (mount_world + down * t).y == ground_y
+        let t = (ground_y - mount_world.y) / down.y;
 
         // No contact while the wheel hangs above the ground.
         if t >= leg.rest_length {

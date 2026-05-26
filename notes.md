@@ -1,3 +1,0 @@
-Plane feels too heavy, cutting the engine make the plane sink very fast, and plane glides but either bleeds too much speed or simply is pulled to the ground way to harshly. Landing is diffucult since cutting the engines makes it impossible to pitch up at speeds of less than 35m/s, even with flaps. Im gessing there is simply too much drag on the plane or the weights are off.
-
-For example, flying at 40m/s then cutting throttle, the plane immediatley loses most its pitching ability, and by around 33 m/s, the plane simply cannot pull up and will eventually hit the ground, with the nose slipping furth and further pointed fown even with the controls pitching the plane up as much as possible

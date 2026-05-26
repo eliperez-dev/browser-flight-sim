@@ -13,20 +13,9 @@ pub fn spawn_debug_world(
 
     // Low-level fill light so surfaces in shadow aren't pitch black.
     ambient.brightness = 400.0;
-    // Large green ground plane, dropped 1 m below the physics ground (y=0) so the
-    // runway slab can sit at y=0 — where the wheels actually rest — without
-    // z-fighting against this plane. A 1 m step is invisible from the air over a
-    // 50 km plane, but gives the depth buffer plenty of separation up close.
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(500.0 * scale, 500.0 * scale))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.22, 0.55, 0.12),
-            perceptual_roughness: 1.0,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, -1.0, 0.0),
-        PIXEL_LAYER,
-    ));
+    // The large green ground plane that used to live here is gone — the streaming
+    // chunk terrain (`TerrainPlugin`) now fills the world. The runway below still
+    // sits at y=0; terrain near the origin is flattened/handled separately.
 
     // Cubes scattered on the ground — vary size and position for a rough landmark grid
     let cubes: &[(f32, f32, f32, f32, f32, f32)] = &[
