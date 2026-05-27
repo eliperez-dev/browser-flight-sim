@@ -41,7 +41,7 @@ const RUNWAY_SURFACE_LIFT: f32 = 0.3;
 const RUNWAY_SPACING: f32 = 10000.0;
 /// Fraction of a cell a runway may wander from its grid point — keeps them off a
 /// perfect lattice. Bounded < 0.5 so a runway stays within its own cell.
-const RUNWAY_JITTER: f32 = 0.5;
+const RUNWAY_JITTER: f32 = 0.85;
 
 /// Sea level (world-Y). A cell whose natural ground is below this (plus a small
 /// margin) is water, so no runway is placed there — the strip would sit in the
@@ -57,9 +57,29 @@ pub struct RunwayInstance {
     pub z: f32,
     pub heading: f32,
     pub elevation: f32,
+    /// The grid cell this strip belongs to — its stable identity, used to derive
+    /// a deterministic ident for the map overlay (see [`runway_ident`]).
+    pub cell: (i32, i32),
 }
 
 impl RunwayInstance {
+    /// The two runway numbers (one per direction), each `round(heading° / 10)`
+    /// mapped to 1..=36, with the reciprocal 180° opposite. e.g. heading 170° →
+    /// `(17, 35)`. Returned low-number-first by convention.
+    pub fn runway_numbers(&self) -> (u32, u32) {
+        let deg = self.heading.to_degrees().rem_euclid(360.0);
+        let mut a = (deg / 10.0).round() as i32 % 36;
+        if a == 0 {
+            a = 36;
+        }
+        let mut b = a + 18;
+        if b > 36 {
+            b -= 36;
+        }
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        (lo as u32, hi as u32)
+    }
+
     /// Flatten weight at world (x, z): 1.0 inside the runway rectangle (plus
     /// apron), ramping to 0.0 by [`RUNWAY_BLEND_MARGIN`] beyond it. Distance is
     /// measured in the runway's own frame, so the levelled zone is a rounded
@@ -175,6 +195,7 @@ fn runway_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Option<Runwa
             z: 0.0,
             heading: 0.0,
             elevation: generator.natural_height(0.0, 0.0),
+            cell: (0, 0),
         });
     }
     let h = cell_hash(generator.seed(), gx, gz);
@@ -189,7 +210,22 @@ fn runway_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Option<Runwa
     }
     // A runway is bidirectional, so a half-turn covers every distinct heading.
     let heading = hash01(h ^ 0x2545_f491) * std::f32::consts::PI;
-    Some(RunwayInstance { x, z, heading, elevation })
+    Some(RunwayInstance { x, z, heading, elevation, cell: (gx, gz) })
+}
+
+/// A deterministic 4-letter ident for a runway's grid cell under `seed`, e.g.
+/// `"KQXR"`. Stable per world, distinct per seed — purely for the map overlay,
+/// not tied to any real-world airport coding.
+pub fn runway_ident(seed: u32, cell: (i32, i32)) -> String {
+    let mut h = cell_hash(seed, cell.0, cell.1);
+    // Lead with 'K' for a familiar look, then three letters peeled off the hash.
+    let mut s = String::with_capacity(4);
+    s.push('K');
+    for _ in 0..3 {
+        s.push((b'A' + (h % 26) as u8) as char);
+        h /= 26;
+    }
+    s
 }
 
 /// Runways for every cell overlapping the world-space box, padded by one cell so

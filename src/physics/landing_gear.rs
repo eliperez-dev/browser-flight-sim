@@ -50,19 +50,20 @@ pub struct GearLeg {
 /// drawn struts always match where the physics looks for the ground.
 pub fn gear_legs(flight_model: &FlightModelConfig) -> [GearLeg; 3] {
     let cfg = &flight_model.landing_gear;
-    let y = cfg.gear_mount_height;
+    let nose_y = cfg.gear_nose_mount_height;
+    let main_y = cfg.gear_main_mount_height;
     let half_track = cfg.gear_track * 0.5;
     [
         GearLeg {
-            mount: Vec3::new(0.0, y, cfg.gear_nose_z), // nose wheel, forward of the CoM
+            mount: Vec3::new(0.0, nose_y, cfg.gear_nose_z), // nose wheel, forward of the CoM
             rest_length: cfg.gear_nose_rest_length,
         },
         GearLeg {
-            mount: Vec3::new(-half_track, y, cfg.gear_main_z), // main gear, left
+            mount: Vec3::new(-half_track, main_y, cfg.gear_main_z), // main gear, left
             rest_length: cfg.gear_rest_length,
         },
         GearLeg {
-            mount: Vec3::new(half_track, y, cfg.gear_main_z), // main gear, right
+            mount: Vec3::new(half_track, main_y, cfg.gear_main_z), // main gear, right
             rest_length: cfg.gear_rest_length,
         },
     ]

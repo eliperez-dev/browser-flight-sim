@@ -10,11 +10,11 @@ mod generator;
 mod runway;
 mod streaming;
 
-pub use generator::{BiomeShape, WorldGenConfig, WorldGenerator};
+pub use generator::{Biome, BiomeShape, WorldGenConfig, WorldGenerator};
 /// Read-only airport layout, for the map overlay. `runways_in_region` recomputes
 /// the deterministic strips inside a world-space box (see [`runway`]); nothing is
 /// stored, so the map can list nearby airports without touching streaming state.
-pub use runway::{RUNWAY_LENGTH, RunwayInstance, runways_in_region};
+pub use runway::{RUNWAY_LENGTH, RunwayInstance, runway_ident, runways_in_region};
 
 use bevy::prelude::*;
 

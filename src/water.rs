@@ -16,7 +16,7 @@ use crate::camera::PIXEL_LAYER;
 use crate::terrain::TerrainCamera;
 
 /// Edge length (m) of the water quad. Comfortably past the fog horizon
-/// (`FogSettings::visibility`, ~35 km) so its edge is never visible as it snaps
+/// so its edge is never visible as it snaps
 /// along with the camera.
 const WATER_PLANE_SIZE: f32 = 80_000.0;
 
@@ -44,7 +44,7 @@ impl Default for WaterSettings {
             sea_level: 0.0,
             color: [0.04, 0.18, 0.32],
             perceptual_roughness: 0.08,
-            metallic: 0.2,
+            metallic: 0.8,
         }
     }
 }

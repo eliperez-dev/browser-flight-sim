@@ -174,8 +174,8 @@ pub struct CargoConfig {
 impl Default for CargoConfig {
     fn default() -> Self {
         Self { 
-            fuel_left_kg:         FUEL_TANK_MAX_KG / 2.0, // half tanks (light load)
-            fuel_right_kg:        FUEL_TANK_MAX_KG / 2.0,
+            fuel_left_kg:         FUEL_TANK_MAX_KG / 3.0,
+            fuel_right_kg:        FUEL_TANK_MAX_KG / 3.0,
             cargo_kg:             0.0,
             passengers:           1, // pilot only
         }
@@ -266,10 +266,15 @@ pub struct LandingGearConfig {
     /// Main-gear track: lateral distance between the two main wheels (metres).
     /// Each main sits at ±half this on the body X axis.
     pub gear_track: f32,
-    /// Height of every strut mount above the origin (+Y), metres. Lower mounts
-    /// tuck the wheels closer to the belly; combined with `gear_rest_length`
-    /// this sets how far the wheels reach below the fuselage.
-    pub gear_mount_height: f32,
+    /// Nose-strut mount height above the origin (+Y), metres. Independent of the
+    /// mains so the nose can be tucked or dropped on its own; combined with
+    /// `gear_nose_rest_length` it sets how far the nose wheel reaches below the
+    /// fuselage (and so the on-ground pitch attitude).
+    pub gear_nose_mount_height: f32,
+    /// Main-strut mount height above the origin (+Y), metres, shared by both
+    /// mains. Combined with `gear_rest_length` it sets how far the main wheels
+    /// reach below the fuselage.
+    pub gear_main_mount_height: f32,
 }
 
 impl Default for LandingGearConfig {
@@ -278,7 +283,7 @@ impl Default for LandingGearConfig {
             // Sized for a loaded light single over three wheels: firm enough to
             // squat only a few cm under load, with damping near-critical
             // (≈ 2·√(k · mass-per-wheel)) so it settles without bouncing.
-            gear_spring:             100_000.0,
+            gear_spring:             120_000.0,
             gear_damping:            15_000.0,
             gear_rest_length:        1.1,
             gear_nose_rest_length:   1.1,
@@ -291,7 +296,8 @@ impl Default for LandingGearConfig {
             gear_nose_z:             2.35,
             gear_main_z:             0.2,
             gear_track:              2.5,
-            gear_mount_height:       -0.15,
+            gear_nose_mount_height:  -0.15,
+            gear_main_mount_height:  -0.15,
         }
     }
 }

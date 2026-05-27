@@ -42,7 +42,7 @@ pub struct ChunkManager {
     /// `(max_distance_in_chunks, subdivisions)`, ascending distance. A chunk uses
     /// the subdivisions of the first band it falls within. Nearest is capped low
     /// so no single chunk's noise pass hitches the WASM main thread.
-    pub lod_levels: [(f32, u32); 5],
+    pub lod_levels: [(f32, u32); 4],
 }
 
 impl Default for ChunkManager {
@@ -54,11 +54,10 @@ impl Default for ChunkManager {
             lod_to_update: Vec::new(),
             render_distance: 28, // ~6 km at CHUNK_SIZE = 500 m
             lod_levels: [
-                (2.0, 20), 
-                (6.0, 12), 
-                (13.0, 6), 
-                (15.0, 3), 
-                (25.0, 1), 
+                (2.0, 16),
+                (6.0, 8),
+                (20.0, 4),
+                (30.0, 2),
             ],
         }
     }

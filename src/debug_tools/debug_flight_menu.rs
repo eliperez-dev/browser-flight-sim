@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::fog::FogSettings;
+use crate::map::MapIconSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
 use crate::terrain::{BiomeShape, WorldGenConfig};
@@ -82,6 +83,7 @@ fn draw_menu(
     mut world: ResMut<WorldGenConfig>,
     mut fog: ResMut<FogSettings>,
     mut water: ResMut<WaterSettings>,
+    mut map_icons: ResMut<MapIconSettings>,
 ) -> Result {
     if !visible.0 { return Ok(()); }
 
@@ -96,6 +98,9 @@ fn draw_menu(
         .resizable(true)
         .min_width(280.0)
         .show(contexts.ctx_mut()?, |ui| {
+            // Wrap the whole panel so the (long) list of sections scrolls with the
+            // mouse wheel instead of overflowing the window.
+            egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Flight Model Debug");
             ui.label("Press F3 to close");
             ui.separator();
@@ -291,6 +296,37 @@ fn draw_menu(
                 });
 
             // ---------------------------------------------------------------
+            // Map icons — pixel sizes for the F4 map overlay; edits apply live.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Map Icons")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add(egui::Slider::new(&mut map_icons.plane_len, 2.0..=30.0)
+                        .text("Plane length"));
+                    ui.add(egui::Slider::new(&mut map_icons.plane_width, 1.0..=20.0)
+                        .text("Plane width"));
+                    ui.add(egui::Slider::new(&mut map_icons.camera_size, 2.0..=30.0)
+                        .text("Camera size"));
+                    ui.add(egui::Slider::new(&mut map_icons.airport_circle, 2.0..=24.0)
+                        .text("Airport circle (zoomed out)"));
+                    ui.add(egui::Slider::new(&mut map_icons.runway_width, 0.5..=8.0)
+                        .text("Runway line width"));
+                    ui.add(egui::Slider::new(&mut map_icons.selected_ring, 3.0..=24.0)
+                        .text("Selected ring"));
+                    ui.add(egui::Slider::new(&mut map_icons.breadcrumb_len, 1.0..=12.0)
+                        .text("Breadcrumb dash"));
+                    ui.add(egui::Slider::new(&mut map_icons.waypoint_marker, 2.0..=20.0)
+                        .text("Waypoint marker"));
+                    ui.add(egui::Slider::new(&mut map_icons.label_font, 6.0..=24.0)
+                        .text("Label font"));
+
+                    ui.separator();
+                    if ui.button("Reset map icons").clicked() {
+                        *map_icons = MapIconSettings::default();
+                    }
+                });
+
+            // ---------------------------------------------------------------
             // Control surfaces
             // ---------------------------------------------------------------
             egui::CollapsingHeader::new("Control")
@@ -426,8 +462,10 @@ fn draw_menu(
                         .text("Main gear fwd (m)"));
                     ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_track, 0.0..=6.0)
                         .text("Main gear track (m)"));
-                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_mount_height, -2.0..=1.0)
-                        .text("Mount height (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_nose_mount_height, -2.0..=1.0)
+                        .text("Nose mount height (m)"));
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_main_mount_height, -2.0..=1.0)
+                        .text("Main mount height (m)"));
                 });
 
             // ---------------------------------------------------------------
@@ -525,6 +563,7 @@ fn draw_menu(
                     egui::CollapsingHeader::new("Body lift")
                         .show(ui, |ui| surface_controls(ui, &mut cfg.body_lift));
                 });
+            });
         });
 
     // Commit world-gen edits only when something actually changed, so the

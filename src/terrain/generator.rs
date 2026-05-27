@@ -26,7 +26,7 @@ pub const DEFAULT_HEIGHT_SCALE: f32 = 220.0;
 /// Default horizontal frequency multiplier on every layer. Higher = tighter,
 /// more rugged terrain (and smaller biomes) for the same world distance. 3.0
 /// packs features ~3× tighter than the parent sim's authored scale.
-pub const DEFAULT_HORIZONTAL_SCALE: f32 = 2.5;
+pub const DEFAULT_HORIZONTAL_SCALE: f32 = 5.0;
 
 /// Default sea level on the 0..1 *continentalness* scale: terrain below this
 /// (minus the transition) is open ocean. Higher = more of the map is sea. See
@@ -102,7 +102,7 @@ pub struct WorldGenConfig {
     /// A chunk uses the subdivisions of the first band it falls within; nearest
     /// is capped low so no single chunk's noise pass hitches the WASM main thread.
     /// Mirrored live into `ChunkManager` (no world rebuild — chunks just re-mesh).
-    pub lod_levels: [(f32, u32); 5],
+    pub lod_levels: [(f32, u32); 4],
     /// Sea level on the continentalness scale; see [`DEFAULT_SEA_LEVEL_THRESHOLD`].
     pub sea_level_threshold: f32,
     /// Land→ocean blend width; see [`DEFAULT_OCEAN_TRANSITION_WIDTH`].
@@ -149,11 +149,10 @@ impl Default for WorldGenConfig {
             render_distance: 35,
             max_chunks_per_frame: 4,
             lod_levels: [
-                (2.0, 15),
-                (6.0, 9),
-                (13.0, 6),
-                (15.0, 4),
-                (25.0, 2),
+                (2.0, 16),
+                (6.0, 10),
+                (20.0, 4),
+                (30.0, 2),
             ],
             sea_level_threshold: DEFAULT_SEA_LEVEL_THRESHOLD,
             ocean_transition_width: DEFAULT_OCEAN_TRANSITION_WIDTH,

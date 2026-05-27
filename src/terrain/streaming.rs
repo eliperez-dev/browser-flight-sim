@@ -344,7 +344,7 @@ pub fn update_chunk_lod(
     mut manager: ResMut<ChunkManager>,
     settings: Res<WorldGenerationSettings>,
     mut last_cam: Local<Option<(i32, i32)>>,
-    mut last_lods: Local<Option<[(f32, u32); 5]>>,
+    mut last_lods: Local<Option<[(f32, u32); 4]>>,
 ) {
     let Some((cam_x, cam_z)) = camera_chunk(&camera) else { return };
 
