@@ -67,9 +67,11 @@ pub fn regenerate_terrain(
             if config.seed != prev.seed
                 || config.horizontal_scale != prev.horizontal_scale
                 || config.height_scale != prev.height_scale
-                || config.ocean_humidity_threshold != prev.ocean_humidity_threshold
+                || config.sea_level_threshold != prev.sea_level_threshold
                 || config.ocean_transition_width != prev.ocean_transition_width
                 || config.ocean_depth != prev.ocean_depth
+                || config.continent_size != prev.continent_size
+                || config.coastal_humidity != prev.coastal_humidity
                 || config.biome_size != prev.biome_size
                 || config.desert != prev.desert
                 || config.grasslands != prev.grasslands
@@ -79,6 +81,9 @@ pub fn regenerate_terrain(
                 || config.temp_contrast != prev.temp_contrast
                 || config.humidity_bias != prev.humidity_bias
                 || config.humidity_contrast != prev.humidity_contrast
+                || config.temp_lapse != prev.temp_lapse
+                || config.latitude_strength != prev.latitude_strength
+                || config.latitude_band != prev.latitude_band
             {
                 *pending = Some(REGEN_DEBOUNCE);
             }

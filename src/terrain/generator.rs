@@ -28,21 +28,46 @@ pub const DEFAULT_HEIGHT_SCALE: f32 = 220.0;
 /// packs features ~3× tighter than the parent sim's authored scale.
 pub const DEFAULT_HORIZONTAL_SCALE: f32 = 2.5;
 
-/// Default humidity (0..1) past which climate blends toward open ocean. Lower =
-/// more of the map is sea. See [`WorldGenerator::ocean_factor`].
-pub const DEFAULT_OCEAN_HUMIDITY_THRESHOLD: f32 = 0.60;
+/// Default sea level on the 0..1 *continentalness* scale: terrain below this
+/// (minus the transition) is open ocean. Higher = more of the map is sea. See
+/// [`WorldGenerator::ocean_factor`].
+pub const DEFAULT_SEA_LEVEL_THRESHOLD: f32 = 0.45;
 
-/// Default width (in climate units) of the land→ocean blend. Wider = gentler,
-/// broader coastlines; narrower = abrupt shorelines.
+/// Default width (in continentalness units) of the land→ocean blend. Wider =
+/// gentler, broader coastlines; narrower = abrupt shorelines.
 pub const DEFAULT_OCEAN_TRANSITION_WIDTH: f32 = 0.30;
 
 /// Default depth (raw units, pre-`height_scale`) the ocean basin sinks below the
 /// land baseline. Deeper basins sit further under the water plane's sea level.
 pub const DEFAULT_OCEAN_DEPTH: f32 = 2.5;
 
+/// Default continent-size multiplier (scales the continentalness-field
+/// wavelength). Larger = bigger landmasses and oceans. See
+/// [`WorldGenerator::from_config`].
+pub const DEFAULT_CONTINENT_SIZE: f32 = 1.0;
+
+/// Default coastal-humidity strength: how much extra humidity is added near the
+/// coast (decaying inland), giving wet coasts and dry interiors. 0 disables it.
+pub const DEFAULT_COASTAL_HUMIDITY: f32 = 0.3;
+
 /// Default biome-size multiplier. 1.0 keeps the original climate frequency;
 /// larger = broader biomes, smaller = patchier. See [`WorldGenerator::from_config`].
 pub const DEFAULT_BIOME_SIZE: f32 = 1.0;
+
+/// Default lapse rate: normalised temperature drop per 1000 m of altitude above
+/// sea level. Couples temperature to terrain height so peaks trend cold/snowy —
+/// roughly the real ~6.5 °C/km mapped onto the 0..1 climate scale. See
+/// [`WorldGenerator::natural_raw`].
+pub const DEFAULT_TEMP_LAPSE: f32 = 0.25;
+
+/// Default latitude banding strength: peak ± temperature swing between the warm
+/// "equator" lines and the cold bands between them.
+pub const DEFAULT_LATITUDE_STRENGTH: f32 = 0.3;
+
+/// Default latitude band wavelength (m): world-Z distance from one warm equator
+/// line to the next. The pattern is periodic so an endless world keeps cycling
+/// through climate zones.
+pub const DEFAULT_LATITUDE_BAND: f32 = 60_000.0;
 
 /// Per-biome terrain shaping: `elevation` is the base offset (raw units, pre-
 /// `height_scale`) the biome sits at, `relief` the amplitude multiplier on the
@@ -78,13 +103,16 @@ pub struct WorldGenConfig {
     /// is capped low so no single chunk's noise pass hitches the WASM main thread.
     /// Mirrored live into `ChunkManager` (no world rebuild — chunks just re-mesh).
     pub lod_levels: [(f32, u32); 5],
-    /// Humidity past which climate turns to ocean; see
-    /// [`DEFAULT_OCEAN_HUMIDITY_THRESHOLD`].
-    pub ocean_humidity_threshold: f32,
+    /// Sea level on the continentalness scale; see [`DEFAULT_SEA_LEVEL_THRESHOLD`].
+    pub sea_level_threshold: f32,
     /// Land→ocean blend width; see [`DEFAULT_OCEAN_TRANSITION_WIDTH`].
     pub ocean_transition_width: f32,
     /// Ocean basin depth in raw units; see [`DEFAULT_OCEAN_DEPTH`].
     pub ocean_depth: f32,
+    /// Continent size multiplier; see [`DEFAULT_CONTINENT_SIZE`].
+    pub continent_size: f32,
+    /// Coastal-humidity strength; see [`DEFAULT_COASTAL_HUMIDITY`].
+    pub coastal_humidity: f32,
     /// Biome size multiplier (scales the climate-field wavelength); see
     /// [`DEFAULT_BIOME_SIZE`].
     pub biome_size: f32,
@@ -103,6 +131,13 @@ pub struct WorldGenConfig {
     pub temp_contrast: f32,
     pub humidity_bias: f32,
     pub humidity_contrast: f32,
+    /// Altitude→temperature coupling (lapse rate); see [`DEFAULT_TEMP_LAPSE`].
+    /// 0 disables it (climate is then height-independent, the old behaviour).
+    pub temp_lapse: f32,
+    /// Latitude banding strength; see [`DEFAULT_LATITUDE_STRENGTH`]. 0 disables.
+    pub latitude_strength: f32,
+    /// Latitude band wavelength (m); see [`DEFAULT_LATITUDE_BAND`].
+    pub latitude_band: f32,
 }
 
 impl Default for WorldGenConfig {
@@ -120,29 +155,32 @@ impl Default for WorldGenConfig {
                 (15.0, 4),
                 (25.0, 2),
             ],
-            ocean_humidity_threshold: DEFAULT_OCEAN_HUMIDITY_THRESHOLD,
+            sea_level_threshold: DEFAULT_SEA_LEVEL_THRESHOLD,
             ocean_transition_width: DEFAULT_OCEAN_TRANSITION_WIDTH,
             ocean_depth: DEFAULT_OCEAN_DEPTH,
+            continent_size: DEFAULT_CONTINENT_SIZE,
+            coastal_humidity: DEFAULT_COASTAL_HUMIDITY,
             biome_size: DEFAULT_BIOME_SIZE,
             // Corners of the climate square (matching the original constants):
             //   dry→wet at cold = grasslands→taiga, dry→wet at hot = desert→forest.
-            desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 1.0 },
+            desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 0.3 },
             grasslands: BiomeShape { elevation: 0.04, relief: 0.02,  abundance: 1.0 },
             forest:     BiomeShape { elevation: 0.5,  relief: 0.05,  abundance: 1.0 },
-            taiga:      BiomeShape { elevation: 8.0,  relief: 1.5,   abundance: 1.0 },
+            taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.7 },
             temp_bias: 0.0,
             temp_contrast: 1.0,
             humidity_bias: 0.0,
             humidity_contrast: 1.0,
+            temp_lapse: DEFAULT_TEMP_LAPSE,
+            latitude_strength: DEFAULT_LATITUDE_STRENGTH,
+            latitude_band: DEFAULT_LATITUDE_BAND,
         }
     }
 }
 
-// --- Ocean shaping thresholds (in normalised 0..1 climate space) -------------
-// Humidity threshold and transition width are now per-world config (see
-// `WorldGenConfig`); the temperature extremes stay fixed constants.
-const OCEAN_HOT_TEMP_THRESHOLD: f32 = 0.95;
-const OCEAN_COLD_TEMP_THRESHOLD: f32 = 0.0;
+/// Relief multiplier applied to open ocean — flat regardless of the surrounding
+/// land's ruggedness.
+const OCEAN_RELIEF: f32 = 0.01;
 
 /// Multi-octave Perlin terrain shaped by a coarse climate field. Built from a
 /// [`WorldGenConfig`] snapshot; the horizontal scale is baked into the layers
@@ -152,9 +190,10 @@ const OCEAN_COLD_TEMP_THRESHOLD: f32 = 0.0;
 pub struct WorldGenerator {
     seed: u32,
     height_scale: f32,
-    ocean_humidity_threshold: f32,
+    sea_level_threshold: f32,
     ocean_transition_width: f32,
     ocean_depth: f32,
+    coastal_humidity: f32,
     desert: BiomeShape,
     grasslands: BiomeShape,
     forest: BiomeShape,
@@ -163,9 +202,15 @@ pub struct WorldGenerator {
     temp_contrast: f32,
     humidity_bias: f32,
     humidity_contrast: f32,
+    temp_lapse: f32,
+    latitude_strength: f32,
+    latitude_band: f32,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
+    /// Low-frequency land/sea mask: high = continental interior, low = ocean.
+    /// Independent of the climate field — geography decides where water is.
+    continent_layer: PerlinLayer,
 }
 
 impl WorldGenerator {
@@ -175,12 +220,17 @@ impl WorldGenerator {
         // Bigger biome_size = lower climate frequency = broader biomes. Clamped
         // away from zero so the wavelength can't blow up to a single flat biome.
         let climate_freq = 0.06 * hs / cfg.biome_size.max(0.05);
+        // Continents are a large-scale geographic feature, so their frequency is
+        // independent of horizontal_scale (terrain tightness). Bigger size = lower
+        // frequency = broader landmasses/oceans (~33 km wavelength at size 1).
+        let continent_freq = 0.03 / cfg.continent_size.max(0.05);
         Self {
             seed,
             height_scale: cfg.height_scale,
-            ocean_humidity_threshold: cfg.ocean_humidity_threshold,
+            sea_level_threshold: cfg.sea_level_threshold,
             ocean_transition_width: cfg.ocean_transition_width,
             ocean_depth: cfg.ocean_depth,
+            coastal_humidity: cfg.coastal_humidity,
             desert: cfg.desert,
             grasslands: cfg.grasslands,
             forest: cfg.forest,
@@ -189,6 +239,9 @@ impl WorldGenerator {
             temp_contrast: cfg.temp_contrast,
             humidity_bias: cfg.humidity_bias,
             humidity_contrast: cfg.humidity_contrast,
+            temp_lapse: cfg.temp_lapse,
+            latitude_strength: cfg.latitude_strength,
+            latitude_band: cfg.latitude_band.max(1.0),
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             terrain_layers: vec![
                 PerlinLayer::new(seed,       0.08 * hs, 4.5),
@@ -200,6 +253,7 @@ impl WorldGenerator {
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
+            continent_layer: PerlinLayer::new(seed + 600, continent_freq, 1.0),
         }
     }
 
@@ -208,30 +262,58 @@ impl WorldGenerator {
         self.seed
     }
 
-    /// Normalised climate at (x, z): `(temperature, humidity)`, each remapped by
-    /// the axis bias/contrast and clamped 0..1. The remap is the single chokepoint
-    /// for biome distribution, so it flows into elevation, relief, colour, and
-    /// ocean coverage alike.
+    /// Sea-level climate at (x, z): `(temperature, humidity)`, 0..1. Altitude
+    /// cooling is applied on top in [`Self::natural_raw`], once a height estimate
+    /// exists. Thin wrapper over [`Self::climate_and_continent`] for callers that
+    /// don't need the continentalness value (kept for upcoming features).
+    #[allow(dead_code)]
     pub fn get_climate(&self, x: f32, z: f32) -> (f32, f32) {
+        let (temp, hum, _) = self.climate_and_continent(x, z);
+        (temp, hum)
+    }
+
+    /// Climate plus the land/sea mask at (x, z): `(temperature, humidity,
+    /// continentalness)`. Temperature gets the latitude band, humidity gets a
+    /// coastal boost from low continentalness (wet coasts, dry interiors), then
+    /// both pass through the axis bias/contrast remap. Computing continentalness
+    /// here lets the one noise sample feed both the coastal humidity and the ocean
+    /// shaping without re-evaluating it.
+    fn climate_and_continent(&self, x: f32, z: f32) -> (f32, f32, f32) {
         let raw_temp = self.temperature_layer.get(x, z);
         let raw_hum = self.humidity_layer.get(x, z);
         let temp = ((raw_temp / self.temperature_layer.vertical_scale) + 1.0) * 0.5;
         let hum = ((raw_hum / self.humidity_layer.vertical_scale) + 1.0) * 0.5;
+        let continentalness = self.continentalness(x, z);
+
+        // Latitude banding: warm on the equator lines, cold between, periodic in
+        // world-Z so an endless world keeps cycling. Mean-zero, so it shifts the
+        // pattern rather than the average temperature.
+        let latitude =
+            self.latitude_strength * (z * std::f32::consts::TAU / self.latitude_band).cos();
+        // Coastal humidity: oceans (low continentalness) raise nearby humidity,
+        // decaying toward the dry continental interior — the realistic causality
+        // where the ocean drives moisture, not the reverse.
+        let coastal = self.coastal_humidity * (1.0 - continentalness);
         (
-            remap_axis(temp, self.temp_bias, self.temp_contrast),
-            remap_axis(hum, self.humidity_bias, self.humidity_contrast),
+            remap_axis(temp + latitude, self.temp_bias, self.temp_contrast),
+            remap_axis(hum + coastal, self.humidity_bias, self.humidity_contrast),
+            continentalness,
         )
     }
 
-    /// Biome at (x, z), from the climate field. Kept for upcoming features
-    /// (vegetation, water, audio) that key off biome rather than raw height.
+    /// Land/sea mask at (x, z), 0..1: low = ocean, high = continental interior.
+    /// A standalone low-frequency Perlin field, independent of the climate.
+    fn continentalness(&self, x: f32, z: f32) -> f32 {
+        let raw = self.continent_layer.get(x, z);
+        (((raw / self.continent_layer.vertical_scale) + 1.0) * 0.5).clamp(0.0, 1.0)
+    }
+
+    /// Biome at (x, z). Kept for upcoming features (vegetation, audio) that key
+    /// off biome rather than raw height.
     #[allow(dead_code)]
     pub fn get_biome(&self, x: f32, z: f32) -> Biome {
-        let (temp, hum) = self.get_climate(x, z);
-        if hum > self.ocean_humidity_threshold + 0.1
-            || temp > OCEAN_HOT_TEMP_THRESHOLD
-            || temp < OCEAN_COLD_TEMP_THRESHOLD
-        {
+        let (temp, hum, continentalness) = self.climate_and_continent(x, z);
+        if self.ocean_factor(continentalness) >= 0.5 {
             return Biome::Ocean;
         }
         match (temp > 0.5, hum > 0.45) {
@@ -270,40 +352,54 @@ impl WorldGenerator {
     /// the climate that shaped it. Raw height is what the colour palettes are
     /// keyed to. No runway flattening — that's applied in world-height space.
     fn natural_raw(&self, x: f32, z: f32) -> (f32, f32, f32) {
-        let (temp, hum) = self.get_climate(x, z);
+        let (temp_base, hum, continentalness) = self.climate_and_continent(x, z);
+        let ocean = self.ocean_factor(continentalness);
 
         let mut base = 0.0;
         for layer in &self.terrain_layers {
             base += layer.get(x, z);
         }
 
-        let raw =
-            base * self.biome_height_multiplier(temp, hum) + self.biome_elevation_offset(temp, hum);
-        (raw, temp, hum)
+        // Altitude → temperature: estimate the elevation using the sea-level
+        // climate, then cool by the lapse rate so high ground trends cold/snowy.
+        // One fixed-point step breaks the climate↔height circular dependency
+        // (height needs climate, cooled climate needs height) without iterating.
+        let temp = if self.temp_lapse > 0.0 {
+            let altitude = (self.shape_raw(base, temp_base, hum, ocean) * self.height_scale).max(0.0);
+            (temp_base - self.temp_lapse * altitude / 1000.0).clamp(0.0, 1.0)
+        } else {
+            temp_base
+        };
+
+        (self.shape_raw(base, temp, hum, ocean), temp, hum)
     }
 
-    /// How strongly biome blends toward ocean (0 = land, 1 = full ocean) given the
-    /// climate — wet, or temperature past either extreme. Shared by the height
-    /// multiplier and elevation offset so they agree on where coastlines fall.
-    /// Uses the per-world humidity threshold and transition width.
-    fn ocean_factor(&self, temp: f32, humidity: f32) -> f32 {
+    /// How strongly a point is open ocean (0 = land, 1 = full sea), from the
+    /// continentalness mask: anything below `sea_level_threshold` ramps to ocean
+    /// across `ocean_transition_width` (the coastline). Geography decides where
+    /// water is — climate no longer does.
+    fn ocean_factor(&self, continentalness: f32) -> f32 {
         let width = self.ocean_transition_width.max(1e-3);
-        let wet = if humidity > self.ocean_humidity_threshold {
-            ((humidity - self.ocean_humidity_threshold) / width).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let hot = if temp > OCEAN_HOT_TEMP_THRESHOLD - width {
-            ((temp - (OCEAN_HOT_TEMP_THRESHOLD - width)) / width).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let cold = if temp < OCEAN_COLD_TEMP_THRESHOLD + width {
-            ((OCEAN_COLD_TEMP_THRESHOLD + width - temp) / width).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        wet.max(hot).max(cold)
+        ((self.sea_level_threshold - continentalness) / width).clamp(0.0, 1.0)
+    }
+
+    /// Raw (pre-`height_scale`) natural height from the noise `base`, the climate,
+    /// and a precomputed `ocean` factor: abundance-weighted blends of biome
+    /// elevation and relief, each pulled toward the ocean basin / flat sea floor.
+    /// Taking `ocean` as an argument lets the altitude-cooling pass reuse it.
+    fn shape_raw(&self, base: f32, temp: f32, humidity: f32, ocean: f32) -> f32 {
+        let w = self.biome_weights(temp, humidity);
+        let land_elev = w[0] * self.grasslands.elevation
+            + w[1] * self.taiga.elevation
+            + w[2] * self.desert.elevation
+            + w[3] * self.forest.elevation;
+        let land_relief = w[0] * self.grasslands.relief
+            + w[1] * self.taiga.relief
+            + w[2] * self.desert.relief
+            + w[3] * self.forest.relief;
+        let elevation = land_elev + (-self.ocean_depth - land_elev) * ocean;
+        let relief = land_relief + (OCEAN_RELIEF - land_relief) * ocean;
+        base * relief + elevation
     }
 
     /// Normalised per-biome blend weights at the given (already-remapped) climate,
@@ -322,32 +418,6 @@ impl WorldGenerator {
             return [0.25; 4];
         }
         [grass / sum, taiga / sum, desert / sum, forest / sum]
-    }
-
-    /// Vertical offset added to the noise sum: the abundance-weighted blend of the
-    /// four biome base elevations, then pulled toward a deep ocean basin
-    /// (`ocean_depth`).
-    fn biome_elevation_offset(&self, temp: f32, humidity: f32) -> f32 {
-        let w = self.biome_weights(temp, humidity);
-        let land = w[0] * self.grasslands.elevation
-            + w[1] * self.taiga.elevation
-            + w[2] * self.desert.elevation
-            + w[3] * self.forest.elevation;
-        let ocean = -self.ocean_depth;
-        land + (ocean - land) * self.ocean_factor(temp, humidity)
-    }
-
-    /// Amplitude applied to the noise sum — the abundance-weighted blend of the
-    /// four biome reliefs (taiga mountainous, desert near-flat), then flattened
-    /// toward ocean. Open water stays flat regardless of the surrounding land.
-    fn biome_height_multiplier(&self, temp: f32, humidity: f32) -> f32 {
-        const OCEAN: f32 = 0.01;
-        let w = self.biome_weights(temp, humidity);
-        let land = w[0] * self.grasslands.relief
-            + w[1] * self.taiga.relief
-            + w[2] * self.desert.relief
-            + w[3] * self.forest.relief;
-        land + (OCEAN - land) * self.ocean_factor(temp, humidity)
     }
 
     /// Surface colour at raw `height` for the given climate: each biome palette is

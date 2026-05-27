@@ -32,6 +32,7 @@ use crate::physics::landing_gear::apply_landing_gear;
 
 mod camera;
 mod fog;
+mod map;
 mod physics;
 mod debug_tools;
 mod plane;
@@ -56,6 +57,7 @@ fn main() {
             DebugFlightMenuPlugin,
             TerrainPlugin,
             WaterPlugin,
+            crate::map::MapPlugin,
         ))
         // Initial gravity; kept in sync with cfg.gravity by
         // apply_config_to_entities so the debug slider drives the real force.

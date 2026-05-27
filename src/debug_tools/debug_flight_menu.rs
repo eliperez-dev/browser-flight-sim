@@ -153,6 +153,17 @@ fn draw_menu(
                                 .text("Humidity bias"));
                             ui.add(egui::Slider::new(&mut w.humidity_contrast, 0.0..=4.0)
                                 .text("Humidity contrast"));
+                            ui.separator();
+                            ui.label("Geography (realism)");
+                            // Altitude cooling: high ground trends cold/snowy. 0 = off.
+                            ui.add(egui::Slider::new(&mut w.temp_lapse, 0.0..=1.0)
+                                .text("Altitude cooling (/1000m)"));
+                            // Latitude banding: warm equators, cold bands between. 0 = off.
+                            ui.add(egui::Slider::new(&mut w.latitude_strength, 0.0..=0.5)
+                                .text("Latitude strength"));
+                            ui.add(egui::Slider::new(&mut w.latitude_band, 5_000.0..=200_000.0)
+                                .text("Latitude band (m)")
+                                .logarithmic(true));
                         });
 
                     // --- Per-biome shaping (corners of the climate square) ------
@@ -168,17 +179,22 @@ fn draw_menu(
                             biome_controls(ui, "Forest (hot, wet)", &mut w.forest);
                         });
 
-                    // --- Oceans -------------------------------------------------
+                    // --- Oceans (geography-driven, independent of climate) ------
                     egui::CollapsingHeader::new("Oceans")
                         .id_salt("worldgen_oceans")
                         .show(ui, |ui| {
-                            // Lower threshold = wetter map = more sea.
-                            ui.add(egui::Slider::new(&mut w.ocean_humidity_threshold, 0.1..=0.95)
-                                .text("Ocean humidity threshold"));
+                            // Higher sea level = more of the map underwater.
+                            ui.add(egui::Slider::new(&mut w.sea_level_threshold, 0.0..=1.0)
+                                .text("Sea level (coverage)"));
+                            ui.add(egui::Slider::new(&mut w.continent_size, 0.2..=8.0)
+                                .text("Continent size"));
                             ui.add(egui::Slider::new(&mut w.ocean_transition_width, 0.02..=0.6)
                                 .text("Coastline width"));
                             ui.add(egui::Slider::new(&mut w.ocean_depth, 0.0..=10.0)
                                 .text("Basin depth (raw units)"));
+                            // Wet coasts, dry interiors — the ocean→humidity link.
+                            ui.add(egui::Slider::new(&mut w.coastal_humidity, 0.0..=1.0)
+                                .text("Coastal humidity"));
                         });
 
                     // --- Streaming + LOD (apply live, no world rebuild) ---------
