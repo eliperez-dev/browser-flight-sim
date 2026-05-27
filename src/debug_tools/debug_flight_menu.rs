@@ -13,7 +13,7 @@ use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContext
 use crate::fog::FogSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
-use crate::terrain::WorldGenConfig;
+use crate::terrain::{BiomeShape, WorldGenConfig};
 use crate::water::WaterSettings;
 
 // ---------------------------------------------------------------------------
@@ -114,52 +114,97 @@ fn draw_menu(
             egui::CollapsingHeader::new("World Generation")
                 .default_open(false)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Seed:");
-                        ui.add(egui::DragValue::new(&mut w.seed).speed(1.0));
-                        if ui.button("Randomize").clicked() {
-                            // LCG step: a fresh pseudo-random seed each click.
-                            w.seed = w.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                        }
-                    });
-                    ui.add(egui::Slider::new(&mut w.horizontal_scale, 0.5..=10.0)
-                        .text("Horizontal scale (tightness)"));
-                    ui.add(egui::Slider::new(&mut w.height_scale, 10.0..=600.0)
-                        .text("Height scale (relief)"));
-
-                    ui.separator();
-                    ui.label("Oceans (where & how deep water sits)");
-                    // Lower threshold = wetter map = more sea. Edits rebuild the world.
-                    ui.add(egui::Slider::new(&mut w.ocean_humidity_threshold, 0.1..=0.95)
-                        .text("Ocean humidity threshold"));
-                    ui.add(egui::Slider::new(&mut w.ocean_transition_width, 0.02..=0.6)
-                        .text("Coastline width"));
-                    ui.add(egui::Slider::new(&mut w.ocean_depth, 0.0..=10.0)
-                        .text("Basin depth (raw units)"));
-
-                    ui.separator();
-                    ui.label("Streaming");
-                    ui.add(egui::Slider::new(&mut w.render_distance, 2..=100)
-                        .text("Render distance (chunks)")
-                        .integer());
-                    ui.add(egui::Slider::new(&mut w.max_chunks_per_frame, 1..=50)
-                        .text("Max chunk builds / frame")
-                        .integer());
-
-                    ui.separator();
-                    ui.label("LOD bands (near → far): max distance & detail");
-                    // Each band: chunks-distance cutoff + mesh subdivisions. Lower
-                    // subdivisions = coarser. These apply live (no world rebuild).
-                    for (i, (dist, subs)) in w.lod_levels.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("L{i}"));
-                            ui.add(egui::Slider::new(dist, 0.5..=40.0)
-                                .text("dist"));
-                            ui.add(egui::Slider::new(subs, 1..=32)
-                                .text("subdiv")
-                                .integer());
+                    // --- Base: seed + global scales ----------------------------
+                    egui::CollapsingHeader::new("Base")
+                        .id_salt("worldgen_base")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Seed:");
+                                ui.add(egui::DragValue::new(&mut w.seed).speed(1.0));
+                                if ui.button("Randomize").clicked() {
+                                    // LCG step: a fresh pseudo-random seed each click.
+                                    w.seed = w.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                                }
+                            });
+                            ui.add(egui::Slider::new(&mut w.horizontal_scale, 0.5..=10.0)
+                                .text("Horizontal scale (tightness)"));
+                            ui.add(egui::Slider::new(&mut w.height_scale, 10.0..=600.0)
+                                .text("Height scale (relief)"));
                         });
-                    }
+
+                    // --- Climate: how the map is distributed across biomes -----
+                    egui::CollapsingHeader::new("Climate & distribution")
+                        .id_salt("worldgen_climate")
+                        .show(ui, |ui| {
+                            ui.add(egui::Slider::new(&mut w.biome_size, 0.1..=8.0)
+                                .text("Biome size"));
+                            ui.separator();
+                            // Bias shifts the whole map along the axis; contrast
+                            // (>1) sharpens biome boundaries, (<1) blends to middle.
+                            ui.label("Temperature (cold ↔ hot)");
+                            ui.add(egui::Slider::new(&mut w.temp_bias, -0.5..=0.5)
+                                .text("Temp bias"));
+                            ui.add(egui::Slider::new(&mut w.temp_contrast, 0.0..=4.0)
+                                .text("Temp contrast"));
+                            ui.separator();
+                            ui.label("Humidity (dry ↔ wet) — also drives ocean amount");
+                            ui.add(egui::Slider::new(&mut w.humidity_bias, -0.5..=0.5)
+                                .text("Humidity bias"));
+                            ui.add(egui::Slider::new(&mut w.humidity_contrast, 0.0..=4.0)
+                                .text("Humidity contrast"));
+                        });
+
+                    // --- Per-biome shaping (corners of the climate square) ------
+                    egui::CollapsingHeader::new("Biomes")
+                        .id_salt("worldgen_biomes")
+                        .show(ui, |ui| {
+                            // Elevation: raw offset (×height_scale → m). Relief:
+                            // amplitude multiplier. Abundance: blend weight (1 =
+                            // neutral). Edits rebuild the world (debounced).
+                            biome_controls(ui, "Grasslands (cold, dry)", &mut w.grasslands);
+                            biome_controls(ui, "Taiga (cold, wet)", &mut w.taiga);
+                            biome_controls(ui, "Desert (hot, dry)", &mut w.desert);
+                            biome_controls(ui, "Forest (hot, wet)", &mut w.forest);
+                        });
+
+                    // --- Oceans -------------------------------------------------
+                    egui::CollapsingHeader::new("Oceans")
+                        .id_salt("worldgen_oceans")
+                        .show(ui, |ui| {
+                            // Lower threshold = wetter map = more sea.
+                            ui.add(egui::Slider::new(&mut w.ocean_humidity_threshold, 0.1..=0.95)
+                                .text("Ocean humidity threshold"));
+                            ui.add(egui::Slider::new(&mut w.ocean_transition_width, 0.02..=0.6)
+                                .text("Coastline width"));
+                            ui.add(egui::Slider::new(&mut w.ocean_depth, 0.0..=10.0)
+                                .text("Basin depth (raw units)"));
+                        });
+
+                    // --- Streaming + LOD (apply live, no world rebuild) ---------
+                    egui::CollapsingHeader::new("Streaming & LOD")
+                        .id_salt("worldgen_streaming")
+                        .show(ui, |ui| {
+                            ui.add(egui::Slider::new(&mut w.render_distance, 2..=100)
+                                .text("Render distance (chunks)")
+                                .integer());
+                            ui.add(egui::Slider::new(&mut w.max_chunks_per_frame, 1..=50)
+                                .text("Max chunk builds / frame")
+                                .integer());
+
+                            ui.separator();
+                            ui.label("LOD bands (near → far): max distance & detail");
+                            for (i, (dist, subs)) in w.lod_levels.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("L{i}"));
+                                    ui.add(egui::Slider::new(dist, 0.5..=40.0)
+                                        .text("dist"));
+                                    ui.add(egui::Slider::new(subs, 1..=32)
+                                        .text("subdiv")
+                                        .integer());
+                                });
+                            }
+                        });
 
                     ui.separator();
                     if ui.button("Reset world gen").clicked() {
@@ -472,6 +517,21 @@ fn draw_menu(
         *world = w;
     }
     Ok(())
+}
+
+/// Renders the elevation + relief sliders for one biome, inside its own
+/// collapsing header so the four biomes stay compact in the panel.
+fn biome_controls(ui: &mut egui::Ui, name: &str, b: &mut BiomeShape) {
+    egui::CollapsingHeader::new(name)
+        .id_salt(name)
+        .show(ui, |ui| {
+            ui.add(egui::Slider::new(&mut b.elevation, -5.0..=15.0)
+                .text("Elevation (raw)"));
+            ui.add(egui::Slider::new(&mut b.relief, 0.0..=3.0)
+                .text("Relief (ruggedness)"));
+            ui.add(egui::Slider::new(&mut b.abundance, 0.0..=4.0)
+                .text("Abundance (how much)"));
+        });
 }
 
 /// Renders sliders for one aerodynamic surface's geometry and stall behaviour.

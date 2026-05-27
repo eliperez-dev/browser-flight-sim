@@ -40,6 +40,24 @@ pub const DEFAULT_OCEAN_TRANSITION_WIDTH: f32 = 0.30;
 /// land baseline. Deeper basins sit further under the water plane's sea level.
 pub const DEFAULT_OCEAN_DEPTH: f32 = 2.5;
 
+/// Default biome-size multiplier. 1.0 keeps the original climate frequency;
+/// larger = broader biomes, smaller = patchier. See [`WorldGenerator::from_config`].
+pub const DEFAULT_BIOME_SIZE: f32 = 1.0;
+
+/// Per-biome terrain shaping: `elevation` is the base offset (raw units, pre-
+/// `height_scale`) the biome sits at, `relief` the amplitude multiplier on the
+/// noise sum (taiga is mountainous, desert near-flat), and `abundance` a weight
+/// on how strongly this biome dominates the blend (1.0 = neutral; higher spreads
+/// its character over more of the map). The four land biomes sit at the corners
+/// of the temperature/humidity climate square and are blended bilinearly — see
+/// [`WorldGenerator::biome_weights`].
+#[derive(Clone, Copy, PartialEq)]
+pub struct BiomeShape {
+    pub elevation: f32,
+    pub relief: f32,
+    pub abundance: f32,
+}
+
 /// Editable world-generation settings, surfaced as debug sliders (F3 panel).
 /// Mutating this resource triggers a debounced world rebuild — see
 /// [`super::streaming::regenerate_terrain`]. `PartialEq` lets that system detect
@@ -67,6 +85,24 @@ pub struct WorldGenConfig {
     pub ocean_transition_width: f32,
     /// Ocean basin depth in raw units; see [`DEFAULT_OCEAN_DEPTH`].
     pub ocean_depth: f32,
+    /// Biome size multiplier (scales the climate-field wavelength); see
+    /// [`DEFAULT_BIOME_SIZE`].
+    pub biome_size: f32,
+    /// Per-biome shaping at the four corners of the climate square.
+    pub desert: BiomeShape,
+    pub grasslands: BiomeShape,
+    pub forest: BiomeShape,
+    pub taiga: BiomeShape,
+    /// Climate-axis remap controlling biome distribution. `bias` shifts the whole
+    /// map along the axis (temperature: colder↔hotter; humidity: drier↔wetter),
+    /// `contrast` scales spread around the 0.5 midpoint (>1 = sharper, more
+    /// distinct biomes; <1 = everything blends toward the middle). Defaults
+    /// (bias 0, contrast 1) leave the raw Perlin climate untouched. Humidity also
+    /// gates ocean coverage, so a wetter bias adds sea.
+    pub temp_bias: f32,
+    pub temp_contrast: f32,
+    pub humidity_bias: f32,
+    pub humidity_contrast: f32,
 }
 
 impl Default for WorldGenConfig {
@@ -87,6 +123,17 @@ impl Default for WorldGenConfig {
             ocean_humidity_threshold: DEFAULT_OCEAN_HUMIDITY_THRESHOLD,
             ocean_transition_width: DEFAULT_OCEAN_TRANSITION_WIDTH,
             ocean_depth: DEFAULT_OCEAN_DEPTH,
+            biome_size: DEFAULT_BIOME_SIZE,
+            // Corners of the climate square (matching the original constants):
+            //   dry→wet at cold = grasslands→taiga, dry→wet at hot = desert→forest.
+            desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 1.0 },
+            grasslands: BiomeShape { elevation: 0.04, relief: 0.02,  abundance: 1.0 },
+            forest:     BiomeShape { elevation: 0.5,  relief: 0.05,  abundance: 1.0 },
+            taiga:      BiomeShape { elevation: 8.0,  relief: 1.5,   abundance: 1.0 },
+            temp_bias: 0.0,
+            temp_contrast: 1.0,
+            humidity_bias: 0.0,
+            humidity_contrast: 1.0,
         }
     }
 }
@@ -108,6 +155,14 @@ pub struct WorldGenerator {
     ocean_humidity_threshold: f32,
     ocean_transition_width: f32,
     ocean_depth: f32,
+    desert: BiomeShape,
+    grasslands: BiomeShape,
+    forest: BiomeShape,
+    taiga: BiomeShape,
+    temp_bias: f32,
+    temp_contrast: f32,
+    humidity_bias: f32,
+    humidity_contrast: f32,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
@@ -117,12 +172,23 @@ impl WorldGenerator {
     pub fn from_config(cfg: &WorldGenConfig) -> Self {
         let seed = cfg.seed;
         let hs = cfg.horizontal_scale;
+        // Bigger biome_size = lower climate frequency = broader biomes. Clamped
+        // away from zero so the wavelength can't blow up to a single flat biome.
+        let climate_freq = 0.06 * hs / cfg.biome_size.max(0.05);
         Self {
             seed,
             height_scale: cfg.height_scale,
             ocean_humidity_threshold: cfg.ocean_humidity_threshold,
             ocean_transition_width: cfg.ocean_transition_width,
             ocean_depth: cfg.ocean_depth,
+            desert: cfg.desert,
+            grasslands: cfg.grasslands,
+            forest: cfg.forest,
+            taiga: cfg.taiga,
+            temp_bias: cfg.temp_bias,
+            temp_contrast: cfg.temp_contrast,
+            humidity_bias: cfg.humidity_bias,
+            humidity_contrast: cfg.humidity_contrast,
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             terrain_layers: vec![
                 PerlinLayer::new(seed,       0.08 * hs, 4.5),
@@ -132,8 +198,8 @@ impl WorldGenerator {
                 PerlinLayer::new(seed + 300, 2.00 * hs, 0.40),
             ],
             // Temperature/humidity must vary slowly across the map — keep scales low.
-            temperature_layer: PerlinLayer::new(seed + 400, 0.06 * hs, 1.0),
-            humidity_layer: PerlinLayer::new(seed + 500, 0.06 * hs, 1.0),
+            temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),
+            humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
         }
     }
 
@@ -142,13 +208,19 @@ impl WorldGenerator {
         self.seed
     }
 
-    /// Normalised climate at (x, z): `(temperature, humidity)`, each clamped 0..1.
+    /// Normalised climate at (x, z): `(temperature, humidity)`, each remapped by
+    /// the axis bias/contrast and clamped 0..1. The remap is the single chokepoint
+    /// for biome distribution, so it flows into elevation, relief, colour, and
+    /// ocean coverage alike.
     pub fn get_climate(&self, x: f32, z: f32) -> (f32, f32) {
         let raw_temp = self.temperature_layer.get(x, z);
         let raw_hum = self.humidity_layer.get(x, z);
-        let temp = (((raw_temp / self.temperature_layer.vertical_scale) + 1.0) * 0.5).clamp(0.0, 1.0);
-        let hum = (((raw_hum / self.humidity_layer.vertical_scale) + 1.0) * 0.5).clamp(0.0, 1.0);
-        (temp, hum)
+        let temp = ((raw_temp / self.temperature_layer.vertical_scale) + 1.0) * 0.5;
+        let hum = ((raw_hum / self.humidity_layer.vertical_scale) + 1.0) * 0.5;
+        (
+            remap_axis(temp, self.temp_bias, self.temp_contrast),
+            remap_axis(hum, self.humidity_bias, self.humidity_contrast),
+        )
     }
 
     /// Biome at (x, z), from the climate field. Kept for upcoming features
@@ -189,7 +261,7 @@ impl WorldGenerator {
     /// off the per-vertex runway path.
     pub fn sample_natural(&self, x: f32, z: f32) -> (f32, [f32; 4]) {
         let (raw, temp, hum) = self.natural_raw(x, z);
-        (raw * self.height_scale, terrain_color(raw, temp, hum))
+        (raw * self.height_scale, self.terrain_color(raw, temp, hum))
     }
 
     /// Everything the mesh needs at one point: world-space height (metres) and
@@ -234,37 +306,74 @@ impl WorldGenerator {
         wet.max(hot).max(cold)
     }
 
-    /// Vertical offset added to the noise sum, per biome, blended bilinearly across
-    /// the climate square and then toward a deep ocean basin (`ocean_depth`).
+    /// Normalised per-biome blend weights at the given (already-remapped) climate,
+    /// in the order `[grasslands, taiga, desert, forest]`. These are the bilinear
+    /// corner weights scaled by each biome's `abundance` and renormalised, so all
+    /// abundances at 1.0 reproduce the plain bilinear blend exactly. Shared by
+    /// elevation, relief, and colour so they always agree on the mix.
+    fn biome_weights(&self, temp: f32, humidity: f32) -> [f32; 4] {
+        let grass = (1.0 - temp) * (1.0 - humidity) * self.grasslands.abundance;
+        let taiga = (1.0 - temp) * humidity * self.taiga.abundance;
+        let desert = temp * (1.0 - humidity) * self.desert.abundance;
+        let forest = temp * humidity * self.forest.abundance;
+        let sum = grass + taiga + desert + forest;
+        if sum <= 1e-6 {
+            // Degenerate (all abundances ~0) — fall back to an even split.
+            return [0.25; 4];
+        }
+        [grass / sum, taiga / sum, desert / sum, forest / sum]
+    }
+
+    /// Vertical offset added to the noise sum: the abundance-weighted blend of the
+    /// four biome base elevations, then pulled toward a deep ocean basin
+    /// (`ocean_depth`).
     fn biome_elevation_offset(&self, temp: f32, humidity: f32) -> f32 {
-        const DESERT: f32 = 0.0;
-        const GRASS: f32 = 0.04;
-        const FOREST: f32 = 0.5;
-        const TAIGA: f32 = 8.0;
+        let w = self.biome_weights(temp, humidity);
+        let land = w[0] * self.grasslands.elevation
+            + w[1] * self.taiga.elevation
+            + w[2] * self.desert.elevation
+            + w[3] * self.forest.elevation;
         let ocean = -self.ocean_depth;
-
-        let cold_blend = GRASS + (TAIGA - GRASS) * humidity;
-        let hot_blend = DESERT + (FOREST - DESERT) * humidity;
-        let land = cold_blend + (hot_blend - cold_blend) * temp;
-
         land + (ocean - land) * self.ocean_factor(temp, humidity)
     }
 
-    /// Amplitude applied to the noise sum, per biome — taiga is mountainous, desert
-    /// and grass nearly flat, oceans flat. Bilinear across climate, then toward ocean.
+    /// Amplitude applied to the noise sum — the abundance-weighted blend of the
+    /// four biome reliefs (taiga mountainous, desert near-flat), then flattened
+    /// toward ocean. Open water stays flat regardless of the surrounding land.
     fn biome_height_multiplier(&self, temp: f32, humidity: f32) -> f32 {
-        const DESERT: f32 = 0.01;
-        const GRASS: f32 = 0.02;
-        const FOREST: f32 = 0.05;
-        const TAIGA: f32 = 1.5;
         const OCEAN: f32 = 0.01;
-
-        let cold_blend = GRASS + (TAIGA - GRASS) * humidity;
-        let hot_blend = DESERT + (FOREST - DESERT) * humidity;
-        let land = cold_blend + (hot_blend - cold_blend) * temp;
-
+        let w = self.biome_weights(temp, humidity);
+        let land = w[0] * self.grasslands.relief
+            + w[1] * self.taiga.relief
+            + w[2] * self.desert.relief
+            + w[3] * self.forest.relief;
         land + (OCEAN - land) * self.ocean_factor(temp, humidity)
     }
+
+    /// Surface colour at raw `height` for the given climate: each biome palette is
+    /// sampled at this height, then combined with the same abundance-weighted blend
+    /// as elevation/relief. Returned as linear RGBA for `Mesh::ATTRIBUTE_COLOR`.
+    fn terrain_color(&self, height: f32, temp: f32, humidity: f32) -> [f32; 4] {
+        let grass = palette_color(height, GRASSLANDS_LEVELS);
+        let taiga = palette_color(height, TAIGA_LEVELS);
+        let desert = palette_color(height, DESERT_LEVELS);
+        let forest = palette_color(height, FOREST_LEVELS);
+        let w = self.biome_weights(temp, humidity);
+        let mix = |a: f32, b: f32, c: f32, d: f32| w[0] * a + w[1] * b + w[2] * c + w[3] * d;
+        [
+            mix(grass.red, taiga.red, desert.red, forest.red),
+            mix(grass.green, taiga.green, desert.green, forest.green),
+            mix(grass.blue, taiga.blue, desert.blue, forest.blue),
+            mix(grass.alpha, taiga.alpha, desert.alpha, forest.alpha),
+        ]
+    }
+}
+
+/// Remaps a normalised 0..1 climate value: scale spread around the 0.5 midpoint
+/// by `contrast`, shift by `bias`, then clamp back to 0..1. Identity at
+/// (bias 0, contrast 1).
+fn remap_axis(v: f32, bias: f32, contrast: f32) -> f32 {
+    (0.5 + (v - 0.5) * contrast + bias).clamp(0.0, 1.0)
 }
 
 /// The four climate biomes plus open water.
@@ -369,16 +478,3 @@ fn palette_color(height: f32, palette: &[TerrainStop]) -> LinearRgba {
     palette[last].color.to_linear()
 }
 
-/// Surface colour at raw `height` for the given climate: each biome palette is
-/// sampled, then blended bilinearly across the temperature/humidity square.
-/// Returned as linear RGBA for `Mesh::ATTRIBUTE_COLOR`.
-fn terrain_color(height: f32, temp: f32, humidity: f32) -> [f32; 4] {
-    let forest = palette_color(height, FOREST_LEVELS);
-    let desert = palette_color(height, DESERT_LEVELS);
-    let taiga = palette_color(height, TAIGA_LEVELS);
-    let grass = palette_color(height, GRASSLANDS_LEVELS);
-
-    let cold = grass.mix(&taiga, humidity); // dry→wet at cold
-    let hot = desert.mix(&forest, humidity); // dry→wet at hot
-    cold.mix(&hot, temp).to_f32_array() // cold→hot
-}

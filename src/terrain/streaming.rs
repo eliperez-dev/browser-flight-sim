@@ -70,6 +70,15 @@ pub fn regenerate_terrain(
                 || config.ocean_humidity_threshold != prev.ocean_humidity_threshold
                 || config.ocean_transition_width != prev.ocean_transition_width
                 || config.ocean_depth != prev.ocean_depth
+                || config.biome_size != prev.biome_size
+                || config.desert != prev.desert
+                || config.grasslands != prev.grasslands
+                || config.forest != prev.forest
+                || config.taiga != prev.taiga
+                || config.temp_bias != prev.temp_bias
+                || config.temp_contrast != prev.temp_contrast
+                || config.humidity_bias != prev.humidity_bias
+                || config.humidity_contrast != prev.humidity_contrast
             {
                 *pending = Some(REGEN_DEBOUNCE);
             }

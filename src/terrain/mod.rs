@@ -10,7 +10,7 @@ mod generator;
 mod runway;
 mod streaming;
 
-pub use generator::{WorldGenConfig, WorldGenerator};
+pub use generator::{BiomeShape, WorldGenConfig, WorldGenerator};
 
 use bevy::prelude::*;
 
