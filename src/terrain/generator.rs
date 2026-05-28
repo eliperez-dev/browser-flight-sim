@@ -18,6 +18,15 @@ use noise::{NoiseFn, Perlin};
 /// "async" task pool actually runs on the main thread (see [`super::streaming`]).
 pub const CHUNK_SIZE: f32 = 500.0;
 
+/// Depth (metres) each chunk's perimeter skirt hangs below the terrain edge. The
+/// skirt is a vertical wall ringing the tile that seals the hairline seam between
+/// neighbours — T-junctions at LOD borders (finer edge follows the terrain, coarser
+/// edge is a flat chord) and the sub-pixel rasterization gap with MSAA off — by
+/// backing the gap with terrain-coloured geometry from below. Must exceed the
+/// largest edge-height discontinuity; it's hidden inside the neighbouring hillside
+/// (or below the water plane over ocean), so a generous value is safe.
+pub const SKIRT_DEPTH: f32 = 50.0;
+
 /// Default vertical exaggeration applied to the (biome-shaped) noise. With the
 /// biome multipliers, taiga becomes tall mountains while desert/grass stay
 /// near-flat; this one knob scales the whole world's relief.

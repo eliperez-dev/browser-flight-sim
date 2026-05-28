@@ -11,7 +11,8 @@
 //! sampling happens in [`AsyncComputeTaskPool`] tasks that are polled and
 //! rate-limited rather than run inline.
 
-use bevy::mesh::VertexAttributeValues;
+use bevy::light::NotShadowCaster;
+use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::tasks::futures_lite::future;
 use bevy::tasks::AsyncComputeTaskPool;
@@ -22,7 +23,7 @@ use super::chunk::{
     lod_for_distance_sq, Chunk, ChunkManager, ChunkTask, SharedTerrainMaterial,
     WorldGenerationSettings,
 };
-use super::generator::{WorldGenConfig, WorldGenerator, CHUNK_SIZE};
+use super::generator::{WorldGenConfig, WorldGenerator, CHUNK_SIZE, SKIRT_DEPTH};
 use super::TerrainCamera;
 
 /// Seconds the config must sit unchanged before a rebuild fires. Long enough
@@ -190,6 +191,9 @@ pub fn generate_chunks(
             Transform::from_xyz(x as f32 * CHUNK_SIZE, 0.0, z as f32 * CHUNK_SIZE),
             Chunk { x, z, current_lod: lod },
             Visibility::Hidden,
+            // Don't cast shadows: the LOD height step at a seam (and the skirt wall
+            // backing it) would otherwise throw a hard shadow line across the join.
+            NotShadowCaster,
             PIXEL_LAYER,
         ));
         spawned += 1;
@@ -226,11 +230,12 @@ pub fn displace_new_chunks(
 }
 
 /// Shared mesh-displacement kernel used by both the initial build and LOD
-/// rebuilds: lift each vertex to its terrain height and colour it, split the mesh
-/// into independent triangles, then give each face a single flat colour and flat
-/// normal. The per-face colour is what makes terrain read as crisp facets rather
-/// than a blurry gradient — without it the GPU smoothly interpolates the three
-/// corner colours across every triangle.
+/// rebuilds: lift each vertex to its terrain height and colour it, ring it with a
+/// downward skirt to seal the seam to neighbours, split the mesh into independent
+/// triangles, then give each face a single flat colour and flat normal. The
+/// per-face colour is what makes terrain read as crisp facets rather than a blurry
+/// gradient — without it the GPU smoothly interpolates the three corner colours
+/// across every triangle.
 fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
     // Resolve the chunk's runways once (each samples noise for its elevation) so
     // the per-vertex flatten below is cheap rectangle math, not noise.
@@ -256,6 +261,14 @@ fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
             colors.push(color);
         }
     }
+
+    // 1.5. Skirt: ring the perimeter with a vertical wall dropping below the edge,
+    //      so any hairline seam with a neighbour is backed by terrain-coloured
+    //      geometry instead of showing through to sky/ocean. Extends positions and
+    //      `colors` together and appends wall triangles, before the split below.
+    //      Returns the wall's index count so its normals can be fixed up post-split.
+    let skirt_indices = add_skirt(mesh, &mut colors);
+
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
 
     // 2. Split shared vertices so every triangle owns its three corners. This is
@@ -283,6 +296,125 @@ fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
 
     // 4. One normal per face — flat (faceted) shading.
     mesh.compute_flat_normals();
+
+    // 5. Re-point the skirt walls' normals straight up so they shade like lit
+    //    ground rather than dark vertical faces. The split above emits one vertex
+    //    per index in order, and the skirt indices were appended last, so the
+    //    skirt occupies the final `skirt_indices` vertices.
+    if skirt_indices > 0 {
+        if let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+        {
+            let start = normals.len().saturating_sub(skirt_indices);
+            for normal in &mut normals[start..] {
+                *normal = [0.0, 1.0, 0.0];
+            }
+        }
+    }
+}
+
+/// Adds a downward "skirt" around the chunk's perimeter: a vertical wall hanging
+/// [`SKIRT_DEPTH`] below the edge vertices, sealing the hairline seam where this
+/// tile meets a neighbour (T-junction at a LOD border, or the sub-pixel gap with
+/// MSAA off). The wall is backed terrain-coloured geometry that the gap reveals
+/// instead of sky/ocean, and it sits hidden inside the neighbouring hillside (or
+/// below the water plane over ocean), so it's invisible except through a crack.
+///
+/// Operates on the still-indexed grid (the plane is a `dim × dim` lattice, row
+/// `r`, column `c` at index `r * dim + c`), extending `POSITION`/`colors` with the
+/// dropped vertices and appending wall triangles wound to face outward. `NORMAL`
+/// and `UV_0` are padded to match so the later `duplicate_vertices` stays in step;
+/// the flat-normal pass then recomputes normals for the whole mesh.
+///
+/// Returns the number of skirt indices appended (0 if skipped). Since the wall
+/// triangles are added last, those are the final vertices after the split — which
+/// is how the caller locates them to fix up their normals.
+fn add_skirt(mesh: &mut Mesh, colors: &mut Vec<[f32; 4]>) -> usize {
+    let Some(VertexAttributeValues::Float32x3(grid)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return 0;
+    };
+    let mut positions = grid.clone();
+    let n = positions.len();
+    let dim = (n as f64).sqrt().round() as usize;
+    if dim < 2 || dim * dim != n {
+        return 0; // not the square lattice we expect — skip rather than corrupt it
+    }
+
+    let mut indices: Vec<u32> = match mesh.indices() {
+        Some(Indices::U32(v)) => v.clone(),
+        Some(Indices::U16(v)) => v.iter().map(|&i| i as u32).collect(),
+        None => return 0,
+    };
+    let grid_index_count = indices.len();
+
+    // The four boundary runs: two columns (stride `dim`) and two rows (stride 1).
+    let left: Vec<u32> = (0..dim).map(|r| (r * dim) as u32).collect();
+    let right: Vec<u32> = (0..dim).map(|r| (r * dim + dim - 1) as u32).collect();
+    let top: Vec<u32> = (0..dim).map(|c| c as u32).collect();
+    let bottom: Vec<u32> = (0..dim).map(|c| ((dim - 1) * dim + c) as u32).collect();
+
+    // Lazily created dropped twin for each top vertex (shared across edges so
+    // corners stitch cleanly), indexed by top-vertex id; u32::MAX = none yet.
+    let mut bottom_of = vec![u32::MAX; n];
+
+    for edge in [&left, &right, &top, &bottom] {
+        // Outward horizontal normal of this edge, from its constant coordinate:
+        // edges running along X face ±Z, edges running along Z face ±X.
+        let p0 = Vec3::from_array(positions[edge[0] as usize]);
+        let p_last = Vec3::from_array(positions[*edge.last().unwrap() as usize]);
+        let outward = if (p_last.x - p0.x).abs() >= (p_last.z - p0.z).abs() {
+            Vec3::new(0.0, 0.0, p0.z.signum())
+        } else {
+            Vec3::new(p0.x.signum(), 0.0, 0.0)
+        };
+
+        for w in edge.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            for &t in &[a, b] {
+                if bottom_of[t as usize] == u32::MAX {
+                    let mut p = positions[t as usize];
+                    p[1] -= SKIRT_DEPTH;
+                    bottom_of[t as usize] = positions.len() as u32;
+                    positions.push(p);
+                    let c = colors[t as usize];
+                    colors.push(c);
+                }
+            }
+            let ba = bottom_of[a as usize];
+            let bb = bottom_of[b as usize];
+
+            // Wind the quad so its face normal points outward (default back-face
+            // culling otherwise hides the wall from the side that needs it).
+            let ta = Vec3::from_array(positions[a as usize]);
+            let tb = Vec3::from_array(positions[b as usize]);
+            let bav = Vec3::from_array(positions[ba as usize]);
+            if (tb - ta).cross(bav - ta).dot(outward) >= 0.0 {
+                indices.extend_from_slice(&[a, b, bb, a, bb, ba]);
+            } else {
+                indices.extend_from_slice(&[a, bb, b, a, ba, bb]);
+            }
+        }
+    }
+
+    let added = positions.len() - n;
+    let skirt_index_count = indices.len() - grid_index_count;
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U32(indices));
+
+    // Pad the attributes we don't compute here so all arrays stay the same length
+    // through `duplicate_vertices`; values are placeholders (normals are recomputed
+    // flat afterwards, UVs are unused by the vertex-coloured terrain material).
+    if let Some(VertexAttributeValues::Float32x3(normals)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+    {
+        normals.extend(std::iter::repeat_n([0.0, 1.0, 0.0], added));
+    }
+    if let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+        uvs.extend(std::iter::repeat_n([0.0, 0.0], added));
+    }
+
+    skirt_index_count
 }
 
 /// Polls in-flight chunk tasks nearest-first, swaps finished meshes in, and

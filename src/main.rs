@@ -217,6 +217,7 @@ fn setup(
         FreeCam { yaw: 0.0, pitch: -0.3 },
         TrackCam { yaw: 0.0, pitch: 0.3, distance: 15.0 },
     ));
+    
 
     commands.spawn((Sprite::from_image(pixel_target), SCREEN_LAYER));
 
