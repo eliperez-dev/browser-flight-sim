@@ -359,10 +359,10 @@ const EDGE_LIGHT_INSET: f32 = 1.5;
 
 /// PointLight `range` (metres) for each light type. Controls how far the light
 /// reaches before it cuts off — tune these independently to balance look vs. cost.
-const RANGE_EDGE: f32 = 200.0;
+const RANGE_EDGE: f32 = 300.0;
 const RANGE_THRESHOLD: f32 = 300.0;
 const RANGE_REIL: f32 = 2000.0;
-const RANGE_ALS: f32 = 120.0;
+const RANGE_ALS: f32 = 2000.0;
 
 /// Spawns one runway: a volumetric asphalt slab plus centreline dashes and
 /// threshold bars, all as children of a root placed at the runway's position,
@@ -523,7 +523,7 @@ fn spawn_runway(
                 // Approach lighting (ALS): cross-bars of 5 lights every 60 m for
                 // 420 m beyond each threshold. Each bar spans 18 m wide, matching
                 // the look of real ALSF/MALSR systems seen on final approach.
-                const ALS_BARS: i32 = 7;
+                const ALS_BARS: i32 = 3;
                 const ALS_SPACING: f32 = 60.0;
                 const ALS_BAR_LIGHTS: i32 = 5;
                 const ALS_BAR_WIDTH: f32 = 18.0;

@@ -74,7 +74,7 @@ pub fn toggle_camera_mode(
 /// Free-look camera — WASD/EQ move, arrow keys look.
 /// Only active when mode is Free.
 pub fn free_cam_control(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
     mode: Res<CameraMode>,
     mut query: Query<(&mut Transform, &mut FreeCam)>,
@@ -130,7 +130,7 @@ pub fn free_cam_control(
 
 /// Orbit / Chase camera — only active when mode is Orbit or Chase.
 pub fn track_cam_control(
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
     mode: Res<CameraMode>,
     plane_query: Query<&Transform, With<Airplane>>,

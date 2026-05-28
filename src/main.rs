@@ -1,6 +1,6 @@
 use avian3d::prelude::{
     AngularDamping, AngularInertia, CenterOfMass, Gravity,
-    Mass, PhysicsPlugins
+    Mass, Physics, PhysicsPlugins, PhysicsTime
 };
 use bevy::{
     asset::AssetMetaCheck,
@@ -75,9 +75,12 @@ fn main() {
             // using the real frame delta rather than a fixed timestep.
             // Running them in FixedUpdate caused a rate mismatch that produced
             // the visible stepping / snapping artifacts.
-            (airplane_controller, apply_aero_forces, apply_landing_gear).chain(),
+            (airplane_controller, apply_aero_forces, apply_landing_gear)
+                .chain()
+                .run_if(|t: Res<Time<Physics>>| !t.is_paused()),
             toggle_camera_mode,
             toggle_gizmos,
+            toggle_pause,
             free_cam_control,
             update_fps,
             fit_canvas,
@@ -92,6 +95,22 @@ fn main() {
         .run();
 }
 
+
+fn toggle_pause(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut physics_time: ResMut<Time<Physics>>,
+    mut virtual_time: ResMut<Time<Virtual>>,
+) {
+    if keys.just_pressed(KeyCode::KeyP) {
+        if physics_time.is_paused() {
+            physics_time.unpause();
+            virtual_time.unpause();
+        } else {
+            physics_time.pause();
+            virtual_time.pause();
+        }
+    }
+}
 
 /// Pushes debug-menu values that live outside the config resource back onto
 /// the world whenever the config changes: the visual mesh offset, the rigid-body
