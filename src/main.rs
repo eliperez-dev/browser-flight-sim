@@ -19,7 +19,6 @@ use crate::{camera::{
 use bevy_egui::PrimaryEguiContext;
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
-use crate::debug_tools::debug_world::spawn_debug_world;
 use crate::fog::FogPlugin;
 use crate::water::WaterPlugin;
 use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller, wing_panel_rotation};
@@ -36,6 +35,7 @@ mod map;
 mod physics;
 mod debug_tools;
 mod plane;
+mod sky;
 mod terrain;
 mod water;
 
@@ -58,6 +58,7 @@ fn main() {
             TerrainPlugin,
             WaterPlugin,
             crate::map::MapPlugin,
+            crate::sky::SkyPlugin,
         ))
         // Initial gravity; kept in sync with cfg.gravity by
         // apply_config_to_entities so the debug slider drives the real force.
@@ -67,7 +68,7 @@ fn main() {
         .init_resource::<CameraMode>()
         .init_resource::<DebugHud>()
         .init_resource::<GizmosVisible>()
-        .add_systems(Startup, (setup, spawn_debug_world, setup_gizmo_config))
+        .add_systems(Startup, (setup, setup_gizmo_config))
         .add_systems(Update, (
             // Controller and aero forces run in Update so they are in sync with
             // Avian's PhysicsSchedule, which also runs once per render frame

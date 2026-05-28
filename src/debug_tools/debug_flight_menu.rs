@@ -14,6 +14,7 @@ use crate::fog::FogSettings;
 use crate::map::MapIconSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
+use crate::sky::DayNightCycle;
 use crate::terrain::{BiomeShape, WorldGenConfig};
 use crate::water::WaterSettings;
 
@@ -84,6 +85,7 @@ fn draw_menu(
     mut fog: ResMut<FogSettings>,
     mut water: ResMut<WaterSettings>,
     mut map_icons: ResMut<MapIconSettings>,
+    mut sky: ResMut<DayNightCycle>,
 ) -> Result {
     if !visible.0 { return Ok(()); }
 
@@ -230,6 +232,32 @@ fn draw_menu(
                     ui.separator();
                     if ui.button("Reset world gen").clicked() {
                         w = WorldGenConfig::default();
+                    }
+                });
+
+            // ---------------------------------------------------------------
+            // Sky / Day-Night cycle — drives sun, ambient, sky colour & stars.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Sky / Day-Night")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(format!("Clock: {}", format_game_time(sky.time_of_day)));
+                    ui.add(egui::Slider::new(&mut sky.time_of_day, 0.0..=1.0)
+                        .text("Time of day"));
+                    if ui.button(if sky.speed == 0.0 { "Play" } else { "Pause" }).clicked() {
+                        // Stash/restore a sensible speed so Pause→Play resumes.
+                        sky.speed = if sky.speed == 0.0 { 0.005 } else { 0.0 };
+                    }
+                    ui.add(egui::Slider::new(&mut sky.speed, 0.0..=0.2)
+                        .text("Time speed")
+                        .logarithmic(true));
+                    ui.add(egui::Slider::new(&mut sky.inclination, -1.0..=1.0)
+                        .text("Orbit inclination (rad)"));
+                    ui.checkbox(&mut sky.tint_fog, "Tint fog to sky colour");
+
+                    ui.separator();
+                    if ui.button("Reset sky").clicked() {
+                        *sky = DayNightCycle::default();
                     }
                 });
 
@@ -572,6 +600,12 @@ fn draw_menu(
         *world = w;
     }
     Ok(())
+}
+
+/// Formats a `0.0..1.0` time-of-day as a 24-hour `HH:MM` clock (0.0 = 00:00).
+fn format_game_time(t: f32) -> String {
+    let minutes = (t.rem_euclid(1.0) * 24.0 * 60.0) as u32;
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
 }
 
 /// Renders the elevation + relief sliders for one biome, inside its own

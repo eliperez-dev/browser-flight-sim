@@ -174,11 +174,11 @@ impl Default for WorldGenConfig {
             desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 0.3 },
             grasslands: BiomeShape { elevation: 0.04, relief: 0.02,  abundance: 1.0 },
             forest:     BiomeShape { elevation: 0.5,  relief: 0.05,  abundance: 1.0 },
-            taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.7 },
-            temp_bias: 0.0,
-            temp_contrast: 1.0,
-            humidity_bias: 0.0,
+            taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.8 },
+            temp_bias: -0.15,
+            humidity_bias: -0.15,
             humidity_contrast: 1.0,
+            temp_contrast: 1.0,
             temp_lapse: DEFAULT_TEMP_LAPSE,
             latitude_strength: DEFAULT_LATITUDE_STRENGTH,
             latitude_band: DEFAULT_LATITUDE_BAND,
@@ -324,7 +324,7 @@ impl WorldGenerator {
         if self.ocean_factor(continentalness) >= 0.5 {
             return Biome::Ocean;
         }
-        match (temp > 0.5, hum > 0.45) {
+        match (temp > 0.5, hum > 0.5) {
             (true, true) => Biome::Forest,    // hot & wet
             (true, false) => Biome::Desert,   // hot & dry
             (false, false) => Biome::Grasslands,
