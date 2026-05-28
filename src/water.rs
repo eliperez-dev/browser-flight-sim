@@ -95,6 +95,7 @@ fn spawn_water(
         // Flat ocean shouldn't cast onto the seabed or self-darken from terrain.
         NotShadowCaster,
         NotShadowReceiver,
+        
         Water,
         PIXEL_LAYER,
         if settings.enabled { Visibility::Visible } else { Visibility::Hidden },

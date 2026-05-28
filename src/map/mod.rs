@@ -97,7 +97,6 @@ impl Default for MapIconSettings {
             plane_width: 4.0,
             camera_size: 8.0,
             airport_circle: 7.0,
-            //TODO: This runway width scales with zoom, it shoudlnt.
             runway_width: 4.0,
             selected_ring: 9.0,
             breadcrumb_len: 3.5,
