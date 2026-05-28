@@ -174,7 +174,7 @@ impl Default for WorldGenConfig {
             desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 0.3 },
             grasslands: BiomeShape { elevation: 0.04, relief: 0.02,  abundance: 1.0 },
             forest:     BiomeShape { elevation: 0.5,  relief: 0.05,  abundance: 1.0 },
-            taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.8 },
+            taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.5 },
             temp_bias: -0.15,
             humidity_bias: -0.15,
             humidity_contrast: 1.0,

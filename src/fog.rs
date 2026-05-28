@@ -68,7 +68,11 @@ fn build_fog(s: &FogSettings) -> DistanceFog {
 /// when the settings change or the camera doesn't have it yet, and removes it
 /// when fog is disabled. Runs every frame but only touches the camera when
 /// something actually needs to change.
-fn apply_fog(
+///
+/// `pub(crate)` so the day-night cycle can order its fog tint *after* this,
+/// guaranteeing the cycle has the final say on a frame where editing the Fog
+/// panel triggers a rebuild here.
+pub(crate) fn apply_fog(
     settings: Res<FogSettings>,
     mut commands: Commands,
     cam_query: Query<(Entity, Option<&DistanceFog>), With<FreeCam>>,

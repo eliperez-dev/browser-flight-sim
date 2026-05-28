@@ -254,6 +254,11 @@ fn draw_menu(
                     ui.add(egui::Slider::new(&mut sky.inclination, -1.0..=1.0)
                         .text("Orbit inclination (rad)"));
                     ui.checkbox(&mut sky.tint_fog, "Tint fog to sky colour");
+                    ui.add_enabled(
+                        sky.tint_fog,
+                        egui::Slider::new(&mut sky.fog_haze, 0.0..=1.0)
+                            .text("Fog haze (desaturation)"),
+                    );
 
                     ui.separator();
                     if ui.button("Reset sky").clicked() {
