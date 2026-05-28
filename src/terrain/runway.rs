@@ -359,10 +359,10 @@ const EDGE_LIGHT_INSET: f32 = 1.5;
 
 /// PointLight `range` (metres) for each light type. Controls how far the light
 /// reaches before it cuts off — tune these independently to balance look vs. cost.
-const RANGE_EDGE: f32 = 300.0;
-const RANGE_THRESHOLD: f32 = 300.0;
-const RANGE_REIL: f32 = 2000.0;
-const RANGE_ALS: f32 = 2000.0;
+const RANGE_EDGE: f32 = 200.0;
+const RANGE_THRESHOLD: f32 = 80.0;
+const RANGE_REIL: f32 = 3000.0;
+const RANGE_ALS: f32 = 200.0;
 
 /// Spawns one runway: a volumetric asphalt slab plus centreline dashes and
 /// threshold bars, all as children of a root placed at the runway's position,
@@ -470,81 +470,53 @@ fn spawn_runway(
                 }
             }
 
-            // Threshold bar lights (4 per end, green inbound / red outbound combined)
-            // and REIL strobes. Kept to 4 wide lights instead of 8×2 to save entities.
-            const THRESHOLD_LIGHTS: i32 = 4;
-            let threshold_stride = RUNWAY_WIDTH / (THRESHOLD_LIGHTS + 1) as f32;
+            // Threshold lights: one wide green + one wide red per end (centred).
+            // A large radius fakes the spread of the full bar row with 2 lights instead of 8.
             for end_sign in [-1.0_f32, 1.0] {
                 let tz = end_sign * threshold_z;
-                for k in 0..THRESHOLD_LIGHTS {
-                    let x = -RUNWAY_WIDTH * 0.5 + threshold_stride * (k + 1) as f32;
-                    // One green + one red per position, offset by ~1 m to face opposite directions.
-                    parent.spawn((
-                        PointLight {
-                            color: Color::srgb(0.1, 1.0, 0.2),
-                            intensity: 800_000.0,
-                            range: RANGE_THRESHOLD,
-                            radius: 0.3,
-                            shadows_enabled: false,
-                            ..default()
-                        },
-                        Transform::from_xyz(x, light_y, tz - end_sign * 1.0),
-                        PIXEL_LAYER,
-                    ));
-                    parent.spawn((
-                        PointLight {
-                            color: Color::srgb(1.0, 0.08, 0.05),
-                            intensity: 800_000.0,
-                            range: RANGE_THRESHOLD,
-                            radius: 0.3,
-                            shadows_enabled: false,
-                            ..default()
-                        },
-                        Transform::from_xyz(x, light_y, tz + end_sign * 1.0),
-                        PIXEL_LAYER,
-                    ));
-                }
-                // REIL: one bright strobe each side of the threshold.
-                for side in [-1.0_f32, 1.0] {
-                    parent.spawn((
-                        PointLight {
-                            color: Color::srgb(1.0, 0.15, 0.1),
-                            intensity: 2_000_000.0,
-                            range: RANGE_REIL,
-                            radius: 0.5,
-                            shadows_enabled: false,
-                            ..default()
-                        },
-                        Transform::from_xyz(side * (RUNWAY_WIDTH * 0.5 + 5.0), light_y + 0.5, tz),
-                        PIXEL_LAYER,
-                    ));
-                }
+                parent.spawn((
+                    PointLight {
+                        color: Color::srgb(0.1, 1.0, 0.2),
+                        intensity: 3_200_000.0,
+                        range: RANGE_THRESHOLD,
+                        radius: RUNWAY_WIDTH * 0.4,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, light_y, tz - end_sign * 1.0),
+                    PIXEL_LAYER,
+                ));
+                parent.spawn((
+                    PointLight {
+                        color: Color::srgb(1.0, 0.08, 0.05),
+                        intensity: 3_200_000.0,
+                        range: RANGE_THRESHOLD,
+                        radius: RUNWAY_WIDTH * 0.4,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, light_y, tz + end_sign * 1.0),
+                    PIXEL_LAYER,
+                ));
 
-                // Approach lighting (ALS): cross-bars of 5 lights every 60 m for
-                // 420 m beyond each threshold. Each bar spans 18 m wide, matching
-                // the look of real ALSF/MALSR systems seen on final approach.
+                // Approach lighting (ALS): one wide light per bar, radius fakes the
+                // 18 m cross-bar spread. 3 bars × 2 ends = 6 lights total.
                 const ALS_BARS: i32 = 3;
                 const ALS_SPACING: f32 = 60.0;
-                const ALS_BAR_LIGHTS: i32 = 5;
-                const ALS_BAR_WIDTH: f32 = 18.0;
                 for j in 1..=ALS_BARS {
                     let z = tz + end_sign * j as f32 * ALS_SPACING;
-                    let bar_stride = ALS_BAR_WIDTH / (ALS_BAR_LIGHTS - 1) as f32;
-                    for k in 0..ALS_BAR_LIGHTS {
-                        let x = -ALS_BAR_WIDTH * 0.5 + k as f32 * bar_stride;
-                        parent.spawn((
-                            PointLight {
-                                color: Color::srgb(1.0, 0.97, 0.88),
-                                intensity: 400_000.0,
-                                range: RANGE_ALS,
-                                radius: 0.3,
-                                shadows_enabled: false,
-                                ..default()
-                            },
-                            Transform::from_xyz(x, light_y + 1.5, z),
-                            PIXEL_LAYER,
-                        ));
-                    }
+                    parent.spawn((
+                        PointLight {
+                            color: Color::srgb(1.0, 0.97, 0.88),
+                            intensity: 2_000_000.0,
+                            range: RANGE_ALS,
+                            radius: 9.0,
+                            shadows_enabled: false,
+                            ..default()
+                        },
+                        Transform::from_xyz(0.0, light_y + 1.5, z),
+                        PIXEL_LAYER,
+                    ));
                 }
             }
         });
