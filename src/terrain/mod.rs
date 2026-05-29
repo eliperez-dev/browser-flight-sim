@@ -19,7 +19,7 @@ pub use runway::{RUNWAY_LENGTH, RunwayInstance, runway_ident, runways_in_region}
 use bevy::prelude::*;
 
 use chunk::{ChunkManager, SharedTerrainMaterial, WorldGenerationSettings};
-use runway::{RunwayMaterials, SpawnedRunways};
+use runway::{RunwayLightClock, RunwayMaterials, SpawnedRunways};
 
 /// Marks the 3D camera that terrain streams around. Exactly one entity should
 /// carry this (the `PIXEL_LAYER` `Camera3d` in `main::setup`).
@@ -36,6 +36,7 @@ impl Plugin for TerrainPlugin {
             .init_resource::<ChunkManager>()
             .init_resource::<WorldGenerationSettings>()
             .init_resource::<SpawnedRunways>()
+            .init_resource::<RunwayLightClock>()
             .add_systems(Startup, setup_terrain_material)
             .add_systems(
                 Update,
@@ -45,6 +46,7 @@ impl Plugin for TerrainPlugin {
                     // sync_runways then rebuilds the strips for the new layout.
                     streaming::regenerate_terrain,
                     runway::stream_runways,
+                    runway::animate_runway_lights,
                     streaming::generate_chunks,
                     streaming::displace_new_chunks,
                     streaming::apply_chunk_meshes,

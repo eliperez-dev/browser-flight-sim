@@ -14,7 +14,7 @@ use bevy_egui::egui;
 
 use crate::terrain::{Biome, RunwayInstance, WorldGenerator, runway_ident};
 
-use super::{Breadcrumb, MapIconSettings, MapLayer, MapState};
+use super::{Breadcrumb, MapIconSettings, MapLayer};
 
 /// Background texture resolution (square). Modest on purpose: each texel is a
 /// full multi-octave noise sample, and the bake only reruns when the view moves
@@ -27,8 +27,8 @@ const IDENT_ZOOM_LIMIT: f32 = 160.0;
 
 /// Half the world-space extent the texture currently covers, in metres: the map
 /// spans `center ± half_span` on both axes.
-pub fn half_span(state: &MapState) -> f32 {
-    TEX as f32 * state.world_per_texel * 0.5
+pub fn half_span(world_per_texel: f32) -> f32 {
+    TEX as f32 * world_per_texel * 0.5
 }
 
 /// The current map viewport: the screen rect plus the world window it shows.
@@ -70,23 +70,29 @@ impl View {
 
 // --- Background baking --------------------------------------------------------
 
-/// Refills the background `Image` from the generator for the current
-/// `center` / `world_per_texel` / `layer`. `sea_level` is the live water plane
-/// height (world-Y) so the map's coastline tracks the F3 water slider. The caller
-/// decides *when* to call this (only on a real, settled view change).
-pub fn bake(image: &mut Image, generator: &WorldGenerator, state: &MapState, sea_level: f32) {
+/// Bakes a horizontal slice of the background texture (`row_start..row_end`).
+/// Splitting the full 256×256 bake into small row batches spreads the noise
+/// cost over multiple frames so no single frame stalls.
+pub fn bake_rows(
+    image: &mut Image,
+    generator: &WorldGenerator,
+    row_start: u32,
+    row_end: u32,
+    center: Vec2,
+    world_per_texel: f32,
+    layer: MapLayer,
+    sea_level: f32,
+) {
     let Some(data) = image.data.as_mut() else { return };
-    let half = half_span(state);
-    let origin = state.center - Vec2::splat(half);
-    let wpt = state.world_per_texel;
+    let half = TEX as f32 * world_per_texel * 0.5;
+    let origin = center - Vec2::splat(half);
+    let wpt = world_per_texel;
 
-    for ty in 0..TEX {
+    for ty in row_start..row_end {
         for tx in 0..TEX {
-            // Sample at the texel centre, matching `View::to_screen`'s convention
-            // (world +X → texture +X, world +Z → texture +Y).
             let wx = origin.x + (tx as f32 + 0.5) * wpt;
             let wz = origin.y + (ty as f32 + 0.5) * wpt;
-            let rgba = match state.layer {
+            let rgba = match layer {
                 MapLayer::Biome => biome_texel(generator, wx, wz, sea_level),
                 MapLayer::Height => height_texel(generator, wx, wz, sea_level),
                 MapLayer::BiomeCategory => biome_category_texel(generator, wx, wz, sea_level),
@@ -110,7 +116,7 @@ fn biome_texel(generator: &WorldGenerator, x: f32, z: f32, sea_level: f32) -> [u
     let (h, lin) = generator.sample_natural(x, z);
     let lin = if h < sea_level {
         // Deeper water → darker, so coastlines and basins still read.
-        let shade = 1.0 - ((sea_level - h) / 500.0).clamp(0.0, 0.6);
+        let shade = 1.0 - ((sea_level - h)).clamp(0.0, 0.6);
         LinearRgba::new(
             WATER_LINEAR[0] * shade,
             WATER_LINEAR[1] * shade,
@@ -356,8 +362,8 @@ pub fn draw_ruler(painter: &egui::Painter, view: &View) {
     let x1 = x0 + px;
     let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
     painter.line_segment([egui::pos2(x0, y), egui::pos2(x1, y)], stroke);
-    painter.line_segment([egui::pos2(x0, y - 3.0), egui::pos2(x0, y + 3.0)], stroke);
-    painter.line_segment([egui::pos2(x1, y - 3.0), egui::pos2(x1, y + 3.0)], stroke);
+    painter.line_segment([egui::pos2(x0, y - 10.0), egui::pos2(x0, y + 10.0)], stroke);
+    painter.line_segment([egui::pos2(x1, y - 10.0), egui::pos2(x1, y + 10.0)], stroke);
     painter.text(
         egui::pos2(x0, y - 4.0),
         egui::Align2::LEFT_BOTTOM,

@@ -21,6 +21,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use super::aircraft_physics::AircraftRoot;
 use super::flight_config::FlightModelConfig;
 use crate::plane::{Airplane, PlaneState};
 use crate::terrain::WorldGenerator;
@@ -81,19 +82,22 @@ pub fn gear_legs(flight_model: &FlightModelConfig) -> [GearLeg; 3] {
 /// both accumulate onto Avian's per-step force buffer, which is cleared after
 /// the step.
 pub fn apply_landing_gear(
-    mut aircraft_q: Query<(Forces, &CenterOfMass, &mut PlaneState), With<Airplane>>,
+    mut aircraft_q: Query<(Forces, &CenterOfMass, &mut PlaneState, &AircraftRoot), With<Airplane>>,
     flight_model: Res<FlightModelConfig>,
     keys: Res<ButtonInput<KeyCode>>,
     world_gen: Res<WorldGenerator>,
 ) {
-    let Ok((mut forces, center_of_mass, mut state)) = aircraft_q.single_mut() else {
+    let Ok((mut forces, center_of_mass, mut state, root)) = aircraft_q.single_mut() else {
         return;
     };
 
     let cfg = &flight_model.landing_gear;
 
-    // Brakes add to the rolling-resistance coefficient while B is held.
-    let braking = keys.pressed(KeyCode::KeyB);
+    let speed = forces.linear_velocity().length();
+    let parking_brake = speed < 1.0 && root.throttle_percent == 0.0;
+
+    // Brakes engage when B is held or the parking brake is active.
+    let braking = keys.pressed(KeyCode::KeyB) || parking_brake;
     let rolling_crr = cfg.gear_rolling_resistance + if braking { cfg.gear_brake_strength } else { 0.0 };
 
     let origin: Vec3 = forces.position().0;

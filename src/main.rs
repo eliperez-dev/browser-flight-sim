@@ -16,13 +16,14 @@ use bevy::{
 use crate::{camera::{
     CameraMode, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, fit_canvas, free_cam_control, toggle_camera_mode, track_cam_control
 }, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
+use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::PrimaryEguiContext;
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::fog::FogPlugin;
 use crate::water::WaterPlugin;
 use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller, wing_panel_rotation};
-use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, setup_gizmo_config, toggle_gizmos};
+use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, draw_light_gizmos, setup_gizmo_config, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
 use crate::physics::airplane_controller::airplane_controller;
@@ -31,6 +32,7 @@ use crate::physics::landing_gear::apply_landing_gear;
 
 mod camera;
 mod fog;
+mod lights;
 mod map;
 mod physics;
 mod debug_tools;
@@ -59,7 +61,13 @@ fn main() {
             WaterPlugin,
             crate::map::MapPlugin,
             crate::sky::SkyPlugin,
+            AircraftLightsPlugin,
         ))
+        // Cap the virtual-time step so a stutter frame never gives the physics
+        // integrator a huge dt that over-compresses the spring-damper struts.
+        // 33 ms ≈ 30 fps minimum; anything slower is clamped, trading real-time
+        // accuracy for numerical stability (springs can't blow up on lag spikes).
+        .insert_resource(Time::<Virtual>::from_max_delta(std::time::Duration::from_millis(33)))
         // Initial gravity; kept in sync with cfg.gravity by
         // apply_config_to_entities so the debug slider drives the real force.
         // The same value is fed into our velocity predictor in aircraft_physics.
@@ -91,7 +99,7 @@ fn main() {
         ))
         // PostUpdate: transform propagation has already run, so GlobalTransform
         // reflects the current frame position — no one-frame lag on gizmos.
-        .add_systems(PostUpdate, (track_cam_control, draw_aero_gizmos))
+        .add_systems(PostUpdate, (track_cam_control, draw_aero_gizmos, draw_light_gizmos))
         .run();
 }
 
@@ -213,7 +221,7 @@ fn setup(
     const SPAWN_Z: f32 = -900.0;
     const GEAR_STANDOFF: f32 = 1.25;
     let spawn_y = world_gen.get_terrain_height(SPAWN_X, SPAWN_Z) + GEAR_STANDOFF;
-    spawn_aircraft(
+    let aircraft = spawn_aircraft(
         &mut commands,
         &asset_server,
         &mut meshes,
@@ -221,6 +229,10 @@ fn setup(
         &cfg,
         Vec3::new(SPAWN_X, spawn_y, SPAWN_Z),
     );
+    let light_children = spawn_aircraft_lights(&mut commands, &cfg);
+    commands.entity(aircraft)
+        .insert(LightTimers::default())
+        .add_children(&light_children);
 
     commands.spawn((
         Camera3d::default(),

@@ -11,9 +11,11 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
 use crate::fog::FogSettings;
+use crate::lights::LightTimers;
 use crate::map::MapIconSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
+use crate::plane::Airplane;
 use crate::sky::DayNightCycle;
 use crate::terrain::{BiomeShape, WorldGenConfig};
 use crate::water::WaterSettings;
@@ -86,6 +88,7 @@ fn draw_menu(
     mut water: ResMut<WaterSettings>,
     mut map_icons: ResMut<MapIconSettings>,
     mut sky: ResMut<DayNightCycle>,
+    mut light_timers_q: Query<&mut LightTimers, With<Airplane>>,
 ) -> Result {
     if !visible.0 { return Ok(()); }
 
@@ -263,6 +266,88 @@ fn draw_menu(
                     ui.separator();
                     if ui.button("Reset sky").clicked() {
                         *sky = DayNightCycle::default();
+                    }
+                });
+
+            // ---------------------------------------------------------------
+            // Aircraft lights — positions/intensities live-update from here.
+            // The landing light (L key) toggle is also exposed as a checkbox.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Lights")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let lc = &mut cfg.lights;
+
+                    // Landing light on/off (mirrors the L keybind)
+                    if let Ok(mut timers) = light_timers_q.single_mut() {
+                        ui.checkbox(&mut timers.landing_light_on, "Landing light (L)");
+                    }
+
+                    ui.separator();
+                    ui.label("Nav lights (always on)");
+                    ui.add(egui::Slider::new(&mut lc.nav_intensity, 0.0..=5_000.0)
+                        .text("Nav intensity (lux)"));
+                    ui.label("Left wingtip (red)");
+                    ui.add(egui::Slider::new(&mut lc.nav_left_pos.x, -800.0..=0.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.nav_left_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.nav_left_pos.z, -800.0..=800.0).text("Z"));
+                    ui.label("Right wingtip (green)");
+                    ui.add(egui::Slider::new(&mut lc.nav_right_pos.x, 0.0..=800.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.nav_right_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.nav_right_pos.z, -800.0..=800.0).text("Z"));
+                    ui.label("Tail (white)");
+                    ui.add(egui::Slider::new(&mut lc.nav_tail_pos.x, -300.0..=300.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.nav_tail_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.nav_tail_pos.z, -800.0..=0.0).text("Z"));
+
+                    ui.separator();
+                    ui.label("Strobes (auto-flash)");
+                    ui.add(egui::Slider::new(&mut lc.strobe_intensity, 0.0..=100_000.0)
+                        .text("Strobe intensity (lux)").logarithmic(true));
+                    ui.add(egui::Slider::new(&mut lc.strobe_period, 0.3..=3.0)
+                        .text("Strobe period (s)"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_on_time, 0.01..=0.3)
+                        .text("Flash duration (s)"));
+                    ui.label("Strobe left");
+                    ui.add(egui::Slider::new(&mut lc.strobe_left_pos.x, -800.0..=0.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_left_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_left_pos.z, -800.0..=800.0).text("Z"));
+                    ui.label("Strobe right");
+                    ui.add(egui::Slider::new(&mut lc.strobe_right_pos.x, 0.0..=800.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_right_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_right_pos.z, -800.0..=800.0).text("Z"));
+                    ui.label("Strobe tail");
+                    ui.add(egui::Slider::new(&mut lc.strobe_tail_pos.x, -300.0..=300.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_tail_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.strobe_tail_pos.z, -800.0..=0.0).text("Z"));
+
+                    ui.separator();
+                    ui.label("Beacon (engine-on pulse)");
+                    ui.add(egui::Slider::new(&mut lc.beacon_intensity, 0.0..=20_000.0)
+                        .text("Beacon intensity (lux)"));
+                    ui.add(egui::Slider::new(&mut lc.beacon_period, 0.3..=3.0)
+                        .text("Beacon period (s)"));
+                    ui.add(egui::Slider::new(&mut lc.beacon_pos.x, -3000.0..=3000.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.beacon_pos.y, -2000.0..=1000.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.beacon_pos.z, -5000.0..=5000.0).text("Z"));
+
+                    ui.separator();
+                    ui.label("Landing light (L key)");
+                    ui.add(egui::Slider::new(&mut lc.landing_intensity, 0.0..=20_000_000.0)
+                        .text("Landing intensity (lux)").logarithmic(true));
+                    ui.add(egui::Slider::new(&mut lc.landing_pitch_deg, -20.0..=20.0)
+                        .text("Pitch down (°)"));
+                    ui.add(egui::Slider::new(&mut lc.landing_outer_deg, 5.0..=140.0)
+                        .text("Outer cone (°)"));
+                    ui.add(egui::Slider::new(&mut lc.landing_inner_deg, 1.0..=140.0)
+                        .text("Inner cone (°)"));
+                    ui.add(egui::Slider::new(&mut lc.landing_pos.x, -300.0..=300.0).text("X"));
+                    ui.add(egui::Slider::new(&mut lc.landing_pos.y, -200.0..=300.0).text("Y"));
+                    ui.add(egui::Slider::new(&mut lc.landing_pos.z, -100.0..=600.0).text("Z"));
+
+                    ui.separator();
+                    if ui.button("Reset lights").clicked() {
+                        *lc = crate::physics::flight_config::LightsConfig::default();
                     }
                 });
 

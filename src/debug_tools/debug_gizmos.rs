@@ -1,6 +1,7 @@
 use avian3d::prelude::{AngularVelocity, CenterOfMass, LinearVelocity};
 use bevy::prelude::*;
 
+use crate::lights::{Beacon, LandingLight, NavLightLeft, NavLightRight, NavLightTail, StrobeLeft, StrobeRight, StrobeTail};
 use crate::physics::aero_surface::AeroSurface;
 use crate::physics::aircraft_physics::{AircraftRoot, ground_effect_factor};
 use crate::physics::flight_config::FlightModelConfig;
@@ -196,5 +197,64 @@ pub fn draw_aero_gizmos(
         let ac_color = Color::srgb(1.0, 0.9, 0.0); // yellow
         gizmos.sphere(Isometry3d::from_translation(ac_world), 0.25, ac_color);
         gizmos.line(com_world, ac_world, ac_color);
+    }
+}
+
+/// Draws a small sphere at each exterior light's world position (color-coded
+/// by type) and a forward arrow for the landing spotlight. Runs under the same
+/// G toggle as the aero gizmos.
+#[allow(clippy::type_complexity)]
+pub fn draw_light_gizmos(
+    visible: Res<GizmosVisible>,
+    aircraft_q: Query<&Transform, With<Airplane>>,
+    nav_l_q:    Query<&Transform, (With<NavLightLeft>,  Without<Airplane>)>,
+    nav_r_q:    Query<&Transform, (With<NavLightRight>, Without<Airplane>)>,
+    nav_t_q:    Query<&Transform, (With<NavLightTail>,  Without<Airplane>)>,
+    str_l_q:    Query<&Transform, (With<StrobeLeft>,    Without<Airplane>)>,
+    str_r_q:    Query<&Transform, (With<StrobeRight>,   Without<Airplane>)>,
+    str_t_q:    Query<&Transform, (With<StrobeTail>,    Without<Airplane>)>,
+    beacon_q:   Query<&Transform, (With<Beacon>,        Without<Airplane>)>,
+    landing_q:  Query<&Transform, (With<LandingLight>,  Without<Airplane>)>,
+    mut gizmos: Gizmos,
+) {
+    if !visible.0 { return; }
+    let Ok(root_tf) = aircraft_q.single() else { return };
+
+    // Convert a child's local Transform to world position using the aircraft
+    // root's interpolated Transform (same approach as the aero gizmos).
+    let to_world = |local_tf: &Transform| root_tf.transform_point(local_tf.translation);
+
+    let r = 0.18_f32; // sphere radius for all light gizmos
+
+    for tf in &nav_l_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::srgb(1.0, 0.05, 0.05));
+    }
+    for tf in &nav_r_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::srgb(0.05, 1.0, 0.15));
+    }
+    for tf in &nav_t_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::WHITE);
+    }
+    for tf in &str_l_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::srgb(0.8, 0.8, 1.0));
+    }
+    for tf in &str_r_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::srgb(0.8, 0.8, 1.0));
+    }
+    for tf in &str_t_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::srgb(0.8, 0.8, 1.0));
+    }
+    for tf in &beacon_q {
+        gizmos.sphere(Isometry3d::from_translation(to_world(tf)), r, Color::srgb(1.0, 0.1, 0.1));
+    }
+
+    // Landing light: sphere + an arrow showing the beam direction.
+    // SpotLight shines along local -Z of the child; the child's rotation
+    // already points it forward-down, so world_dir = root_rot * child_rot * (-Z).
+    for tf in &landing_q {
+        let world_pos = to_world(tf);
+        let beam_dir = (root_tf.rotation * tf.rotation) * Vec3::NEG_Z;
+        gizmos.sphere(Isometry3d::from_translation(world_pos), r, Color::srgb(1.0, 1.0, 0.6));
+        gizmos.arrow(world_pos, world_pos + beam_dir * 4.0, Color::srgb(1.0, 1.0, 0.6));
     }
 }

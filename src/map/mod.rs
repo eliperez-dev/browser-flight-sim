@@ -130,6 +130,11 @@ impl Default for BreadcrumbTrail {
     }
 }
 
+/// Rows of the 256×256 background texture baked per frame. At 256 rows total,
+/// 10 rows/frame means ~26 frames (~0.4 s at 60 fps) to fill a fresh view —
+/// imperceptible for a map that only rebakes after panning settles.
+const BAKE_ROWS_PER_FRAME: u32 = 20;
+
 /// All map view + interaction state. The background texture is rebaked only when
 /// the *baked* fields fall out of step with the live view (see [`view_changed`]).
 #[derive(Resource)]
@@ -152,8 +157,15 @@ pub struct MapState {
     baked_center: Vec2,
     baked_world_per_texel: f32,
     baked_layer: MapLayer,
-    /// False until the first bake, so the texture fills before the first draw.
+    /// False until the first bake completes, so the texture fills before drawing.
     baked: bool,
+    /// Next texture row to bake (0 = idle / done, >0 = bake in progress).
+    bake_row: u32,
+    /// Center / zoom / layer frozen at the start of the current bake pass so the
+    /// incremental rows are all sampled for the same view.
+    bake_pass_center: Vec2,
+    bake_pass_world_per_texel: f32,
+    bake_pass_layer: MapLayer,
     /// Whether the user dragged/zoomed on the *previous* frame. Baking is held
     /// off while this is set so a continuous pan doesn't resample 65k noise
     /// points every frame — the cached texture is slid/scaled to follow the view
@@ -211,6 +223,10 @@ fn setup_map(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         baked_world_per_texel: 0.0,
         baked_layer: MapLayer::default(),
         baked: false,
+        bake_row: 0,
+        bake_pass_center: Vec2::ZERO,
+        bake_pass_world_per_texel: 0.0,
+        bake_pass_layer: MapLayer::default(),
         interacting: false,
     });
 }
@@ -278,17 +294,44 @@ fn draw_map(
         }
     }
 
-    // Rebake only when the view actually changed *and* the user isn't mid-gesture
-    // (held off below): a continuous pan/zoom would otherwise resample the whole
-    // texture every frame and stutter. A generator change (new seed/scale) or a
-    // water-level change always rebakes — they're one-offs, not per-frame gestures.
-    if (state.view_changed() && !state.interacting) || generator.is_changed() || water.is_changed() {
+    // Start a new incremental bake pass whenever the view has settled and changed,
+    // or when the generator / water level changed (one-offs, restart immediately).
+    // While a gesture is in flight we hold off starting a new pass — the old
+    // texture slides to follow the view instead, and we kick off once it settles.
+    // Only reset bake_row when there isn't already a pass in progress, so we don't
+    // keep restarting from row 0 every frame while baked=false.
+    let force_restart = generator.is_changed() || water.is_changed();
+    let pass_idle = state.bake_row >= render::TEX;
+    if force_restart || (pass_idle && state.view_changed() && !state.interacting) {
+        // Snapshot the view for this pass and immediately adopt it as the display
+        // position so the partial texture is always shown at the correct location
+        // rather than at the old baked position until the pass finishes.
+        state.bake_pass_center = state.center;
+        state.bake_pass_world_per_texel = state.world_per_texel;
+        state.bake_pass_layer = state.layer;
+        state.baked_center = state.center;
+        state.baked_world_per_texel = state.world_per_texel;
+        state.baked_layer = state.layer;
+        state.bake_row = 0;
+        // Wipe the texture so stale pixels from the previous view don't bleed
+        // through while the new pass fills in row by row.
         if let Some(image) = images.get_mut(&state.image) {
-            render::bake(image, &generator, &state, water.sea_level);
-            state.baked_center = state.center;
-            state.baked_world_per_texel = state.world_per_texel;
-            state.baked_layer = state.layer;
-            state.baked = true;
+            if let Some(data) = image.data.as_mut() {
+                data.fill(0);
+            }
+        }
+    }
+
+    // Advance the incremental bake by up to BAKE_ROWS_PER_FRAME rows this frame.
+    if state.bake_row < render::TEX {
+        if let Some(image) = images.get_mut(&state.image) {
+            let start = state.bake_row;
+            let end = (start + BAKE_ROWS_PER_FRAME).min(render::TEX);
+            render::bake_rows(image, &generator, start, end, state.bake_pass_center, state.bake_pass_world_per_texel, state.bake_pass_layer, water.sea_level);
+            state.bake_row = end;
+            if state.bake_row >= render::TEX {
+                state.baked = true;
+            }
         }
     }
 
@@ -334,7 +377,7 @@ fn draw_map(
             let (response, painter) =
                 ui.allocate_painter(egui::vec2(340.0, 340.0), egui::Sense::click_and_drag());
             let rect = response.rect;
-            let view = View { rect, center: state.center, half: half_span(&state) };
+            let view = View { rect, center: state.center, half: half_span(state.world_per_texel) };
 
             // Background texture, drawn at the world bounds it was *baked* for and
             // mapped through the current view: it fills the widget when the view

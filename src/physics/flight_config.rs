@@ -99,6 +99,9 @@ pub struct FlightModelConfig {
     /// Configuation for landing gear
     pub landing_gear: LandingGearConfig,
 
+    // --- Aircraft lights --------------------------------------------------
+    pub lights: LightsConfig,
+
     // --- Mass & inertia ----------------------------------------------------
     /// Empty (zero-fuel, no occupants, no baggage) airframe mass (kg).
     /// C172 basic empty weight ≈ 767 kg. The fuel/cargo/occupant load is added
@@ -277,6 +280,85 @@ pub struct LandingGearConfig {
     pub gear_main_mount_height: f32,
 }
 
+/// Positions and intensities for the aircraft's exterior lights.
+///
+/// All positions are in **local units** (×0.1 → metres), relative to the
+/// aircraft root entity — the same space the propeller and debug-prop sliders
+/// use. Edit them live from the F3 "Lights" panel.
+#[derive(Clone)]
+pub struct LightsConfig {
+    // Nav lights (always on while running)
+    pub nav_left_pos:   Vec3, // red, left wingtip
+    pub nav_right_pos:  Vec3, // green, right wingtip
+    pub nav_tail_pos:   Vec3, // white, tail
+
+    // Strobe lights (white flash, wingtips + tail, anti-collision)
+    pub strobe_left_pos:  Vec3,
+    pub strobe_right_pos: Vec3,
+    pub strobe_tail_pos:  Vec3,
+    /// Period between flashes (seconds). Real C172 strobes fire every ~1.2 s.
+    pub strobe_period:  f32,
+    /// How long each flash stays lit (seconds).
+    pub strobe_on_time: f32,
+
+    // Beacon (red pulse on belly, on whenever engine is running)
+    pub beacon_pos: Vec3,
+    /// Beacon pulse period (seconds). Real rotating beacon feels like ~1 Hz.
+    pub beacon_period: f32,
+
+    // Landing light (bright forward spotlight; toggled with L)
+    pub landing_pos: Vec3,
+    /// Forward and slightly down: angles are in degrees, positive = nose-down.
+    pub landing_pitch_deg: f32,
+    /// Outer cone half-angle of the spotlight (degrees).
+    pub landing_outer_deg: f32,
+    /// Inner (bright) cone half-angle (degrees).
+    pub landing_inner_deg: f32,
+    /// Intensity of the landing light (lux).
+    pub landing_intensity: f32,
+
+    // Shared intensities
+    /// Intensity of the nav position lights (lux).
+    pub nav_intensity: f32,
+    /// Peak intensity of each strobe flash (lux).
+    pub strobe_intensity: f32,
+    /// Peak intensity of the anti-collision beacon (lux).
+    pub beacon_intensity: f32,
+}
+
+impl Default for LightsConfig {
+    fn default() -> Self {
+        Self {
+            // Nav lights: wingtips at ±55 local X, tail at -65 Z.
+            // Y=10 puts them at wing height; tail sits slightly above the tailplane.
+            nav_left_pos:   Vec3::new(-650.0, 130.0, 100.0),
+            nav_right_pos:  Vec3::new( 650.0, 130.0, 100.0),
+            nav_tail_pos:   Vec3::new(  0.0, 40.0, -620.0),
+
+            // Strobes co-located with nav lights (real C172 has combined units).
+            strobe_left_pos:  Vec3::new(-650.0, 130.0, 100.0),
+            strobe_right_pos: Vec3::new( 650.0, 130.0, 100.0),
+            strobe_tail_pos:  Vec3::new(  0.0, 40.0, -620.0),
+            strobe_period:    1.2,
+            strobe_on_time:   0.07, // brief pop
+
+            beacon_pos:    Vec3::new(0.0, 240.0, -530.0),
+            beacon_period: 1.0,
+
+            // Landing light: on the nose, angled ~5° down to light the runway.
+            landing_pos:       Vec3::new(0.0, 5.0, 30.0),
+            landing_pitch_deg: 5.0,
+            landing_outer_deg: 25.0,
+            landing_inner_deg: 10.0,
+            landing_intensity: 80_000.0,
+
+            nav_intensity:     1000.0,
+            strobe_intensity:  9_000.0,
+            beacon_intensity:  6_000.0,
+        }
+    }
+}
+
 impl Default for LandingGearConfig {
     fn default() -> Self {
         Self {
@@ -351,6 +433,8 @@ impl Default for FlightModelConfig {
             propeller: PropellerConfig::default(),
 
             landing_gear: LandingGearConfig::default(),
+
+            lights: LightsConfig::default(),
 
             mass:                 767.0, // C172 basic empty weight
             angular_inertia:      Vec3::new(1825.0, 2667.0, 1285.0),

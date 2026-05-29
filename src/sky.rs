@@ -41,7 +41,7 @@ const NUM_STARS: usize = 2500;
 /// stars so it draws in front of them.
 const SUN_DISTANCE: f32 = 13_000.0;
 /// World-space radius of the sun disc at [`SUN_DISTANCE`] (≈1.3° across).
-const SUN_RADIUS: f32 = 300.0;
+const SUN_RADIUS: f32 = 400.0;
 
 // ---------------------------------------------------------------------------
 // Resource & components
@@ -68,8 +68,8 @@ pub struct DayNightCycle {
 impl Default for DayNightCycle {
     fn default() -> Self {
         Self {
-            time_of_day: 0.35, // mid-morning so the world starts lit
-            speed: 0.005,
+            time_of_day: 0.85, // mid-morning so the world starts lit
+            speed: 0.002,
             inclination: 0.3,
             tint_fog: true,
             fog_haze: 0.05,
@@ -156,9 +156,10 @@ fn spawn_sun(
     commands.spawn((
         Mesh3d(meshes.add(Sphere::new(1.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.95, 0.8),
+            base_color: Color::srgb(1.0, 1.0, 1.0),
             unlit: true,
             fog_enabled: false,
+
             ..default()
         })),
         Transform::from_scale(Vec3::splat(SUN_RADIUS)),
@@ -308,9 +309,14 @@ fn update_daylight_cycle(
     let sky = night_sky.lerp(day_sky, daylight).lerp(sunset_sky, sunset_factor);
     let sky_color = Color::srgb(sky.x, sky.y, sky.z);
 
+    let day_sun = Vec3::new(1.0, 0.95, 0.8);
+    let sunset_sun = Vec3::new(1.0, 0.45, 0.15);
+    let sun_color = day_sun.lerp(sunset_sun, sunset_factor);
+
     if let Ok((mut transform, mut light)) = sun_q.single_mut() {
         transform.rotation = final_rotation;
         light.illuminance = daylight * MAX_ILLUMINANCE;
+        light.color = Color::srgb(sun_color.x, sun_color.y, sun_color.z);
     }
 
     ambient.brightness = AMBIENT_NIGHT + (AMBIENT_DAY - AMBIENT_NIGHT) * daylight;
@@ -360,9 +366,7 @@ fn update_daylight_cycle(
             disc_tf.translation = camera_pos - sun_dir * SUN_DISTANCE;
             disc_tf.scale = Vec3::splat(SUN_RADIUS);
             if let Some(material) = materials.get_mut(material_handle) {
-                let day_sun = Vec3::new(1.0, 0.95, 0.8);
-                let sunset_sun = Vec3::new(1.0, 0.45, 0.15);
-                let c = day_sun.lerp(sunset_sun, sunset_factor);
+                let c = sun_color;
                 material.base_color = Color::srgb(c.x, c.y, c.z);
             }
         }

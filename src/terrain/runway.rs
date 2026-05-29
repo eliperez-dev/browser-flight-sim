@@ -123,6 +123,25 @@ pub struct RunwaySlab {
     pos: Vec2,
 }
 
+/// Marks a REIL strobe — flashes at ~1 Hz.
+#[derive(Component)]
+pub struct ReilLight;
+
+/// Marks one bar of an approach lighting sequence. `index` is the bar's distance
+/// step from the threshold (1 = nearest, N = farthest); `end` is +1 or -1 for
+/// which runway end this belongs to.
+#[derive(Component)]
+pub struct AlsLight {
+    pub index: i32,
+    pub end: i32,
+}
+
+/// Global clock driving runway light animation.
+#[derive(Resource, Default)]
+pub struct RunwayLightClock {
+    pub elapsed: f32,
+}
+
 /// Grid cells whose runway is currently spawned (visually).
 #[derive(Resource, Default)]
 pub struct SpawnedRunways {
@@ -499,10 +518,29 @@ fn spawn_runway(
                     PIXEL_LAYER,
                 ));
 
+                // REIL: one bright strobe each side of the threshold.
+                for side in [-1.0_f32, 1.0] {
+                    parent.spawn((
+                        PointLight {
+                            color: Color::srgb(1.0, 0.15, 0.1),
+                            intensity: 5_000_000.0,
+                            range: RANGE_REIL,
+                            radius: 1.5,
+                            shadows_enabled: false,
+                            ..default()
+                        },
+                        Transform::from_xyz(side * (RUNWAY_WIDTH * 0.5 + 5.0), light_y + 0.5, tz),
+                        PIXEL_LAYER,
+                        ReilLight,
+                    ));
+                }
+
                 // Approach lighting (ALS): one wide light per bar, radius fakes the
                 // 18 m cross-bar spread. 3 bars × 2 ends = 6 lights total.
+                // Bars sequence toward the threshold ("the rabbit").
                 const ALS_BARS: i32 = 3;
                 const ALS_SPACING: f32 = 60.0;
+                let end_i = if end_sign > 0.0 { 1_i32 } else { -1_i32 };
                 for j in 1..=ALS_BARS {
                     let z = tz + end_sign * j as f32 * ALS_SPACING;
                     parent.spawn((
@@ -516,8 +554,41 @@ fn spawn_runway(
                         },
                         Transform::from_xyz(0.0, light_y + 1.5, z),
                         PIXEL_LAYER,
+                        AlsLight { index: j, end: end_i },
                     ));
                 }
             }
         });
+}
+
+/// Animates REIL strobes and ALS sequencing bars every frame.
+///
+/// - REIL: flashes at ~1 Hz (50 ms on, 950 ms off).
+/// - ALS: one bar is lit at a time, stepping toward the threshold at ~10 Hz,
+///   giving the classic "rabbit" effect pilots use on final approach.
+pub fn animate_runway_lights(
+    time: Res<Time>,
+    mut clock: ResMut<RunwayLightClock>,
+    mut reil: Query<&mut PointLight, (With<ReilLight>, Without<AlsLight>)>,
+    mut als: Query<(&AlsLight, &mut PointLight), Without<ReilLight>>,
+) {
+    clock.elapsed += time.delta_secs();
+    let t = clock.elapsed;
+
+    // REIL: 1 Hz flash — on for 50 ms at the top of each second.
+    let reil_on = (t % 1.0) < 0.05;
+    for mut light in &mut reil {
+        light.intensity = if reil_on { 2_000_000.0 } else { 0.0 };
+    }
+
+    // ALS rabbit: cycle through bars farthest→nearest at 10 Hz (100 ms per step).
+    // `active` is which bar index (1=nearest threshold, 3=farthest) is lit.
+    const ALS_BARS: i32 = 3;
+    const ALS_HZ: f32 = 2.0;
+    // Step 0 = bar 3 (farthest), step 2 = bar 1 (nearest threshold).
+    let step = ((t * ALS_HZ) as i32).rem_euclid(ALS_BARS);
+    let active_index = ALS_BARS - step; // counts down 3→2→1→3→…
+    for (als, mut light) in &mut als {
+        light.intensity = if als.index == active_index { 2_000_000.0 } else { 0.0 };
+    }
 }
