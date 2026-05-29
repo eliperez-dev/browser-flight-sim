@@ -162,7 +162,7 @@ pub fn apply_aero_forces(
     state.speed = lin_vel.length();
     state.thrust = cfg.thrust_max * thrust_factor;
     let drag_dir = -lin_vel.normalize_or_zero();
-    state.drag_surface = final_ft.force.dot(drag_dir).max(0.0) * 0.85;
+    state.drag_surface = final_ft.force.dot(drag_dir).max(0.0);
     state.drag_fuselage = fuselage_drag.dot(drag_dir).max(0.0);
     state.drag = state.drag_surface + state.drag_fuselage;
     let lift_vertical = final_ft.force.dot(Vec3::Y).max(0.0);
