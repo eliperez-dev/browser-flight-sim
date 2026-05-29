@@ -133,7 +133,6 @@ pub struct ReilLight;
 #[derive(Component)]
 pub struct AlsLight {
     pub index: i32,
-    pub end: i32,
 }
 
 /// Global clock driving runway light animation.
@@ -540,7 +539,6 @@ fn spawn_runway(
                 // Bars sequence toward the threshold ("the rabbit").
                 const ALS_BARS: i32 = 3;
                 const ALS_SPACING: f32 = 60.0;
-                let end_i = if end_sign > 0.0 { 1_i32 } else { -1_i32 };
                 for j in 1..=ALS_BARS {
                     let z = tz + end_sign * j as f32 * ALS_SPACING;
                     parent.spawn((
@@ -554,7 +552,7 @@ fn spawn_runway(
                         },
                         Transform::from_xyz(0.0, light_y + 1.5, z),
                         PIXEL_LAYER,
-                        AlsLight { index: j, end: end_i },
+                        AlsLight { index: j  },
                     ));
                 }
             }

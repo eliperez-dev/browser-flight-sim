@@ -338,7 +338,7 @@ impl Default for LightsConfig {
             // Strobes co-located with nav lights (real C172 has combined units).
             strobe_left_pos:  Vec3::new(-650.0, 130.0, 100.0),
             strobe_right_pos: Vec3::new( 650.0, 130.0, 100.0),
-            strobe_tail_pos:  Vec3::new(  0.0, 40.0, -620.0),
+            strobe_tail_pos:  Vec3::new(0.0, 40.0, -620.0),
             strobe_period:    1.2,
             strobe_on_time:   0.07, // brief pop
 
@@ -346,11 +346,11 @@ impl Default for LightsConfig {
             beacon_period: 1.0,
 
             // Landing light: on the nose, angled ~5° down to light the runway.
-            landing_pos:       Vec3::new(0.0, 5.0, 30.0),
-            landing_pitch_deg: 5.0,
-            landing_outer_deg: 25.0,
-            landing_inner_deg: 10.0,
-            landing_intensity: 80_000.0,
+            landing_pos:       Vec3::new(0.0, 5.0, 320.0),
+            landing_pitch_deg: -5.0,
+            landing_outer_deg: 65.0,
+            landing_inner_deg: 25.0,
+            landing_intensity: 3_000_000.0,
 
             nav_intensity:     1000.0,
             strobe_intensity:  9_000.0,
@@ -388,25 +388,24 @@ impl Default for LandingGearConfig {
 impl Default for FlightModelConfig {
     fn default() -> Self {
         Self {
-            pitch_sensitivity:    0.80,
-            roll_sensitivity:     0.25,
-            yaw_sensitivity:      0.60,
+            pitch_sensitivity:    0.50,
+            roll_sensitivity:     0.22,
+            yaw_sensitivity:      0.45,
             throttle_rate:        0.5,
             servo_tau:            0.45,
   
-            elevator_trim:        0.00,
+            elevator_trim:        -0.15,
 
             // Supplemental damping only — the tail/fin/wings already provide the
             // primary rate damping aerodynamically, so keep this low to avoid
             // double-counting; re-tune via the slider.
-            aero_damp:            Vec3::new(0.5, 4.5, 1.25),
+            aero_damp:            Vec3::new(4.0, 4.5, 1.25),
 
             // Cd·A per body axis (side X, belly Y, nose Z). The nose is
             // streamlined (small Z) and is the only term that acts in normal
             // flight; the flank/belly terms bite in a skid or a high-AoA mush.
-            // Roughly broadside Cd·A for a light-aircraft fuselage, not the huge
-            // penalty value it used to be.
-            fuselage_drag:        Vec3::new(10.0, 10.0, 0.15),
+            // Roughly broadside Cd·A for a light-aircraft fuselage.
+            fuselage_drag:        Vec3::new(1.5, 2.0, 0.15),
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
@@ -415,7 +414,7 @@ impl Default for FlightModelConfig {
             // clear flare float, not arcade), and the span is the real C172
             // wingspan (~11 m) since ground-effect reach scales with the actual
             // wingspan and starts being felt about one span above the ground.
-            ground_effect_strength: 3.0,
+            ground_effect_strength: 1.0,
             ground_effect_span:     11.0,
 
             auto_level_strength:  18.0,
@@ -437,7 +436,10 @@ impl Default for FlightModelConfig {
             lights: LightsConfig::default(),
 
             mass:                 767.0, // C172 basic empty weight
-            angular_inertia:      Vec3::new(1825.0, 2667.0, 1285.0),
+            // Real C172 moments of inertia (kg·m²). Body axes: X=pitch (wing-to-wing),
+            // Y=yaw (vertical), Z=roll (nose). Published values: Ix(roll)≈1285,
+            // Iy(pitch)≈1285, Iz(yaw)≈1825. Previous values were wrong/swapped.
+            angular_inertia:      Vec3::new(1285.0, 1825.0, 1285.0),
             angular_damping:      0.0,
 
             cargo: CargoConfig::default(),
@@ -450,10 +452,9 @@ impl Default for FlightModelConfig {
             // the main gear or the aircraft tips back on its tail on the ground.
             center_of_mass:       Vec3::new(0.0, 1.0, 8.0),
 
-            // ~2° rigging incidence (real C172 is ~1.5°): wing flies at a useful
-            // AoA with the fuselage level, so it lifts off near book speed and
-            // cruises slightly nose-down. Bump up for an earlier/lighter takeoff.
-            wing_incidence:       2.0,
+            // 4° rigging incidence: enough lift at a gentle fuselage attitude so
+            // the pilot doesn't have to hold extreme back-pressure to stay airborne.
+            wing_incidence:       4.0,
 
             // Main wing panels: full-wing AR ≈ 7, 20%-chord flaps. (Area is
             // derived from chord × span; the two panels together sit near a real

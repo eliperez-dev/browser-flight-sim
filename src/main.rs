@@ -51,9 +51,13 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(AssetPlugin {
                 meta_check: AssetMetaCheck::Never,
+                
                 ..default()
             }),
-            FrameTimeDiagnosticsPlugin::default(),
+            FrameTimeDiagnosticsPlugin {
+                max_history_length: 120,
+                smoothing_factor: 2.0,
+            },
             FogPlugin,
             PhysicsPlugins::default(),
             DebugFlightMenuPlugin,
@@ -177,9 +181,11 @@ fn apply_config_to_entities(
         };
         surface.config = new_config.clone();
         // Re-apply the wing rigging incidence live to the main-wing (Flap) and
-        // aileron (Roll) panels. Other surfaces keep their spawned orientation.
+        // aileron (Roll) panels. Right-side panels (X > 0) use a negative dihedral
+        // sign so their outboard (+X) tip rises, matching the left-side geometry.
         if matches!(surface.input_type, ControlInputType::Flap | ControlInputType::Roll) {
-            tf.rotation = wing_panel_rotation(cfg.wing_incidence);
+            let dihedral_sign = if tf.translation.x >= 0.0 { -1.0 } else { 1.0 };
+            tf.rotation = wing_panel_rotation(cfg.wing_incidence, dihedral_sign);
         }
     }
 }

@@ -24,9 +24,9 @@ pub const ROOT_SCALE: f32 = 0.1;
 /// engaged, `Running` once it catches and fires on its own.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EngineState {
-    #[default]
     Off,
     Cranking,
+    #[default]
     Running,
 }
 
@@ -59,7 +59,7 @@ impl Default for AircraftRoot {
         Self {
             throttle_percent: 1.0,
             engine_rps: 0.0,
-            engine_state: EngineState::Off,
+            engine_state: EngineState::default(),
             crank_timer: 0.0,
             mixture: 1.0,
             flap_target: 0.0,

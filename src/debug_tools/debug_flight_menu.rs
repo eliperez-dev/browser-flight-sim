@@ -61,12 +61,12 @@ pub struct DebugMenuVisible(pub bool);
 // Systems
 // ---------------------------------------------------------------------------
 
-/// Toggle panel visibility with F3.
+/// Toggle panel visibility with 1.
 fn toggle_menu(
     keys: Res<ButtonInput<KeyCode>>,
     mut visible: ResMut<DebugMenuVisible>,
 ) {
-    if keys.just_pressed(KeyCode::F3) {
+    if keys.just_pressed(KeyCode::Digit1) || keys.just_pressed(KeyCode::F3) {
         visible.0 = !visible.0;
     }
 }

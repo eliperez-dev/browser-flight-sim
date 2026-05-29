@@ -530,7 +530,7 @@ const FOREST_LEVELS: &[TerrainStop] = &[
     TerrainStop { height: -1.0, color: Color::srgb(0.3, 0.2, 0.1) },
     TerrainStop { height: -0.5, color: Color::srgb(0.2, 0.4, 0.1) },
     TerrainStop { height: 0.3,  color: Color::srgb(0.1, 0.8, 0.1) },
-    TerrainStop { height: 2.7,  color: Color::srgb(0.4, 0.4, 0.4) },
+    TerrainStop { height: 2.7,  color: Color::srgb(0.05, 0.9, 0.05) },
     TerrainStop { height: 3.0,  color: Color::WHITE },
 ];
 

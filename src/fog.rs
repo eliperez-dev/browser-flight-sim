@@ -41,7 +41,7 @@ pub struct FogPlugin;
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FogSettings>()
-            .add_systems(Update, (toggle_fog, apply_fog));
+            .add_systems(Update, apply_fog);
     }
 }
 
@@ -84,12 +84,5 @@ pub(crate) fn apply_fog(
         }
     } else if has_fog.is_some() {
         commands.entity(entity).remove::<DistanceFog>();
-    }
-}
-
-// Press 1 to toggle fog on/off; `apply_fog` reacts to the flipped setting.
-fn toggle_fog(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<FogSettings>) {
-    if keys.just_pressed(KeyCode::Digit1) {
-        settings.enabled = !settings.enabled;
     }
 }

@@ -117,10 +117,10 @@ impl AeroSurface {
         effective_aspect_ratio: f32,
     ) -> Vec3 {
         let padding_high = f32::to_radians(f32::lerp(
-            15.0, 5.0, (self.flap_angle.to_degrees() + 50.0) / 100.0,
+            5.0, 2.0, (self.flap_angle.to_degrees() + 50.0) / 100.0,
         ));
         let padding_low = f32::to_radians(f32::lerp(
-            15.0, 5.0, (-self.flap_angle.to_degrees() + 50.0) / 100.0,
+            5.0, 2.0, (-self.flap_angle.to_degrees() + 50.0) / 100.0,
         ));
         let padded_high = stall_high + padding_high;
         let padded_low = stall_low - padding_low;
@@ -146,16 +146,17 @@ impl AeroSurface {
     }
 
     fn coeffs_low_aoa(&self, aoa: f32, lift_slope: f32, zero_lift_aoa: f32, effective_aspect_ratio: f32) -> Vec3 {
-        // `lift_slope` is already the ground-effect-boosted corrected slope, so a
-        // higher effective AR shows up directly as more lift here.
         let cl = lift_slope * (aoa - zero_lift_aoa);
-        // The induced angle uses the same effective AR, so the cushion that adds
-        // lift also sheds induced drag.
+        // Standard wing polar: CD = CD0 + CL² / (π·e·AR).
+        // The old flat-plate formula (cn·sin(eff) + ct·cos(eff)) over-predicted
+        // drag by 2-3× at typical cruise AoA, making the aircraft unflyable.
+        let oswald = 0.8_f32;
+        let cd = self.config.skin_friction + cl * cl / (std::f32::consts::PI * oswald * effective_aspect_ratio);
+        // Pitching moment: ~-0.1 at zero lift for a cambered section, shifting
+        // forward with lift as the centre of pressure moves.
         let induced_angle = cl / (std::f32::consts::PI * effective_aspect_ratio);
         let eff = aoa - zero_lift_aoa - induced_angle;
-        let ct = self.config.skin_friction * eff.cos();
-        let cn = (cl + eff.sin() * ct) / eff.cos();
-        let cd = cn * eff.sin() + ct * eff.cos();
+        let cn = cl / eff.cos().max(0.01);
         let cm = -cn * self.torque_coeff_proportion(eff);
         Vec3::new(cl, cd, cm)
     }

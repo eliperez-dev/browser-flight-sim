@@ -234,7 +234,7 @@ pub fn toggle_landing_light(
     keys: Res<ButtonInput<KeyCode>>,
     mut timers_q: Query<&mut LightTimers, With<Airplane>>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyL) { return; }
+    if !keys.just_pressed(KeyCode::KeyN) { return; }
     for mut t in &mut timers_q {
         t.landing_light_on = !t.landing_light_on;
     }

@@ -150,23 +150,42 @@ pub fn draw_aero_gizmos(
         let pos = tf.transform_point(local_tf.translation);
         let rot = tf.rotation * local_tf.rotation;
 
-        gizmos.sphere(Isometry3d::from_translation(pos), 0.15, Color::srgb(1.0, 0.55, 0.0));
+        // Surface geometry rectangle: span along local Z, chord along local X.
+        // Half-extents in world space.
+        let c = &surface.config;
+        let hs = c.span * 0.5; // half-span
+        let hc = c.chord * 0.5; // half-chord
+        let span_dir = rot * Vec3::Z;  // local Z = span
+        let chord_dir = rot * Vec3::X; // local X = chord
+        let surface_color = if surface.is_control_surface {
+            Color::srgba(0.3, 0.9, 1.0, 0.8)
+        } else {
+            Color::srgba(0.2, 1.0, 0.4, 0.8)
+        };
+        // Four corners of the panel
+        let corners = [
+            pos + span_dir * hs + chord_dir * hc,
+            pos - span_dir * hs + chord_dir * hc,
+            pos - span_dir * hs - chord_dir * hc,
+            pos + span_dir * hs - chord_dir * hc,
+        ];
+        gizmos.line(corners[0], corners[1], surface_color);
+        gizmos.line(corners[1], corners[2], surface_color);
+        gizmos.line(corners[2], corners[3], surface_color);
+        gizmos.line(corners[3], corners[0], surface_color);
+        // Diagonals so the panel is visible from afar
+        gizmos.line(corners[0], corners[2], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
+        gizmos.line(corners[1], corners[3], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
 
-        // Actual aerodynamic force this surface produces right now, using the
-        // same calculation as the physics step (so it tracks AoA, control
-        // deflection and stall). world_air_vel includes the rotation-induced
-        // flow, matching sum_aero_forces in aircraft_physics.rs.
+        // Actual aerodynamic force this surface produces right now.
         let rel_pos = pos - com_world;
         let world_air_vel = -vel - ang_vel.0.cross(rel_pos);
-        // Match the physics step: scale the induced term by the same
-        // ground-effect factor so the force arrow tracks the cushion near the
-        // runway instead of diverging from what the aircraft actually feels.
         let ge = ground_effect_factor(pos.y - GROUND_Y, cfg.ground_effect_span, cfg.ground_effect_strength);
         let force = surface
             .calculate_forces(world_air_vel, cfg.air_density, rel_pos, rot, ge)
             .force;
 
-        // AC sampling: uniform freestream (no rotation term), base vs perturbed AoA.
+        // AC sampling
         let fb = surface.calculate_forces(base_wind, cfg.air_density, rel_pos, rot, ge).force;
         let fp = surface.calculate_forces(pert_wind, cfg.air_density, rel_pos, rot, ge).force;
         f_base += fb;
@@ -174,6 +193,7 @@ pub fn draw_aero_gizmos(
         f_pert += fp;
         m_pert += rel_pos.cross(fp);
 
+        // Force arrow (lift+drag resultant)
         let arrow_len = (force.length() * FORCE_TO_M).min(6.0);
         let lift_color = if surface.is_control_surface {
             Color::srgb(0.4, 1.0, 0.4)
@@ -182,7 +202,24 @@ pub fn draw_aero_gizmos(
         };
         gizmos.arrow(pos, pos + force.normalize_or_zero() * arrow_len, lift_color);
 
-        gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.25));
+        // AoA indicator: only shown when actually flying.
+        if vel.length() > 5.0 {
+            let airflow_dir = world_air_vel.normalize_or_zero();
+            let chord_len = hc.min(1.2) * 2.2;
+            gizmos.arrow(pos, pos + airflow_dir * chord_len * 1.3, Color::srgba(1.0, 1.0, 1.0, 0.7));
+        }
+
+        // Control deflection: draw a rotated chord line in orange showing the
+        // trailing-edge flap angle relative to the panel's chord direction.
+        if surface.is_control_surface && surface.flap_angle.abs() > 0.005 {
+            let panel_up = rot * Vec3::Y;
+            let deflect_dir = chord_dir * surface.flap_angle.cos()
+                + panel_up * surface.flap_angle.sin();
+            let hinge = pos + chord_dir * hc * 0.25; // approximate hinge at 75% chord
+            gizmos.line(hinge, hinge + deflect_dir * hc * 0.7, Color::srgb(1.0, 0.35, 0.05));
+        }
+
+        gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.15));
     }
 
     // Draw the aerodynamic center once there's a meaningful lift-curve response
