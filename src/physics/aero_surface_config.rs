@@ -36,7 +36,10 @@ impl AeroSurfaceConfig {
         Self {
             lift_slope: std::f32::consts::TAU,
             skin_friction: 0.02,
-            zero_lift_aoa: 0.0,
+            // Negative incidence: tail produces a nose-down download in cruise,
+            // countering the wing's natural nose-up pitching moment. Real C172
+            // horizontal stab is set at roughly -2° relative to the fuselage.
+            zero_lift_aoa: -2.0,
             stall_angle_high: 15.0,
             stall_angle_low: -15.0,
             chord,

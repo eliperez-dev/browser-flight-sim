@@ -28,7 +28,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, egui};
 
 use crate::plane::Airplane;
-use crate::terrain::{RunwayInstance, TerrainCamera, WorldGenerator, runway_ident, runways_in_region};
+use crate::terrain::{Airport, TerrainCamera, WorldGenerator, airports_in_region, runway_ident};
 use crate::water::WaterSettings;
 
 use render::{TEX, View, half_span};
@@ -148,9 +148,9 @@ pub struct MapState {
     /// While set, the map re-centres on the aircraft each frame; a pan clears it.
     follow: bool,
     /// The airport whose info panel is shown (clicked), if any.
-    selected: Option<RunwayInstance>,
+    selected: Option<Airport>,
     /// The active "direct-to" destination, if any (drawn as a course line).
-    waypoint: Option<RunwayInstance>,
+    waypoint: Option<Airport>,
     /// CPU-baked background, handed to egui as a texture.
     image: Handle<Image>,
     // --- snapshot of the view the current texture was baked for ---
@@ -408,7 +408,7 @@ fn draw_map(
             // --- Overlays (cheap, redrawn every frame), back to front ---
             render::draw_breadcrumbs(&painter, &trail.crumbs, &icons, &view);
 
-            let runways = runways_in_region(
+            let airports = airports_in_region(
                 &generator,
                 view.center.x - view.half,
                 view.center.y - view.half,
@@ -417,19 +417,20 @@ fn draw_map(
             );
             render::draw_airports(
                 &painter,
-                &runways,
+                &airports,
                 seed,
-                state.selected.map(|s| s.cell),
+                state.selected.as_ref().map(|s| s.cell),
                 render::idents_visible(state.world_per_texel),
                 &icons,
                 &view,
             );
 
-            if let (Some((ppos, _)), Some(wp)) = (plane, state.waypoint) {
+            if let (Some((ppos, _)), Some(wp)) = (plane, &state.waypoint) {
+                let (wx, wz) = wp.pos();
                 render::draw_waypoint(
                     &painter,
                     ppos,
-                    Vec2::new(wp.x, wp.z),
+                    Vec2::new(wx, wz),
                     &runway_ident(seed, wp.cell),
                     &icons,
                     &view,
@@ -454,14 +455,15 @@ fn draw_map(
             // --- Click to select an airport / right-click to clear ---
             if response.clicked() {
                 if let Some(p) = response.interact_pointer_pos() {
-                    let mut best: Option<(f32, RunwayInstance)> = None;
-                    for r in &runways {
-                        let d = view.to_screen(Vec2::new(r.x, r.z)).distance(p);
+                    let mut best: Option<(f32, usize)> = None;
+                    for (i, ap) in airports.iter().enumerate() {
+                        let (ax, az) = ap.pos();
+                        let d = view.to_screen(Vec2::new(ax, az)).distance(p);
                         if d < 12.0 && best.is_none_or(|(bd, _)| d < bd) {
-                            best = Some((d, *r));
+                            best = Some((d, i));
                         }
                     }
-                    state.selected = best.map(|(_, r)| r);
+                    state.selected = best.map(|(_, i)| airports[i].clone());
                 }
             }
             if response.secondary_clicked() {
@@ -469,13 +471,15 @@ fn draw_map(
                 state.waypoint = None;
             }
 
-            // --- Identify panel + direct-to: a small popup floating on the map
-            // just below the selected airport's marker (only while it's on-map). ---
-            if let Some(a) = state.selected {
-                let marker = view.to_screen(Vec2::new(a.x, a.z));
+            // --- Identify panel + direct-to ---
+            if let Some(ref a) = state.selected {
+                let (ax, az) = a.pos();
+                let marker = view.to_screen(Vec2::new(ax, az));
                 if rect.contains(marker) {
                     let ident = runway_ident(seed, a.cell);
-                    let (r1, r2) = a.runway_numbers();
+                    let primary = a.primary();
+                    let (r1, r2) = primary.runway_numbers();
+                    let strip_count = a.strips.len();
                     let mut set_wp = false;
                     egui::Area::new(egui::Id::new("map_airport_info"))
                         .order(egui::Order::Foreground)
@@ -483,11 +487,16 @@ fn draw_map(
                         .constrain_to(rect)
                         .show(ui.ctx(), |ui| {
                             egui::Frame::popup(ui.style().as_ref()).show(ui, |ui| {
-                                ui.set_max_width(150.0);
+                                ui.set_max_width(160.0);
                                 ui.strong(&ident);
-                                ui.label(format!("Coords: {:.0}, {:.0}", a.x, a.z));
-                                ui.label(format!("Elevation: {:.0} m", a.elevation));
-                                ui.label(format!("Runways: {r1:02} / {r2:02}"));
+                                ui.label(a.kind.display_name());
+                                ui.label(format!("Coords: {ax:.0}, {az:.0}"));
+                                ui.label(format!("Elevation: {:.0} m", primary.elevation));
+                                if strip_count > 1 {
+                                    ui.label(format!("{strip_count}× {:.0} m rwy", primary.length));
+                                } else {
+                                    ui.label(format!("Rwy {r1:02}/{r2:02}  {:.0} m", primary.length));
+                                }
                                 ui.menu_button("Direct to ▾", |ui| {
                                     if ui.button(format!("Direct To {ident}")).clicked() {
                                         set_wp = true;
@@ -497,7 +506,7 @@ fn draw_map(
                             });
                         });
                     if set_wp {
-                        state.waypoint = Some(a);
+                        state.waypoint = Some(a.clone());
                     }
                 }
             }

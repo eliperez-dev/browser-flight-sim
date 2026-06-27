@@ -1,6 +1,6 @@
 use avian3d::prelude::{
     AngularDamping, AngularInertia, CenterOfMass, Gravity,
-    Mass, Physics, PhysicsPlugins, PhysicsTime
+    Mass, Physics, PhysicsPlugins, PhysicsSchedule, PhysicsStepSystems, PhysicsTime
 };
 use bevy::{
     asset::AssetMetaCheck,
@@ -26,7 +26,7 @@ use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_pr
 use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, draw_light_gizmos, setup_gizmo_config, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
-use crate::physics::airplane_controller::airplane_controller;
+use crate::physics::airplane_controller::{airplane_controller, flight_assist};
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::apply_landing_gear;
 
@@ -40,6 +40,7 @@ mod plane;
 mod sky;
 mod terrain;
 mod water;
+mod waypoints;
 
 use crate::terrain::{TerrainCamera, TerrainPlugin, WorldGenerator};
 
@@ -66,12 +67,17 @@ fn main() {
             crate::map::MapPlugin,
             crate::sky::SkyPlugin,
             AircraftLightsPlugin,
+            crate::waypoints::WaypointsPlugin,
         ))
         // Cap the virtual-time step so a stutter frame never gives the physics
         // integrator a huge dt that over-compresses the spring-damper struts.
         // 33 ms ≈ 30 fps minimum; anything slower is clamped, trading real-time
         // accuracy for numerical stability (springs can't blow up on lag spikes).
-        .insert_resource(Time::<Virtual>::from_max_delta(std::time::Duration::from_millis(33)))
+        // Physics runs inside FixedPostUpdate at a fixed 60 Hz timestep.
+        // FixedUpdate accumulates real elapsed time and fires as many ticks as
+        // needed per frame, so physics always runs at real-time speed regardless
+        // of framerate. TransformInterpolation on the aircraft smooths rendering.
+        .insert_resource(Time::<Fixed>::from_hz(60.0))
         // Initial gravity; kept in sync with cfg.gravity by
         // apply_config_to_entities so the debug slider drives the real force.
         // The same value is fed into our velocity predictor in aircraft_physics.
@@ -81,15 +87,20 @@ fn main() {
         .init_resource::<DebugHud>()
         .init_resource::<GizmosVisible>()
         .add_systems(Startup, (setup, setup_gizmo_config))
-        .add_systems(Update, (
-            // Controller and aero forces run in Update so they are in sync with
-            // Avian's PhysicsSchedule, which also runs once per render frame
-            // using the real frame delta rather than a fixed timestep.
-            // Running them in FixedUpdate caused a rate mismatch that produced
-            // the visible stepping / snapping artifacts.
-            (airplane_controller, apply_aero_forces, apply_landing_gear)
+        .add_systems(
+            // Run force systems in PhysicsSchedule before BroadPhase so they
+            // execute at the same fixed timestep as Avian's integrator.
+            // This means physics advances at a constant rate regardless of
+            // framerate — no slowdown at low fps. TransformInterpolation on
+            // the aircraft entity handles smooth rendering between steps.
+            PhysicsSchedule,
+            (airplane_controller, flight_assist, apply_aero_forces, apply_landing_gear)
                 .chain()
+                .after(PhysicsStepSystems::First)
+                .before(PhysicsStepSystems::BroadPhase)
                 .run_if(|t: Res<Time<Physics>>| !t.is_paused()),
+        )
+        .add_systems(Update, (
             toggle_camera_mode,
             toggle_gizmos,
             toggle_pause,

@@ -107,11 +107,11 @@ pub fn spawn_aircraft(
     // Rz(+dihedral) tilts the surface so sideslip in a bank creates asymmetric AoA
     // on the two wings, generating a natural restoring roll moment.
     let dihedral = WING_DIHEDRAL_DEG.to_radians();
-    // Main wing panel is the inboard section (~2.0 m semispan center); the
-    // ailerons sit just outboard of it. Mounting the panel center at local 20
-    // keeps the wingtip near 5.5 m (≈11 m total span) instead of overlapping
-    // the aileron panels, and gives a realistic dihedral roll moment arm.
-    const WING_X: f32 = 20.0;
+    // Wing panel centre sits at X=25 local (2.5 m) so the root falls at 0.475 m
+    // from the centreline (just outboard of the fuselage) and the tip at 4.525 m.
+    // The aileron root is flush against that tip (no gap, no overlap).
+    // Combined: wing (4.05 m) + aileron (0.95 m) = 5.0 m per side → 11.0 m span.
+    const WING_X: f32 = 25.0;
     let dihedral_h = WING_X * dihedral.tan();
     // Left panels: Rz(+dihedral) raises their -X tip (outboard).
     // Right panels: Rz(-dihedral) raises their +X tip (outboard).
@@ -134,18 +134,19 @@ pub fn spawn_aircraft(
         Transform::from_xyz(WING_X, WING_Y + dihedral_h, WING_Z).with_rotation(rot_r),
     )).id();
 
-    // Ailerons: outer 28% of wing span, 35% chord flap — C172 ~1.5m span each
+    // Aileron centre at X=50 local (5.0 m): root at 4.525 m (flush with wing tip),
+    // tip at 5.475 m. Full semispan ≈ 5.475 m → wingspan ≈ 10.95 m ≈ 11 m.
     let aileron_config = cfg.aileron.clone();
 
-    let aileron_dihedral_h = 44.0 * dihedral.tan();
+    let aileron_dihedral_h = 50.0 * dihedral.tan();
     let aileron_l = commands.spawn((
         AeroSurface::control(aileron_config.clone(), ControlInputType::Roll, -1.0),
-        Transform::from_xyz(-44.0, WING_Y + aileron_dihedral_h, WING_Z).with_rotation(rot_l),
+        Transform::from_xyz(-50.0, WING_Y + aileron_dihedral_h, WING_Z).with_rotation(rot_l),
     )).id();
 
     let aileron_r = commands.spawn((
         AeroSurface::control(aileron_config, ControlInputType::Roll, 1.0),
-        Transform::from_xyz(44.0, WING_Y + aileron_dihedral_h, WING_Z).with_rotation(rot_r),
+        Transform::from_xyz(50.0, WING_Y + aileron_dihedral_h, WING_Z).with_rotation(rot_r),
     )).id();
 
     // Body lift surfaces (non-control)

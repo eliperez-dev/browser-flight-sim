@@ -504,6 +504,10 @@ fn draw_menu(
                 .show(ui, |ui| {
                     ui.add(egui::Slider::new(&mut cfg.auto_level_strength, 0.0..=500.0)
                         .text("Auto-level strength"));
+                    ui.add(egui::Slider::new(&mut cfg.pitch_assist_strength, 0.0..=500.0)
+                        .text("Pitch assist strength"));
+                    ui.add(egui::Slider::new(&mut cfg.pitch_rate_damp, 0.0..=500.0)
+                        .text("Pitch rate damp"));
                     ui.add(egui::Slider::new(&mut cfg.bank_turn_strength, 0.0..=500.0)
                         .text("Bank-to-turn strength"));
                 });

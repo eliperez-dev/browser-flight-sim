@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::terrain::{Biome, RunwayInstance, WorldGenerator, runway_ident};
+use crate::terrain::{Airport, Biome, WorldGenerator, runway_ident};
 
 use super::{Breadcrumb, MapIconSettings, MapLayer};
 
@@ -198,12 +198,10 @@ const PLANE: egui::Color32 = egui::Color32::from_rgb(255, 230, 60);
 const CAMERA: egui::Color32 = egui::Color32::from_rgb(120, 220, 255);
 const WAYPOINT: egui::Color32 = egui::Color32::from_rgb(255, 140, 40);
 
-/// Draws every nearby runway as a heading-oriented strip with a centre dot,
-/// optionally its ident, and a ring around the selected one. `runways` is already
-/// filtered to the visible region.
+/// Draws one map pin per airport (one per cell, regardless of parallel strip count).
 pub fn draw_airports(
     painter: &egui::Painter,
-    runways: &[RunwayInstance],
+    airports: &[Airport],
     seed: u32,
     selected: Option<(i32, i32)>,
     show_idents: bool,
@@ -212,29 +210,25 @@ pub fn draw_airports(
 ) {
     let stroke = egui::Stroke::new(icons.runway_width, AIRPORT);
     let circle_d = icons.airport_circle * 2.0;
-    for r in runways {
-        let pos = Vec2::new(r.x, r.z);
-        let center = view.to_screen(pos);
-        // Screen-space heading: the strip runs along the runway's local +Z,
-        // rotated by `heading` about Y (matching `spawn_runway`), so local +Z →
-        // world (sin θ, cos θ), which maps straight onto the screen axes.
-        let (s, c) = r.heading.sin_cos();
+    for ap in airports {
+        let primary = ap.primary();
+        let (ax, az) = ap.pos();
+        let center = view.to_screen(Vec2::new(ax, az));
+        let (s, c) = primary.heading.sin_cos();
         let hdir = egui::vec2(s, c);
 
-        // The real 2 km strip's on-screen length at this zoom. Its drawn *width*
-        // is always the stroke (constant px) — only the length tracks zoom.
-        let screen_len = crate::terrain::RUNWAY_LENGTH / view.world_per_px();
-
+        // Always draw the circle anchor so the airport reads as one pin.
+        // When zoomed in enough, also draw each strip's to-scale line on top.
+        painter.circle(center, icons.airport_circle, AIRPORT, egui::Stroke::NONE);
+        let screen_len = primary.length / view.world_per_px();
         if screen_len > circle_d {
-            // Zoomed in: the runway "to scale" (length follows zoom).
-            let half = hdir * (screen_len * 0.5);
-            painter.line_segment([center - half, center + half], stroke);
+            for strip in &ap.strips {
+                let sc = view.to_screen(Vec2::new(strip.x, strip.z));
+                let strip_screen_len = strip.length / view.world_per_px();
+                let half = hdir * (strip_screen_len * 0.5);
+                painter.line_segment([sc - half, sc + half], stroke);
+            }
         } else {
-            // Zoomed out: a fixed-size MSFS-style airport symbol — a filled
-            // circle in the airport colour with a white runway line laid across
-            // it, extended past the circle radius to exaggerate the heading.
-            // Size is fully zoom-independent.
-            painter.circle(center, icons.airport_circle, AIRPORT, egui::Stroke::NONE);
             let half = hdir * (icons.airport_circle * 1.3);
             painter.line_segment(
                 [center - half, center + half],
@@ -242,7 +236,7 @@ pub fn draw_airports(
             );
         }
 
-        if selected == Some(r.cell) {
+        if selected == Some(ap.cell) {
             painter.circle_stroke(
                 center,
                 icons.selected_ring,
@@ -253,7 +247,7 @@ pub fn draw_airports(
             painter.text(
                 center + egui::vec2(icons.airport_circle + 3.0, 0.0),
                 egui::Align2::LEFT_CENTER,
-                runway_ident(seed, r.cell),
+                runway_ident(seed, ap.cell),
                 egui::FontId::proportional(icons.label_font),
                 egui::Color32::WHITE,
             );

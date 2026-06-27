@@ -3,6 +3,7 @@
 //! All tunable constants are read from [`FlightModelConfig`] so they can be
 //! adjusted at runtime via the debug menu without a recompile.
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::camera::CameraMode;
@@ -172,5 +173,77 @@ pub fn airplane_controller(
         };
         let new_angle = surface.flap_angle + (target - surface.flap_angle) * alpha;
         surface.set_flap_angle(new_angle);
+    }
+}
+
+/// Applies gentle auto-leveling torques on axes with no active pilot input.
+///
+/// Roll: when no A/D input, torque nudges wings toward level.
+/// Pitch: when no W/S input, torque nudges nose toward level pitch.
+///
+/// Both corrections scale with airspeed so they are authority-proportional —
+/// they fade near stall and are firm at cruise. They never fight an active
+/// input: the moment a key is pressed the correction drops to zero on that axis.
+pub fn flight_assist(
+    keys: Res<ButtonInput<KeyCode>>,
+    cfg: Res<FlightModelConfig>,
+    camera_mode: Res<CameraMode>,
+    mut aircraft_q: Query<Forces, With<AircraftRoot>>,
+) {
+    let Ok(mut forces) = aircraft_q.single_mut() else { return };
+
+    // Suppress attitude inputs in free-cam (same gate as airplane_controller).
+    if *camera_mode == CameraMode::Free {
+        return;
+    }
+
+    let rot: Quat = forces.rotation().0;
+    let airspeed = forces.linear_velocity().length();
+
+    // Body axes: nose is +Z, right wing is +X, up is +Y (local).
+    let world_up = Vec3::Y;
+    let body_right = rot * Vec3::X; // world-space right-wing direction
+
+    // --- Roll auto-level ---------------------------------------------------
+    // Bank angle: how far the aircraft has rolled from wings-level.
+    // sin(bank) = body_right · world_up — positive when right wing is high.
+    //
+    // Torque axis: the body's nose direction projected onto the horizontal plane.
+    // Using raw body_nose (rot * Vec3::Z) breaks at high pitch because the nose
+    // points nearly straight up, turning the roll correction into a spin about
+    // the vertical axis — which manifests as a violent yaw snap.
+    let roll_input_active = keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::KeyD);
+    if !roll_input_active {
+        let bank_sin = body_right.dot(world_up);
+        let body_nose = rot * Vec3::Z;
+        // Use the horizontal projection of the nose as the roll torque axis so the
+        // correction always rolls about the aircraft's actual longitudinal axis,
+        // even when the nose is pitched steeply up or down.
+        let roll_axis = Vec3::new(body_nose.x, 0.0, body_nose.z).normalize_or(Vec3::Z);
+        // Fade auto-level out near stall speed (~25 m/s) so it doesn't snap-roll
+        // the aircraft when sideslip and dihedral geometry already couple strongly.
+        let stall_fade = ((airspeed - 25.0) / 15.0).clamp(0.0, 1.0);
+        let roll_torque = -cfg.auto_level_strength * bank_sin * airspeed * stall_fade * roll_axis;
+        forces.apply_torque(roll_torque);
+    }
+
+    // --- Pitch stabilization -----------------------------------------------
+    // Nudges the nose back toward level (pitch = 0°) on both sides — nose-up
+    // and nose-down. The corrective torque is proportional to sin(pitch), so
+    // it's gentle near level and stronger at extreme attitudes.
+    let pitch_input_active = keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::KeyS);
+    if !pitch_input_active {
+        let body_nose = rot * Vec3::Z;
+        let pitch_sin = body_nose.dot(world_up); // positive = nose up, negative = nose down
+        // Pitch axis: right-hand rule about +X rotates +Y toward +Z (nose UP).
+        // So to correct nose-up (pitch_sin > 0) we torque about -X.
+        let body_pitch_axis = rot * Vec3::NEG_X;
+        // Attitude correction — nudges nose toward level.
+        let pitch_torque = -cfg.pitch_assist_strength * pitch_sin * airspeed * body_pitch_axis;
+        // Rate damping — opposes pitch angular velocity directly, killing phugoid oscillations.
+        let ang_vel: Vec3 = forces.angular_velocity();
+        let pitch_rate = (rot.inverse() * ang_vel).x; // body-frame pitch rate, positive = nose up
+        let rate_torque = -cfg.pitch_rate_damp * pitch_rate * airspeed * body_pitch_axis;
+        forces.apply_torque(pitch_torque + rate_torque);
     }
 }

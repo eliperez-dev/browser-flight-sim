@@ -114,7 +114,12 @@ pub fn apply_aero_forces(
     // gentle ~6% of max thrust, so the aircraft just creeps at idle.
     let rpm_fraction = (root.engine_rps / cfg.propeller.prop_max_rps.max(1e-3)).clamp(0.0, 1.0);
     let thrust_factor = rpm_fraction * rpm_fraction;
-    let thrust_force = nose * cfg.thrust_max * thrust_factor;
+    // Fixed-pitch prop loses thrust as airspeed increases — at zero speed it
+    // makes full static thrust; at prop_zero_thrust_speed the blades stall and
+    // net thrust is zero. Linear falloff matches real fixed-pitch behaviour well
+    // across the C172's normal speed range.
+    let speed_factor = (1.0 - lin_vel.length() / cfg.propeller.prop_zero_thrust_speed).clamp(0.0, 1.0);
+    let thrust_force = nose * cfg.thrust_max * thrust_factor * speed_factor;
 
     // Predict velocity (trapezoidal, matching Unity AircraftPhysics.cs)
     let vel_pred = lin_vel
@@ -160,7 +165,7 @@ pub fn apply_aero_forces(
 
     // Update shared PlaneState for HUD / camera
     state.speed = lin_vel.length();
-    state.thrust = cfg.thrust_max * thrust_factor;
+    state.thrust = cfg.thrust_max * thrust_factor * speed_factor;
     let drag_dir = -lin_vel.normalize_or_zero();
     state.drag_surface = final_ft.force.dot(drag_dir).max(0.0) * 0.85;
     state.drag_fuselage = fuselage_drag.dot(drag_dir).max(0.0);
@@ -221,4 +226,73 @@ pub fn ground_effect_factor(height: f32, span: f32, strength: f32) -> f32 {
     }
     let proximity = (-(2.0 * height.max(0.0) / span).powi(2)).exp();
     1.0 + strength * proximity
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ground_effect_factor;
+
+    const SPAN: f32 = 11.0;    // C172 wingspan (m), matches sim default
+    const STRENGTH: f32 = 1.0; // sim default
+
+    // At ground level the factor should equal 1 + strength (maximum boost).
+    #[test]
+    fn ground_effect_max_at_zero_height() {
+        let f = ground_effect_factor(0.0, SPAN, STRENGTH);
+        let expected = 1.0 + STRENGTH; // = 2.0
+        assert!((f - expected).abs() < 1e-5, "At h=0 factor should be {expected}, got {f}");
+    }
+
+    // At exactly half a span up, the Gaussian proximity = exp(-1) ≈ 0.368.
+    // Factor = 1 + 1.0 * 0.368 = 1.368.
+    #[test]
+    fn ground_effect_half_span() {
+        let h = SPAN / 2.0;
+        let f = ground_effect_factor(h, SPAN, STRENGTH);
+        let expected = 1.0 + STRENGTH * (-1.0_f32).exp();
+        assert!((f - expected).abs() < 1e-4,
+            "At h=span/2 factor should be {expected:.4}, got {f:.4}");
+    }
+
+    // At one full span, proximity = exp(-4) ≈ 0.018 → factor ≈ 1.018.
+    // The effect should be nearly gone (< 5% boost).
+    #[test]
+    fn ground_effect_negligible_at_one_span() {
+        let f = ground_effect_factor(SPAN, SPAN, STRENGTH);
+        assert!(f < 1.05,
+            "Ground effect should be <5% boost at one span altitude, got {f:.4}");
+        assert!(f > 1.0,
+            "Ground effect factor must be >= 1.0, got {f:.4}");
+    }
+
+    // Below ground (negative height) is clamped to zero — same as being on the deck.
+    #[test]
+    fn ground_effect_clamps_negative_height() {
+        let at_zero = ground_effect_factor(0.0, SPAN, STRENGTH);
+        let below   = ground_effect_factor(-5.0, SPAN, STRENGTH);
+        assert!((at_zero - below).abs() < 1e-5,
+            "Negative height should clamp to 0, got at_zero={at_zero} below={below}");
+    }
+
+    // With strength=0 the function always returns 1.0 regardless of height.
+    #[test]
+    fn ground_effect_disabled_when_strength_zero() {
+        assert_eq!(ground_effect_factor(0.0, SPAN, 0.0), 1.0);
+        assert_eq!(ground_effect_factor(5.0, SPAN, 0.0), 1.0);
+    }
+
+    // Factor must always be >= 1.0 and increase as height decreases.
+    #[test]
+    fn ground_effect_monotone_with_height() {
+        let heights = [20.0_f32, 11.0, 5.5, 2.0, 0.5, 0.0];
+        let factors: Vec<f32> = heights.iter()
+            .map(|&h| ground_effect_factor(h, SPAN, STRENGTH))
+            .collect();
+        for w in factors.windows(2) {
+            assert!(w[1] >= w[0],
+                "Factor must increase as height decreases: {:.4} then {:.4}", w[0], w[1]);
+        }
+        assert!(*factors.last().unwrap() <= 1.0 + STRENGTH + 1e-4,
+            "Factor must not exceed 1+strength");
+    }
 }

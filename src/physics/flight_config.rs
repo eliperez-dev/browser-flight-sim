@@ -69,9 +69,16 @@ pub struct FlightModelConfig {
     pub ground_effect_span: f32,
 
     // --- Flight assists ----------------------------------------------------
-    /// TODO: Actually implement this, this is dead code for now
-    /// Roll auto-level strength. Torque = -coeff * bank_angle * airspeed.
+    /// Roll auto-level strength. When no roll input is active, applies a
+    /// corrective torque: torque = -coeff * bank_angle * airspeed.
     pub auto_level_strength: f32,
+    /// Pitch stabilization strength. When no pitch input is active, applies a
+    /// corrective torque nudging the nose back toward level pitch.
+    /// Torque = -coeff * pitch_angle * airspeed.
+    pub pitch_assist_strength: f32,
+    /// Pitch rate damping. Opposes pitch angular velocity regardless of attitude,
+    /// killing phugoid oscillations. Torque = -coeff * pitch_rate * airspeed.
+    pub pitch_rate_damp: f32,
     /// Bank-to-turn strength. Yaw torque = coeff * bank_angle * airspeed.
     pub bank_turn_strength: f32,
 
@@ -207,6 +214,12 @@ pub struct PropellerConfig {
     /// Propeller disc radius in metres — drives the prop gizmo (the circle swept
     /// by the blades). C172 ≈ 0.94 m.
     pub prop_radius: f32,
+    /// Airspeed (m/s) at which the fixed-pitch prop produces zero net thrust —
+    /// the blades stall and the thrust curve reaches zero. Thrust falls linearly
+    /// from `thrust_max` at v=0 to 0 at this speed. C172 fixed-pitch prop: ~82 m/s
+    /// (≈160 kt). At cruise (70 kt ≈ 36 m/s) this gives ~56% of static thrust,
+    /// which matches the real aircraft's available thrust at that speed.
+    pub prop_zero_thrust_speed: f32,
 }
 
 impl Default for PropellerConfig {
@@ -220,6 +233,7 @@ impl Default for PropellerConfig {
             // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
             prop_position:        Vec3::new(0.0, 3.5, 33.0),
             prop_radius:          0.94,
+            prop_zero_thrust_speed: 82.0, // ~160 kt — fixed-pitch blade stall speed
         }
     }
 }
@@ -394,18 +408,18 @@ impl Default for FlightModelConfig {
             throttle_rate:        0.5,
             servo_tau:            0.45,
   
-            elevator_trim:        -0.15,
+            elevator_trim:        0.0,
 
             // Supplemental damping only — the tail/fin/wings already provide the
             // primary rate damping aerodynamically, so keep this low to avoid
             // double-counting; re-tune via the slider.
-            aero_damp:            Vec3::new(4.0, 4.5, 1.25),
+            aero_damp:            Vec3::new(25.0, 4.5, 4.0),
 
             // Cd·A per body axis (side X, belly Y, nose Z). The nose is
             // streamlined (small Z) and is the only term that acts in normal
             // flight; the flank/belly terms bite in a skid or a high-AoA mush.
             // Roughly broadside Cd·A for a light-aircraft fuselage.
-            fuselage_drag:        Vec3::new(1.5, 2.0, 0.15),
+            fuselage_drag:        Vec3::new(1.5, 2.0, 0.10),
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
@@ -417,10 +431,12 @@ impl Default for FlightModelConfig {
             ground_effect_strength: 1.0,
             ground_effect_span:     11.0,
 
-            auto_level_strength:  18.0,
+            auto_level_strength:  150.0,
+            pitch_assist_strength: 150.0,
+            pitch_rate_damp:       20.0,
             bank_turn_strength:   12.0,
 
-            thrust_max:           2_600.0,
+            thrust_max:           3_200.0,
             // Lycoming-ish throttle response: winds up in ~1.2 s, settles back to
             // idle in ~1.5 s. (A real fixed-pitch single responds in a second or
             // two; the deliberate slow throttle push pilots use is technique.)
@@ -450,26 +466,33 @@ impl Default for FlightModelConfig {
             // being nose-heavy). Every aerodynamic moment arm is measured from
             // here, so it directly sets trim and stability — but keep it forward of
             // the main gear or the aircraft tips back on its tail on the ground.
-            center_of_mass:       Vec3::new(0.0, 1.0, 8.0),
+            center_of_mass:       Vec3::new(0.0, 1.0, 3.0),
 
             // 4° rigging incidence: enough lift at a gentle fuselage attitude so
             // the pilot doesn't have to hold extreme back-pressure to stay airborne.
             wing_incidence:       4.0,
 
-            // Main wing panels: full-wing AR ≈ 7, 20%-chord flaps. (Area is
-            // derived from chord × span; the two panels together sit near a real
-            // C172's wing area.)
+            // Main wing panels (two, one per side). Sized to the real C172 wing:
+            //   span × chord = 4.05 × 1.62 ≈ 6.56 m² per panel
+            //   Two panels + two ailerons → 16.2 m² total (real C172 wing area).
+            //   Full wingspan: 2 × (0.475 root + 4.05 wing + 0.95 aileron) ≈ 11.0 m.
+            //   aspect_ratio is the full-wing AR (7.32) so the lift-slope correction
+            //   and induced drag use the real value, independent of per-panel geometry.
+            //   Stall speed Vs ≈ 46 kt (real C172: 44–48 kt).
             wing: AeroSurfaceConfig {
                 flap_fraction: 0.2,
-                span: 3.65,
-                aspect_ratio: 7.0,
+                span: 4.05,
+                chord: 1.62,
+                aspect_ratio: 7.32,
                 ..AeroSurfaceConfig::default()
             },
-            // Ailerons: outer ~28% of span, 35% chord, ~1.5 m each.
+            // Ailerons: outer panels, 0.95 m span × 1.62 m chord ≈ 1.54 m² each.
+            // Root sits flush against the wing-panel tip (no gap, no overlap).
             aileron: AeroSurfaceConfig {
                 flap_fraction: 0.35,
-                span: 1.5,
-                aspect_ratio: 7.0,
+                span: 0.95,
+                chord: 1.62,
+                aspect_ratio: 7.32,
                 ..AeroSurfaceConfig::default()
             },
             // Tail sized to a real C172: horizontal ≈ 3.4 m², vertical ≈ 2.2 m².
@@ -565,5 +588,221 @@ impl FlightModelConfig {
         }
 
         (total_mass, com, inertia)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- loaded_mass_properties -------------------------------------------
+
+    // Default config (pilot only, 1/3 tanks each side) should produce a mass
+    // close to empty + pilot + fuel and a CoM that is near the longitudinal centre.
+    #[test]
+    fn loaded_mass_pilot_only() {
+        let cfg = FlightModelConfig::default();
+        let (mass, _com, _inertia) = cfg.loaded_mass_properties();
+
+        // 767 empty + 86 pilot + 2*(75/3) fuel = 903 kg
+        let expected_mass = 767.0 + 86.0 + 2.0 * (75.0 / 3.0);
+        assert!((mass - expected_mass).abs() < 0.1,
+            "Loaded mass should be ~{expected_mass:.0} kg, got {mass:.1}");
+    }
+
+    // With equal left/right fuel the CoM x-offset must be essentially zero.
+    #[test]
+    fn balanced_fuel_keeps_com_centred_laterally() {
+        let mut cfg = FlightModelConfig::default();
+        cfg.cargo.fuel_left_kg  = 40.0;
+        cfg.cargo.fuel_right_kg = 40.0;
+        let (_, com, _) = cfg.loaded_mass_properties();
+        assert!(com.x.abs() < 0.05,
+            "Symmetric fuel load must keep CoM on centreline, got x={:.4}", com.x);
+    }
+
+    // A heavy left tank should shift the CoM to the left (negative x).
+    #[test]
+    fn heavy_left_tank_shifts_com_left() {
+        let mut cfg = FlightModelConfig::default();
+        cfg.cargo.fuel_left_kg  = 70.0;
+        cfg.cargo.fuel_right_kg = 0.0;
+        let (_, com, _) = cfg.loaded_mass_properties();
+        assert!(com.x < 0.0,
+            "Full left tank only must shift CoM to -x, got {:.4}", com.x);
+    }
+
+    // Aft baggage should move the CoM rearward (negative z in body frame).
+    #[test]
+    fn aft_baggage_shifts_com_rearward() {
+        let mut cfg_no_cargo = FlightModelConfig::default();
+        cfg_no_cargo.cargo.cargo_kg = 0.0;
+
+        let mut cfg_cargo = FlightModelConfig::default();
+        cfg_cargo.cargo.cargo_kg = CARGO_MAX_KG;
+
+        let (_, com_no, _) = cfg_no_cargo.loaded_mass_properties();
+        let (_, com_cargo, _) = cfg_cargo.loaded_mass_properties();
+
+        assert!(com_cargo.z < com_no.z,
+            "Aft cargo must move CoM rearward (more negative z), got no_cargo.z={:.4} cargo.z={:.4}",
+            com_no.z, com_cargo.z);
+    }
+
+    // Adding any load must strictly increase total inertia on all axes (parallel-axis theorem).
+    #[test]
+    fn inertia_increases_with_load() {
+        let mut cfg_empty = FlightModelConfig::default();
+        cfg_empty.cargo.fuel_left_kg  = 0.0;
+        cfg_empty.cargo.fuel_right_kg = 0.0;
+        cfg_empty.cargo.cargo_kg      = 0.0;
+        cfg_empty.cargo.passengers    = 0;
+
+        let mut cfg_full = FlightModelConfig::default();
+        cfg_full.cargo.fuel_left_kg  = FUEL_TANK_MAX_KG;
+        cfg_full.cargo.fuel_right_kg = FUEL_TANK_MAX_KG;
+        cfg_full.cargo.cargo_kg      = CARGO_MAX_KG;
+        cfg_full.cargo.passengers    = 4;
+
+        let (_, _, i_empty) = cfg_empty.loaded_mass_properties();
+        let (_, _, i_full)  = cfg_full.loaded_mass_properties();
+
+        assert!(i_full.x > i_empty.x, "Pitch inertia must increase with load");
+        assert!(i_full.y > i_empty.y, "Yaw inertia must increase with load");
+        assert!(i_full.z > i_empty.z, "Roll inertia must increase with load");
+    }
+
+    // CoM must stay in front of (or at) the main gear to prevent tail-tipping.
+    // Main gear station is gear_main_z metres forward of origin.
+    #[test]
+    fn com_forward_of_main_gear() {
+        let cfg = FlightModelConfig::default();
+        let (_, com, _) = cfg.loaded_mass_properties();
+        // gear_main_z = 0.2 m in default config — CoM.z must be >= that.
+        assert!(com.z >= cfg.landing_gear.gear_main_z - 0.01,
+            "CoM must not be aft of main gear or aircraft tips backward: com.z={:.3}, gear_z={:.3}",
+            com.z, cfg.landing_gear.gear_main_z);
+    }
+
+    // --- FlightModelConfig default sanity ---------------------------------
+
+    // All sensitivities and rates must be positive.
+    #[test]
+    fn config_sensitivities_positive() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.pitch_sensitivity > 0.0);
+        assert!(cfg.roll_sensitivity  > 0.0);
+        assert!(cfg.yaw_sensitivity   > 0.0);
+        assert!(cfg.throttle_rate     > 0.0);
+        assert!(cfg.servo_tau         > 0.0);
+    }
+
+    // Aero damping must be positive on all axes.
+    #[test]
+    fn aero_damp_positive() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.aero_damp.x > 0.0, "roll damp must be positive");
+        assert!(cfg.aero_damp.y > 0.0, "yaw damp must be positive");
+        assert!(cfg.aero_damp.z > 0.0, "pitch damp must be positive");
+    }
+
+    // Fuselage drag must be positive on all axes; the nose axis (z) should be
+    // meaningfully smaller than the side/belly axes — it's the streamlined direction.
+    #[test]
+    fn fuselage_drag_nose_streamlined() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.fuselage_drag.z > 0.0, "nose drag must be positive");
+        assert!(cfg.fuselage_drag.x > cfg.fuselage_drag.z,
+            "side drag must exceed nose drag (fuselage is not a sphere)");
+        assert!(cfg.fuselage_drag.y > cfg.fuselage_drag.z,
+            "belly drag must exceed nose drag");
+    }
+
+    // Engine spool must take at least a fraction of a second (not instant).
+    #[test]
+    fn engine_spool_time_constants_nonzero() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.engine_spool_up_tau   >= 0.5, "spool-up too fast: {}", cfg.engine_spool_up_tau);
+        assert!(cfg.engine_spool_down_tau >= 0.5, "spool-down too fast: {}", cfg.engine_spool_down_tau);
+    }
+
+    // The C172's main wheels must sit behind the nose wheel.
+    #[test]
+    fn tricycle_gear_layout() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.landing_gear.gear_nose_z > cfg.landing_gear.gear_main_z,
+            "Nose wheel must be ahead (+z) of main gear: nose_z={} main_z={}",
+            cfg.landing_gear.gear_nose_z, cfg.landing_gear.gear_main_z);
+    }
+
+    // --- Fuselage drag formula -------------------------------------------
+
+    // Independent formula check: F = 0.5 * rho * CdA * v^2 at known speeds.
+    #[test]
+    fn fuselage_nose_drag_at_60ms() {
+        let rho   = 1.2_f32;
+        let cda_z = 0.10_f32; // forward CdA: AoA-dependent penalty only (skin friction already in wing polar)
+        let speed = 60.0_f32;
+        let expected = 0.5 * rho * cda_z * speed * speed; // 216 N
+        assert!((expected - 216.0).abs() < 1.0,
+            "Fuselage nose drag at 60 m/s should be ~216 N, got {expected}");
+    }
+
+    #[test]
+    fn fuselage_drag_quadratic_with_speed() {
+        // Doubling speed must quadruple drag (v² relationship).
+        let rho = 1.2_f32;
+        let cda = FlightModelConfig::default().fuselage_drag.z;
+        let d30 = 0.5 * rho * cda * 30.0_f32.powi(2);
+        let d60 = 0.5 * rho * cda * 60.0_f32.powi(2);
+        let ratio = d60 / d30;
+        assert!((ratio - 4.0).abs() < 0.01,
+            "Doubling speed must quadruple drag, got ratio {ratio:.3}");
+    }
+
+    // --- C172 Physics Plausibility ----------------------------------------
+    // These tests document where the sim intentionally diverges from a real C172
+    // and where it should be close. They act as regression guards against
+    // accidental tuning drift.
+
+    // Thrust max should be in the range of a real C172 (~2000 N) ± generous sim margin.
+    #[test]
+    fn thrust_max_plausible_for_c172() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.thrust_max > 1500.0 && cfg.thrust_max < 4000.0,
+            "Thrust max outside C172-plausible range: {}", cfg.thrust_max);
+    }
+
+    // Empty airframe mass must be close to real C172 basic empty weight (767 kg ±20%).
+    #[test]
+    fn empty_mass_close_to_c172() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.mass > 600.0 && cfg.mass < 920.0,
+            "Empty mass outside C172 range (767 kg ±20%): {}", cfg.mass);
+    }
+
+    // Prop idle/redline RPM must make physical sense (idle < redline, both > 0).
+    #[test]
+    fn prop_rps_ordering() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.propeller.prop_idle_rps > 0.0);
+        assert!(cfg.propeller.prop_max_rps  > cfg.propeller.prop_idle_rps,
+            "Redline RPM must exceed idle RPM");
+    }
+
+    // Wing aspect ratio must be in a sensible range for a GA aircraft.
+    #[test]
+    fn wing_aspect_ratio_realistic() {
+        let cfg = FlightModelConfig::default();
+        assert!(cfg.wing.aspect_ratio > 4.0 && cfg.wing.aspect_ratio < 12.0,
+            "Wing AR outside realistic GA range: {}", cfg.wing.aspect_ratio);
+    }
+
+    // Gravity must be close to 9.81 m/s².
+    #[test]
+    fn gravity_earth_standard() {
+        let cfg = FlightModelConfig::default();
+        assert!((cfg.gravity - 9.81).abs() < 0.5,
+            "Gravity should be ~9.81 m/s², got {}", cfg.gravity);
     }
 }

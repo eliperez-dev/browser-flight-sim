@@ -30,7 +30,7 @@ pub const SKIRT_DEPTH: f32 = 50.0;
 /// Default vertical exaggeration applied to the (biome-shaped) noise. With the
 /// biome multipliers, taiga becomes tall mountains while desert/grass stay
 /// near-flat; this one knob scales the whole world's relief.
-pub const DEFAULT_HEIGHT_SCALE: f32 = 220.0;
+pub const DEFAULT_HEIGHT_SCALE: f32 = 160.0;
 
 /// Default horizontal frequency multiplier on every layer. Higher = tighter,
 /// more rugged terrain (and smaller biomes) for the same world distance. 3.0

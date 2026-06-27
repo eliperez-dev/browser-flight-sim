@@ -1907,6 +1907,7 @@ dependencies = [
  "bevy_egui",
  "noise",
  "osmpbf",
+ "tracing-wasm",
 ]
 
 [[package]]
