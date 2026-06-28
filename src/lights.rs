@@ -241,6 +241,7 @@ pub fn toggle_landing_light(
 }
 
 /// Drive strobe lights: a brief bright flash once per `strobe_period`.
+#[allow(clippy::type_complexity)]
 pub fn animate_strobes(
     time: Res<Time>,
     cfg: Res<FlightModelConfig>,
@@ -290,6 +291,7 @@ pub fn animate_beacon(
 
 /// Push [`FlightModelConfig::lights`] changes onto the live light entities, and
 /// drive the landing light on/off from [`LightTimers::landing_on`].
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn apply_lights_to_entities(
     cfg: Res<FlightModelConfig>,
     timers_q: Query<&LightTimers, With<Airplane>>,

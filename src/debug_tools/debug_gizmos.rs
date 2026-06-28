@@ -240,7 +240,7 @@ pub fn draw_aero_gizmos(
 /// Draws a small sphere at each exterior light's world position (color-coded
 /// by type) and a forward arrow for the landing spotlight. Runs under the same
 /// G toggle as the aero gizmos.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn draw_light_gizmos(
     visible: Res<GizmosVisible>,
     aircraft_q: Query<&Transform, With<Airplane>>,

@@ -56,6 +56,7 @@ impl AirportKind {
         }
     }
 
+    #[allow(dead_code)]
     pub fn display_name(self) -> &'static str {
         match self {
             AirportKind::DirtStrip     => "Dirt Strip",
@@ -138,6 +139,7 @@ pub struct RunwayInstance {
     pub kind: AirportKind,
     /// The grid cell this strip belongs to — its stable identity, used to derive
     /// a deterministic ident for the map overlay (see [`runway_ident`]).
+    #[allow(dead_code)]
     pub cell: (i32, i32),
 }
 
@@ -198,6 +200,7 @@ impl RunwayInstance {
 pub struct RunwaySlab {
     pub cell: (i32, i32),
     pub pos: Vec2,
+    #[allow(dead_code)]
     pub elevation: f32,
 }
 
@@ -318,7 +321,7 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
     let h = cell_hash(generator.seed(), gx, gz);
 
     // 20% spawn chance — skip 80% of cells entirely.
-    if hash_u32(h ^ 0xdeadbeef) % 2 != 0 {
+    if !hash_u32(h ^ 0xdeadbeef).is_multiple_of(2) {
         return vec![];
     }
 
@@ -375,7 +378,7 @@ pub fn airport_name(seed: u32, cell: (i32, i32), kind: AirportKind) -> String {
     let h = cell_hash(seed, cell.0, cell.1);
     let prefix = PREFIXES[(hash_u32(h ^ 0xaaaa_1111) as usize) % PREFIXES.len()];
     let name   = NAMES  [(hash_u32(h ^ 0xbbbb_2222) as usize) % NAMES.len()];
-    let use_aviation_suffix = hash_u32(h ^ 0xcccc_3333) % 4 != 0; // 75%
+    let use_aviation_suffix = !hash_u32(h ^ 0xcccc_3333).is_multiple_of(4); // 75%
     let suffix = if use_aviation_suffix {
         match kind {
             AirportKind::DirtStrip     => "Strip",
@@ -519,6 +522,7 @@ pub fn ground_height(generator: &WorldGenerator, x: f32, z: f32, natural: f32) -
 /// radius tracks the terrain render distance so strips don't appear beyond the
 /// terrain edge. A seed/scale change (generator rebuilt) wipes the set so the
 /// new layout repopulates next frame.
+#[allow(clippy::too_many_arguments)]
 pub fn stream_runways(
     mut commands: Commands,
     generator: Res<WorldGenerator>,

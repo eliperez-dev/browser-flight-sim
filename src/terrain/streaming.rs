@@ -37,6 +37,7 @@ const REGEN_DEBOUNCE: f32 = 0.25;
 /// dragging those sliders updates smoothly. Generation params (seed, scales) do
 /// need a fresh world, so they rebuild the [`WorldGenerator`] and clear every
 /// chunk, debounced so dragging settles first.
+#[allow(clippy::too_many_arguments)]
 pub fn regenerate_terrain(
     config: Res<WorldGenConfig>,
     time: Res<Time>,
@@ -301,14 +302,13 @@ fn displace_mesh(mesh: &mut Mesh, world_gen: &WorldGenerator, origin: Vec3) {
     //    ground rather than dark vertical faces. The split above emits one vertex
     //    per index in order, and the skirt indices were appended last, so the
     //    skirt occupies the final `skirt_indices` vertices.
-    if skirt_indices > 0 {
-        if let Some(VertexAttributeValues::Float32x3(normals)) =
+    if skirt_indices > 0
+        && let Some(VertexAttributeValues::Float32x3(normals)) =
             mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
-        {
-            let start = normals.len().saturating_sub(skirt_indices);
-            for normal in &mut normals[start..] {
-                *normal = [0.0, 1.0, 0.0];
-            }
+    {
+        let start = normals.len().saturating_sub(skirt_indices);
+        for normal in &mut normals[start..] {
+            *normal = [0.0, 1.0, 0.0];
         }
     }
 }
@@ -467,6 +467,7 @@ pub fn apply_chunk_meshes(
 /// When the camera crosses a chunk boundary, finds chunks whose distance band
 /// now calls for a different subdivision level and rebuilds their meshes (async,
 /// rate-limited). Chunks already mid-build are skipped via the `Without` filter.
+#[allow(clippy::too_many_arguments)]
 pub fn update_chunk_lod(
     mut commands: Commands,
     camera: Query<&Transform, With<TerrainCamera>>,

@@ -42,7 +42,7 @@ pub struct View {
 
 impl View {
     /// World (x, z) → screen pixels. World +X is right, world +Z is down.
-    pub fn to_screen(&self, world: Vec2) -> egui::Pos2 {
+    pub fn to_screen(self, world: Vec2) -> egui::Pos2 {
         let nx = (world.x - (self.center.x - self.half)) / (2.0 * self.half);
         let nz = (world.y - (self.center.y - self.half)) / (2.0 * self.half);
         egui::pos2(
@@ -53,7 +53,7 @@ impl View {
 
     /// Screen pixels → world (x, z). Inverse of [`Self::to_screen`], for the
     /// hover readout.
-    pub fn to_world(&self, screen: egui::Pos2) -> Vec2 {
+    pub fn to_world(self, screen: egui::Pos2) -> Vec2 {
         let nx = (screen.x - self.rect.left()) / self.rect.width();
         let nz = (screen.y - self.rect.top()) / self.rect.height();
         Vec2::new(
@@ -73,6 +73,7 @@ impl View {
 /// Bakes a horizontal slice of the background texture (`row_start..row_end`).
 /// Splitting the full 256×256 bake into small row batches spreads the noise
 /// cost over multiple frames so no single frame stalls.
+#[allow(clippy::too_many_arguments)]
 pub fn bake_rows(
     image: &mut Image,
     generator: &WorldGenerator,
@@ -116,7 +117,7 @@ fn biome_texel(generator: &WorldGenerator, x: f32, z: f32, sea_level: f32) -> [u
     let (h, lin) = generator.sample_natural(x, z);
     let lin = if h < sea_level {
         // Deeper water → darker, so coastlines and basins still read.
-        let shade = 1.0 - ((sea_level - h)).clamp(0.0, 0.6);
+        let shade = 1.0 - (sea_level - h).clamp(0.0, 0.6);
         LinearRgba::new(
             WATER_LINEAR[0] * shade,
             WATER_LINEAR[1] * shade,

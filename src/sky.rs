@@ -269,6 +269,7 @@ fn spawn_stars(
 /// Advances the clock, swings the sun, and recolours the world to match the
 /// time of day: sun illuminance, ambient fill, the camera's sky (clear) colour,
 /// an optional fog tint, and the visibility / twinkle of every star.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_daylight_cycle(
     time: Res<Time>,
     mut cycle: ResMut<DayNightCycle>,
@@ -343,15 +344,13 @@ fn update_daylight_cycle(
         camera_right = cam_tf.right().as_vec3();
         camera_up = cam_tf.up().as_vec3();
         camera.clear_color = ClearColorConfig::Custom(sky_color);
-        if cycle.tint_fog {
-            if let Some(mut fog) = fog {
-                fog.color = fog_color;
-                // Keep the Fog panel's glow strength (alpha) and tightness
-                // (exponent); only swing the hue with the time of day.
-                let strength = fog.directional_light_color.alpha();
-                fog.directional_light_color =
-                    Color::srgba(glow.x, glow.y, glow.z, strength);
-            }
+        if cycle.tint_fog && let Some(mut fog) = fog {
+            fog.color = fog_color;
+            // Keep the Fog panel's glow strength (alpha) and tightness
+            // (exponent); only swing the hue with the time of day.
+            let strength = fog.directional_light_color.alpha();
+            fog.directional_light_color =
+                Color::srgba(glow.x, glow.y, glow.z, strength);
         }
     }
 

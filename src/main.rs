@@ -150,6 +150,7 @@ fn toggle_pause(
 /// Surfaces are matched to their config by control input type, mirroring how
 /// `spawn_aircraft` built them, so editing `cfg.wing` updates both wing panels,
 /// `cfg.aileron` updates both ailerons, and so on.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_config_to_entities(
     cfg: Res<FlightModelConfig>,
     mut visual_q: Query<&mut Transform, (With<PlaneVisual>, Without<DebugPropeller>)>,
@@ -208,6 +209,7 @@ fn apply_config_to_entities(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,

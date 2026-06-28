@@ -79,6 +79,7 @@ fn toggle_menu(
 ///
 /// Runs on [`EguiPrimaryContextPass`], which targets the camera marked with
 /// [`bevy_egui::PrimaryEguiContext`] — the screen-space Camera2d in main.rs.
+#[allow(clippy::too_many_arguments)]
 fn draw_menu(
     mut contexts: EguiContexts,
     visible: Res<DebugMenuVisible>,

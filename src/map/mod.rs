@@ -268,6 +268,7 @@ fn log_breadcrumbs(
 /// Bakes the background if the view changed, then draws the window: layer tabs,
 /// the texture, all overlays, the identify / direct-to panel, a key, and the
 /// pan / zoom / click interaction.
+#[allow(clippy::too_many_arguments)]
 fn draw_map(
     mut contexts: EguiContexts,
     mut state: ResMut<MapState>,
@@ -288,10 +289,8 @@ fn draw_map(
         let fwd = tf.forward();
         (Vec2::new(tf.translation.x, tf.translation.z), Vec2::new(fwd.x, fwd.z))
     });
-    if state.follow {
-        if let Some((pos, _)) = plane {
-            state.center = pos;
-        }
+    if state.follow && let Some((pos, _)) = plane {
+        state.center = pos;
     }
 
     // Start a new incremental bake pass whenever the view has settled and changed,
@@ -315,23 +314,21 @@ fn draw_map(
         state.bake_row = 0;
         // Wipe the texture so stale pixels from the previous view don't bleed
         // through while the new pass fills in row by row.
-        if let Some(image) = images.get_mut(&state.image) {
-            if let Some(data) = image.data.as_mut() {
-                data.fill(0);
-            }
+        if let Some(image) = images.get_mut(&state.image)
+            && let Some(data) = image.data.as_mut() {
+            data.fill(0);
         }
     }
 
     // Advance the incremental bake by up to BAKE_ROWS_PER_FRAME rows this frame.
-    if state.bake_row < render::TEX {
-        if let Some(image) = images.get_mut(&state.image) {
-            let start = state.bake_row;
-            let end = (start + BAKE_ROWS_PER_FRAME).min(render::TEX);
-            render::bake_rows(image, &generator, start, end, state.bake_pass_center, state.bake_pass_world_per_texel, state.bake_pass_layer, water.sea_level);
-            state.bake_row = end;
-            if state.bake_row >= render::TEX {
-                state.baked = true;
-            }
+    if state.bake_row < render::TEX
+        && let Some(image) = images.get_mut(&state.image) {
+        let start = state.bake_row;
+        let end = (start + BAKE_ROWS_PER_FRAME).min(render::TEX);
+        render::bake_rows(image, &generator, start, end, state.bake_pass_center, state.bake_pass_world_per_texel, state.bake_pass_layer, water.sea_level);
+        state.bake_row = end;
+        if state.bake_row >= render::TEX {
+            state.baked = true;
         }
     }
 
@@ -453,18 +450,17 @@ fn draw_map(
             }
 
             // --- Click to select an airport / right-click to clear ---
-            if response.clicked() {
-                if let Some(p) = response.interact_pointer_pos() {
-                    let mut best: Option<(f32, usize)> = None;
-                    for (i, ap) in airports.iter().enumerate() {
-                        let (ax, az) = ap.pos();
-                        let d = view.to_screen(Vec2::new(ax, az)).distance(p);
-                        if d < 12.0 && best.is_none_or(|(bd, _)| d < bd) {
-                            best = Some((d, i));
-                        }
+            if response.clicked()
+                && let Some(p) = response.interact_pointer_pos() {
+                let mut best: Option<(f32, usize)> = None;
+                for (i, ap) in airports.iter().enumerate() {
+                    let (ax, az) = ap.pos();
+                    let d = view.to_screen(Vec2::new(ax, az)).distance(p);
+                    if d < 12.0 && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, i));
                     }
-                    state.selected = best.map(|(_, i)| airports[i].clone());
                 }
+                state.selected = best.map(|(_, i)| airports[i].clone());
             }
             if response.secondary_clicked() {
                 state.selected = None;
