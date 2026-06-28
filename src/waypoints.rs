@@ -1,25 +1,23 @@
 //! In-world waypoint labels for loaded runways.
 //!
-//! Each runway gets a vertical stalk (ground → 400 m above) projected into
-//! screen space, with bare text at the top — no background box. Labels are
-//! hidden when closer than 2 km (never plastered over your own aircraft) and
-//! fade out beyond 30 km.
+//! The vertical stalk is a 3D mesh (spawned by the runway streamer). This
+//! module controls stalk visibility and draws the egui text label projected
+//! from the stalk tip's world position.
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::{OuterCamera, PIXEL_HEIGHT, PIXEL_WIDTH};
 use crate::plane::Airplane;
-use crate::terrain::{RunwaySlab, WorldGenerator, runway_ident};
+use crate::terrain::{WaypointStalk, WorldGenerator, airport_name, runway_ident};
 use crate::terrain::TerrainCamera;
 
-/// Height above the runway elevation for the stalk base (sits just above the asphalt).
-const STALK_BASE_OFFSET: f32 = 2.0;
-/// Height above the runway elevation for the stalk tip and label (1 km up).
+/// Must match STALK_TIP_OFFSET / STALK_BASE_OFFSET in runway.rs.
 const STALK_TIP_OFFSET: f32 = 1000.0;
+const STALK_BASE_OFFSET: f32 = 2.0;
 
-/// Hide labels closer than this (they'd overlap the cockpit view).
-const MIN_DIST_KM: f32 = 2.0;
+/// Hide everything (stalk + label) closer than this.
+const MIN_DIST_KM: f32 = 3.0;
 /// Begin fading at this distance; invisible by FAR_DIST_KM.
 const FADE_START_KM: f32 = 30.0;
 const FAR_DIST_KM: f32 = 120.0;
@@ -28,14 +26,35 @@ pub struct WaypointsPlugin;
 
 impl Plugin for WaypointsPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(Update, update_stalk_visibility);
         app.add_systems(EguiPrimaryContextPass, draw_waypoint_labels);
+    }
+}
+
+/// Hides the 3D stalk mesh when the camera is within MIN_DIST_KM.
+/// Runs in Update so Visibility is set before the render frame.
+pub fn update_stalk_visibility(
+    plane_q: Query<&Transform, With<Airplane>>,
+    mut stalks: Query<(&WaypointStalk, &Transform, &mut Visibility)>,
+) {
+    let Ok(plane_tf) = plane_q.single() else { return };
+    let plane_pos = plane_tf.translation;
+
+    for (_stalk, stalk_tf, mut vis) in &mut stalks {
+        let pos = stalk_tf.translation;
+        let dist_km = Vec2::new(pos.x - plane_pos.x, pos.z - plane_pos.z).length() / 1000.0;
+        *vis = if dist_km < MIN_DIST_KM {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
     }
 }
 
 pub fn draw_waypoint_labels(
     mut contexts: EguiContexts,
     generator: Res<WorldGenerator>,
-    slabs: Query<&RunwaySlab>,
+    stalks: Query<(&WaypointStalk, &Transform)>,
     plane_q: Query<&Transform, With<Airplane>>,
     inner_cam_q: Query<(&Camera, &GlobalTransform), With<TerrainCamera>>,
     outer_proj_q: Query<&Projection, With<OuterCamera>>,
@@ -60,50 +79,32 @@ pub fn draw_waypoint_labels(
     let seed = generator.seed();
     let ctx = contexts.ctx_mut()?;
 
-    // Use a single layered painter so all waypoints share one draw layer and
-    // don't interfere with egui's widget layout.
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("waypoint_layer"),
     ));
 
-    // Deduplicate by cell: twin/hub airports spawn two RunwaySlabs, but we want
-    // one stalk centred between them. Average pos/elevation per cell.
-    let mut cell_map: std::collections::HashMap<(i32, i32), (Vec2, f32, u32)> =
-        std::collections::HashMap::new();
-    for slab in &slabs {
-        let e = cell_map.entry(slab.cell).or_insert((Vec2::ZERO, 0.0, 0));
-        e.0 += slab.pos;
-        e.1 += slab.elevation;
-        e.2 += 1;
-    }
+    let to_win = |cp: Vec2| egui::pos2(
+        cp.x * canvas_scale + canvas_offset_x,
+        cp.y * canvas_scale + canvas_offset_y,
+    );
 
-    for (cell, (pos_sum, elev_sum, count)) in &cell_map {
-        let n = *count as f32;
-        let pos = *pos_sum / n;
-        let elevation = elev_sum / n;
-
-        let dist_km = Vec2::new(pos.x - plane_pos.x, pos.y - plane_pos.z).length() / 1000.0;
-
+    for (stalk, stalk_tf) in &stalks {
+        let pos = stalk_tf.translation;
+        let dist_km = Vec2::new(pos.x - plane_pos.x, pos.z - plane_pos.z).length() / 1000.0;
         if dist_km < MIN_DIST_KM { continue; }
 
         let alpha = (1.0 - (dist_km - FADE_START_KM).max(0.0) / (FAR_DIST_KM - FADE_START_KM))
             .clamp(0.0, 1.0);
         if alpha <= 0.01 { continue; }
 
-        let base_world = Vec3::new(pos.x, elevation + STALK_BASE_OFFSET, pos.y);
-        let tip_world  = Vec3::new(pos.x, elevation + STALK_TIP_OFFSET,  pos.y);
-        let cell = *cell;
+        // Tip is at the top of the stalk. The stalk transform is at the midpoint,
+        // so tip_y = pos.y + (stalk_h / 2).
+        let stalk_h = STALK_TIP_OFFSET - STALK_BASE_OFFSET;
+        let tip_world = Vec3::new(pos.x, pos.y + stalk_h * 0.5, pos.z);
 
-        let Ok(base_canvas) = inner_cam.world_to_viewport(inner_gtf, base_world) else { continue };
-        let Ok(tip_canvas)  = inner_cam.world_to_viewport(inner_gtf, tip_world)  else { continue };
-
-        let to_win = |cp: Vec2| egui::pos2(
-            cp.x * canvas_scale + canvas_offset_x,
-            cp.y * canvas_scale + canvas_offset_y,
-        );
-        let base_win = to_win(base_canvas);
-        let tip_win  = to_win(tip_canvas);
+        let Ok(tip_canvas) = inner_cam.world_to_viewport(inner_gtf, tip_world) else { continue };
+        let tip_win = to_win(tip_canvas);
 
         if tip_win.x < -200.0 || tip_win.x > win_w + 200.0
         || tip_win.y < -100.0 || tip_win.y > win_h + 100.0 {
@@ -111,35 +112,36 @@ pub fn draw_waypoint_labels(
         }
 
         let a = (alpha * 255.0) as u8;
-        let stalk_color = egui::Color32::from_rgba_unmultiplied(220, 235, 255, (alpha * 180.0) as u8);
         let dot_color   = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
         let ident_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
-        let dist_color  = egui::Color32::from_rgba_unmultiplied(160, 200, 255, a);
+        let kind_color  = egui::Color32::from_rgba_unmultiplied(200, 220, 255, a);
+        let dist_color  = egui::Color32::from_rgba_unmultiplied(255, 200, 255, a);
 
-        painter.line_segment([base_win, tip_win], egui::Stroke::new(1.0, stalk_color));
-        painter.circle_filled(tip_win, 2.5, dot_color);
+        painter.circle_filled(tip_win, 3.5, dot_color);
 
-        let ident = runway_ident(seed, cell);
+        let ident     = runway_ident(seed, stalk.cell);
+        let kind_text = airport_name(seed, stalk.cell, stalk.kind);
         let dist_text = format!("{dist_km:.1} km");
 
-        let font_ident = egui::FontId::proportional(14.0);
-        let font_dist  = egui::FontId::proportional(12.0);
+        let font_ident = egui::FontId::proportional(17.0);
+        let font_kind  = egui::FontId::proportional(13.0);
+        let font_dist  = egui::FontId::proportional(14.0);
 
-        // Measure so we can centre both lines horizontally over the tip.
-        let ident_galley = painter.layout_no_wrap(ident.clone(), font_ident.clone(), ident_color);
-        let dist_galley  = painter.layout_no_wrap(dist_text.clone(), font_dist.clone(), dist_color);
+        let ident_galley = painter.layout_no_wrap(ident,      font_ident, ident_color);
+        let kind_galley  = painter.layout_no_wrap(kind_text.to_string(), font_kind, kind_color);
+        let dist_galley  = painter.layout_no_wrap(dist_text,  font_dist,  dist_color);
 
-        let line_gap = 2.0;
-        let ident_size = ident_galley.size();
-        let dist_size  = dist_galley.size();
-        let block_h = ident_size.y + line_gap + dist_size.y;
+        let gap = 2.0;
+        let ident_sz = ident_galley.size();
+        let kind_sz  = kind_galley.size();
+        let dist_sz  = dist_galley.size();
+        let block_h = ident_sz.y + gap + kind_sz.y + gap + dist_sz.y;
         let top_y = tip_win.y - block_h - 6.0;
 
-        let ident_x = tip_win.x - ident_size.x * 0.5;
-        let dist_x  = tip_win.x - dist_size.x * 0.5;
-
-        painter.galley(egui::pos2(ident_x, top_y), ident_galley, ident_color);
-        painter.galley(egui::pos2(dist_x, top_y + ident_size.y + line_gap), dist_galley, dist_color);
+        let cx = tip_win.x;
+        painter.galley(egui::pos2(cx - ident_sz.x * 0.5, top_y),                              ident_galley, ident_color);
+        painter.galley(egui::pos2(cx - kind_sz.x  * 0.5, top_y + ident_sz.y + gap),           kind_galley,  kind_color);
+        painter.galley(egui::pos2(cx - dist_sz.x  * 0.5, top_y + ident_sz.y + gap + kind_sz.y + gap), dist_galley,  dist_color);
     }
 
     Ok(())

@@ -11,13 +11,14 @@ use bevy::{
     render::render_resource::{
         Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     },
+    transform::TransformSystems,
 };
 
 use crate::{camera::{
     CameraMode, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, fit_canvas, free_cam_control, toggle_camera_mode, track_cam_control
 }, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
-use bevy_egui::PrimaryEguiContext;
+use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
 use crate::fog::FogPlugin;
@@ -30,6 +31,7 @@ use crate::physics::airplane_controller::{airplane_controller, flight_assist};
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::apply_landing_gear;
 
+mod airport_names;
 mod camera;
 mod fog;
 mod lights;
@@ -112,9 +114,14 @@ fn main() {
             (tag_propeller, spin_propeller).chain(),
             (populate_debug_hud, render_debug_hud).chain(),
         ))
-        // PostUpdate: transform propagation has already run, so GlobalTransform
-        // reflects the current frame position — no one-frame lag on gizmos.
-        .add_systems(PostUpdate, (track_cam_control, draw_aero_gizmos, draw_light_gizmos))
+        // Camera runs before TransformPropagate so its GlobalTransform is current
+        // by the time EguiPrimaryContextPass projects world positions to screen.
+        // EguiPostUpdateSet::EndPass (which runs EguiPrimaryContextPass) is also
+        // ordered after TransformPropagate to guarantee the label projection matches
+        // the same-frame GlobalTransform that the 3D stalk uses.
+        .add_systems(PostUpdate, track_cam_control.before(TransformSystems::Propagate))
+        .add_systems(PostUpdate, (draw_aero_gizmos, draw_light_gizmos).after(TransformSystems::Propagate))
+        .configure_sets(PostUpdate, EguiPostUpdateSet::EndPass.after(TransformSystems::Propagate))
         .run();
 }
 

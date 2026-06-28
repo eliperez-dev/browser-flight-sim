@@ -28,7 +28,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, egui};
 
 use crate::plane::Airplane;
-use crate::terrain::{Airport, TerrainCamera, WorldGenerator, airports_in_region, runway_ident};
+use crate::terrain::{Airport, TerrainCamera, WorldGenerator, airport_name, airports_in_region, runway_ident};
 use crate::water::WaterSettings;
 
 use render::{TEX, View, half_span};
@@ -477,6 +477,7 @@ fn draw_map(
                 let marker = view.to_screen(Vec2::new(ax, az));
                 if rect.contains(marker) {
                     let ident = runway_ident(seed, a.cell);
+                    let full_name = airport_name(seed, a.cell, a.kind);
                     let primary = a.primary();
                     let (r1, r2) = primary.runway_numbers();
                     let strip_count = a.strips.len();
@@ -487,9 +488,9 @@ fn draw_map(
                         .constrain_to(rect)
                         .show(ui.ctx(), |ui| {
                             egui::Frame::popup(ui.style().as_ref()).show(ui, |ui| {
-                                ui.set_max_width(160.0);
+                                ui.set_max_width(200.0);
                                 ui.strong(&ident);
-                                ui.label(a.kind.display_name());
+                                ui.label(&full_name);
                                 ui.label(format!("Coords: {ax:.0}, {az:.0}"));
                                 ui.label(format!("Elevation: {:.0} m", primary.elevation));
                                 if strip_count > 1 {

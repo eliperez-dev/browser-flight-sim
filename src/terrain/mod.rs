@@ -14,7 +14,7 @@ pub use generator::{Biome, BiomeShape, WorldGenConfig, WorldGenerator};
 /// Read-only airport layout, for the map overlay. `runways_in_region` recomputes
 /// the deterministic strips inside a world-space box (see [`runway`]); nothing is
 /// stored, so the map can list nearby airports without touching streaming state.
-pub use runway::{Airport, AirportKind, RUNWAY_LENGTH, RunwayInstance, RunwaySlab, airports_in_region, runway_ident, runways_in_region};
+pub use runway::{Airport, AirportKind, RUNWAY_LENGTH, RunwayInstance, RunwaySlab, WaypointStalk, airport_name, airports_in_region, runway_ident, runways_in_region};
 
 use bevy::prelude::*;
 
@@ -46,6 +46,7 @@ impl Plugin for TerrainPlugin {
                     // sync_runways then rebuilds the strips for the new layout.
                     streaming::regenerate_terrain,
                     runway::stream_runways,
+                    runway::scale_waypoint_stalks,
                     runway::animate_runway_lights,
                     streaming::generate_chunks,
                     streaming::displace_new_chunks,

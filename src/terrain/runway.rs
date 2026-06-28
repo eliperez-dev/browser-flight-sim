@@ -40,7 +40,7 @@ pub enum AirportKind {
     /// Single longer/wider commuter runway (~60 × 3200 m).
     LargeCommuter,
     /// Two parallel GA strips separated ~350 m laterally.
-    TwinParallel,
+    Regional,
     /// Two parallel wide/long runways separated ~400 m (hub airport).
     Hub,
 }
@@ -51,7 +51,7 @@ impl AirportKind {
             0..15  => AirportKind::DirtStrip,
             15..50 => AirportKind::SmallGA,
             50..60 => AirportKind::LargeCommuter,
-            60..85 => AirportKind::TwinParallel,
+            60..85 => AirportKind::Regional,
             _       => AirportKind::Hub,
         }
     }
@@ -61,7 +61,7 @@ impl AirportKind {
             AirportKind::DirtStrip     => "Dirt Strip",
             AirportKind::SmallGA       => "Small GA",
             AirportKind::LargeCommuter => "Large Commuter",
-            AirportKind::TwinParallel  => "Twin Parallel",
+            AirportKind::Regional  => "Regional",
             AirportKind::Hub           => "Hub",
         }
     }
@@ -223,6 +223,7 @@ pub struct RunwayMaterials {
     pub asphalt: Handle<StandardMaterial>,
     pub paint: Handle<StandardMaterial>,
     pub dirt: Handle<StandardMaterial>,
+    pub stalk: Handle<StandardMaterial>,
 }
 
 impl RunwayMaterials {
@@ -241,6 +242,12 @@ impl RunwayMaterials {
             dirt: materials.add(StandardMaterial {
                 base_color: Color::srgb(0.48, 0.35, 0.22),
                 perceptual_roughness: 1.0,
+                ..default()
+            }),
+            stalk: materials.add(StandardMaterial {
+                base_color: Color::srgb(1.0, 1.0, 1.0),
+                unlit: true,
+                fog_enabled: false,
                 ..default()
             }),
         }
@@ -330,7 +337,7 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
         AirportKind::LargeCommuter => {
             vec![RunwayInstance { x, z, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind, cell: (gx, gz) }]
         }
-        AirportKind::TwinParallel => {
+        AirportKind::Regional => {
             // Two small-GA strips offset laterally (perpendicular to heading).
             let (s, c) = heading.sin_cos();
             let ox = c * TWIN_OFFSET;
@@ -352,19 +359,56 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
     }
 }
 
-/// A deterministic 4-letter ident for a runway's grid cell under `seed`, e.g.
-/// `"KQXR"`. Stable per world, distinct per seed — purely for the map overlay,
-/// not tied to any real-world airport coding.
+/// Full procedural name for an airport, e.g. `"Cedar Vance Regional Airport"`.
+/// 75% of airports get an aviation suffix (Airfield, Airport, etc.); the other
+/// 25% get a geographic place-name suffix (Falls, Creek, Junction, etc.).
+pub fn airport_name(seed: u32, cell: (i32, i32), kind: AirportKind) -> String {
+    use crate::airport_names::{NAMES, PREFIXES, SUFFIXES};
+    let h = cell_hash(seed, cell.0, cell.1);
+    let prefix = PREFIXES[(hash_u32(h ^ 0xaaaa_1111) as usize) % PREFIXES.len()];
+    let name   = NAMES  [(hash_u32(h ^ 0xbbbb_2222) as usize) % NAMES.len()];
+    let use_aviation_suffix = hash_u32(h ^ 0xcccc_3333) % 4 != 0; // 75%
+    let suffix = if use_aviation_suffix {
+        match kind {
+            AirportKind::DirtStrip     => "Landing",
+            AirportKind::SmallGA       => "Airfield",
+            AirportKind::LargeCommuter => "Airport",
+            AirportKind::Regional      => "Regional Airport",
+            AirportKind::Hub           => "International",
+        }
+    } else {
+        SUFFIXES[(hash_u32(h ^ 0xdddd_4444) as usize) % SUFFIXES.len()]
+    };
+    format!("{prefix} {name} {suffix}")
+}
+
+/// ICAO-style callsign derived from the airport's generated name: `K` + first
+/// letter of each word, uppercased, truncated/padded to 4 characters total.
+/// Stable per cell — same name always yields the same callsign.
 pub fn runway_ident(seed: u32, cell: (i32, i32)) -> String {
-    let mut h = cell_hash(seed, cell.0, cell.1);
-    // Lead with 'K' for a familiar look, then three letters peeled off the hash.
-    let mut s = String::with_capacity(4);
-    s.push('K');
-    for _ in 0..3 {
-        s.push((b'A' + (h % 26) as u8) as char);
-        h /= 26;
+    // We need the kind to generate the name, but ident is called without kind
+    // in some paths. Use a placeholder kind just for the word structure — the
+    // actual words (prefix + name) are kind-independent, only the suffix differs,
+    // and we only take initials from prefix+name anyway.
+    use crate::airport_names::{NAMES, PREFIXES};
+    let h = cell_hash(seed, cell.0, cell.1);
+    let prefix = PREFIXES[(hash_u32(h ^ 0xaaaa_1111) as usize) % PREFIXES.len()];
+    let name   = NAMES  [(hash_u32(h ^ 0xbbbb_2222) as usize) % NAMES.len()];
+
+    // Collect first letters of each whitespace-separated word across prefix + name.
+    let mut ident = String::with_capacity(4);
+    ident.push('K');
+    for word in prefix.split_whitespace().chain(name.split_whitespace()) {
+        if ident.len() >= 4 { break; }
+        if let Some(c) = word.chars().next() {
+            ident.push(c.to_ascii_uppercase());
+        }
     }
-    s
+    // Pad to 4 if prefix was a single word and name was short.
+    while ident.len() < 4 {
+        ident.push(b'A' as char);
+    }
+    ident
 }
 
 /// Runways for every cell overlapping the world-space box, padded by one cell so
@@ -465,14 +509,18 @@ pub fn stream_runways(
     mut meshes: ResMut<Assets<Mesh>>,
     camera: Query<&Transform, With<TerrainCamera>>,
     existing: Query<(Entity, &RunwaySlab)>,
+    stalks: Query<(Entity, &WaypointStalk)>,
     mut spawned: ResMut<SpawnedRunways>,
 ) {
     if generator.is_changed() {
         for (entity, _) in &existing {
             commands.entity(entity).despawn();
         }
+        for (entity, _) in &stalks {
+            commands.entity(entity).despawn();
+        }
         spawned.cells.clear();
-        return; // repopulate around the camera next frame
+        return;
     }
 
     let Ok(cam) = camera.single() else { return };
@@ -500,8 +548,16 @@ pub fn stream_runways(
             // Use the first strip's position for distance culling (all strips in a
             // cell share roughly the same centre).
             if Vec2::new(strips[0].x, strips[0].z).distance_squared(cam_xz) <= keep_sq {
-                for inst in &strips {
-                    spawn_runway(&mut commands, &mut meshes, &materials, inst, (gx, gz));
+                // Compute the airport centre for the stalk (average of all strip positions).
+                let n = strips.len() as f32;
+                let centre_x = strips.iter().map(|r| r.x).sum::<f32>() / n;
+                let centre_z = strips.iter().map(|r| r.z).sum::<f32>() / n;
+                let centre_elev = strips.iter().map(|r| r.elevation).sum::<f32>() / n;
+                for (i, inst) in strips.iter().enumerate() {
+                    spawn_runway(
+                        &mut commands, &mut meshes, &materials, inst, (gx, gz),
+                        if i == 0 { Some((centre_x, centre_elev, centre_z)) } else { None },
+                    );
                 }
                 spawned.cells.insert((gx, gz));
             }
@@ -514,7 +570,20 @@ pub fn stream_runways(
             spawned.cells.remove(&slab.cell);
         }
     }
+    for (entity, stalk) in &stalks {
+        if !spawned.cells.contains(&stalk.cell) {
+            commands.entity(entity).despawn();
+        }
+    }
 }
+
+// --- Waypoint stalk constants ------------------------------------------------
+
+const STALK_BASE_OFFSET: f32 = 2.0;
+const STALK_TIP_OFFSET: f32 = 1000.0;
+/// Authored radius at the reference distance (10 km). The scale system keeps
+/// this apparent size constant; height is never scaled.
+const STALK_RADIUS: f32 = 8.0;
 
 // --- Runway lighting constants -----------------------------------------------
 
@@ -534,14 +603,16 @@ const RANGE_THRESHOLD: f32 = 80.0;
 const RANGE_REIL: f32 = 3000.0;
 const RANGE_ALS: f32 = 200.0;
 
-/// Spawns one runway strip as a child hierarchy rooted at the strip's world position.
-/// Dirt strips get a packed-earth slab only; paved strips get markings and lights too.
+/// Spawns one runway strip. `stalk_centre` is `Some((x, elev, z))` for the first
+/// strip of each airport — that strip also spawns the vertical 3D stalk mesh so
+/// the label can occlude behind terrain. Secondary strips pass `None`.
 fn spawn_runway(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &RunwayMaterials,
     inst: &RunwayInstance,
     cell: (i32, i32),
+    stalk_centre: Option<(f32, f32, f32)>,
 ) {
     const PAINT_Y: f32 = 0.1;
     const THICKNESS: f32 = 3.0;
@@ -702,6 +773,42 @@ fn spawn_runway(
                 }
             }
         });
+
+    // One low-poly cylinder stalk per airport, spawned only for the primary strip.
+    // Not a child of the runway root so it stays upright regardless of heading.
+    if let Some((sx, se, sz)) = stalk_centre {
+        let stalk_h = STALK_TIP_OFFSET - STALK_BASE_OFFSET;
+        let mid_y = se + STALK_BASE_OFFSET + stalk_h * 0.5;
+        commands.spawn((
+            Mesh3d(meshes.add(Cylinder::new(STALK_RADIUS, stalk_h).mesh().resolution(6).build())),
+            MeshMaterial3d(materials.stalk.clone()),
+            Transform::from_xyz(sx, mid_y, sz),
+            PIXEL_LAYER,
+            WaypointStalk { cell, kind: inst.kind },
+        ));
+    }
+}
+
+/// Marks the 3D stalk cylinder for a waypoint pin.
+#[derive(Component)]
+pub struct WaypointStalk {
+    pub cell: (i32, i32),
+    pub kind: AirportKind,
+}
+
+/// Scales each stalk's X/Z to keep a constant apparent radius on screen.
+/// Y (height) is never scaled so the stalk stays 1 km tall in world space.
+pub fn scale_waypoint_stalks(
+    camera: Query<&Transform, With<TerrainCamera>>,
+    mut stalks: Query<&mut Transform, (With<WaypointStalk>, Without<TerrainCamera>)>,
+) {
+    let Ok(cam) = camera.single() else { return };
+    let cam_pos = cam.translation;
+    for mut tf in &mut stalks {
+        let dist = tf.translation.distance(cam_pos).max(1.0);
+        let s = dist / 10_000.0; // radius = STALK_RADIUS at 10 km
+        tf.scale = Vec3::new(s, 1.0, s);
+    }
 }
 
 /// Animates REIL strobes and ALS sequencing bars every frame.
