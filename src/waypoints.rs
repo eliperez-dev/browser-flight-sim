@@ -114,8 +114,8 @@ pub fn draw_waypoint_labels(
         let a = (alpha * 255.0) as u8;
         let dot_color   = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
         let ident_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
-        let kind_color  = egui::Color32::from_rgba_unmultiplied(200, 220, 255, a);
-        let dist_color  = egui::Color32::from_rgba_unmultiplied(255, 200, 255, a);
+        let kind_color  = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
+        let dist_color  = egui::Color32::from_rgba_unmultiplied(255, 220, 220, a);
 
         painter.circle_filled(tip_win, 3.5, dot_color);
 
@@ -123,9 +123,9 @@ pub fn draw_waypoint_labels(
         let kind_text = airport_name(seed, stalk.cell, stalk.kind);
         let dist_text = format!("{dist_km:.1} km");
 
-        let font_ident = egui::FontId::proportional(17.0);
-        let font_kind  = egui::FontId::proportional(13.0);
-        let font_dist  = egui::FontId::proportional(14.0);
+        let font_ident = egui::FontId::proportional(16.0);
+        let font_kind  = egui::FontId::proportional(16.0);
+        let font_dist  = egui::FontId::proportional(16.0);
 
         let ident_galley = painter.layout_no_wrap(ident,      font_ident, ident_color);
         let kind_galley  = painter.layout_no_wrap(kind_text.to_string(), font_kind, kind_color);
