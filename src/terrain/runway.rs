@@ -106,6 +106,14 @@ const RUNWAY_BLEND_MARGIN: f32 = 600.0;
 /// so wheels sit on the asphalt rather than sinking to the graded ground.
 const RUNWAY_SURFACE_LIFT: f32 = 0.3;
 
+/// How far the *graded terrain* under and around a runway is pushed below the
+/// strip elevation (metres). The slab top sits at `elevation + RUNWAY_SURFACE_LIFT`;
+/// terrain is graded to `elevation - RUNWAY_TERRAIN_DROP`, opening a gap of
+/// `RUNWAY_SURFACE_LIFT + RUNWAY_TERRAIN_DROP` between the two so the coarse-LOD
+/// terrain mesh can't poke through the flat slab when viewed top-down. The slab's
+/// own thickness must cover this drop (see `THICKNESS`) so its skirt hides the gap.
+const RUNWAY_TERRAIN_DROP: f32 = 2.0;
+
 /// Grid spacing between runways (one per cell).
 const RUNWAY_SPACING: f32 = 6000.0;
 /// Fraction of a cell a runway may wander from its grid point — keeps them off a
@@ -370,7 +378,7 @@ pub fn airport_name(seed: u32, cell: (i32, i32), kind: AirportKind) -> String {
     let use_aviation_suffix = hash_u32(h ^ 0xcccc_3333) % 4 != 0; // 75%
     let suffix = if use_aviation_suffix {
         match kind {
-            AirportKind::DirtStrip     => "Landing",
+            AirportKind::DirtStrip     => "Strip",
             AirportKind::SmallGA       => "Airfield",
             AirportKind::LargeCommuter => "Airport",
             AirportKind::Regional      => "Regional Airport",
@@ -404,9 +412,12 @@ pub fn runway_ident(seed: u32, cell: (i32, i32)) -> String {
             ident.push(c.to_ascii_uppercase());
         }
     }
-    // Pad to 4 if prefix was a single word and name was short.
+    // Pad to 4 with deterministic random letters (not just 'A').
+    let mut pad_hash = hash_u32(h ^ 0xcccc_3333);
     while ident.len() < 4 {
-        ident.push(b'A' as char);
+        let c = (b'A' + (pad_hash % 26) as u8) as char;
+        ident.push(c);
+        pad_hash = hash_u32(pad_hash);
     }
     ident
 }
@@ -474,7 +485,14 @@ pub fn flatten_against(runways: &[RunwayInstance], x: f32, z: f32, natural: f32)
             best_e = r.elevation;
         }
     }
-    natural + (best_e - natural) * best_w
+    // Target sits a clear margin below the slab surface so the terrain mesh —
+    // whose vertices are sparse at distance LODs and interpolate linearly between
+    // samples — never rises through the flat slab when viewed top-down. The slab
+    // top is at `elevation + RUNWAY_SURFACE_LIFT`; dropping the graded terrain a
+    // further `RUNWAY_TERRAIN_DROP` below `elevation` opens a gap large enough to
+    // survive depth-buffer precision at altitude and coarse-LOD vertex spacing.
+    let target = best_e - RUNWAY_TERRAIN_DROP;
+    natural + (target - natural) * best_w
 }
 
 /// The walkable ground height the landing gear should rest on at a single point:
@@ -785,6 +803,7 @@ fn spawn_runway(
             Transform::from_xyz(sx, mid_y, sz),
             PIXEL_LAYER,
             WaypointStalk { cell, kind: inst.kind },
+            NoFrustumCulling,
         ));
     }
 }
