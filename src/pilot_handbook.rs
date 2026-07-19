@@ -155,7 +155,7 @@ fn tab_controls(ui: &mut egui::Ui) {
 
     ui.add_space(10.0);
     ctrl_section(ui, "Lights", &[
-        ("L",    "Toggle landing light"),
+        ("N",    "Toggle landing light"),
     ]);
 
     ui.add_space(10.0);
@@ -165,8 +165,9 @@ fn tab_controls(ui: &mut egui::Ui) {
         ("W A S D",      "Free cam move forward / strafe"),
         ("E / Q",        "Free cam up / down"),
         ("Shift",        "Free cam speed boost"),
-        ("Zoom In",      "Orbit camera zoom in"),
-        ("Zoom Out",     "Orbit camera zoom out"),
+        ("[ / ]",        "Orbit camera zoom in / out"),
+        ("1-9, 0",       "Jump to fixed camera mount 1-10"),
+        ("F11",          "Toggle fullscreen"),
     ]);
 
     ui.add_space(10.0);
@@ -176,7 +177,6 @@ fn tab_controls(ui: &mut egui::Ui) {
         ("F3",      "Flight model debug panel"),
         ("G",       "Toggle physics gizmos"),
         ("P",       "Pause / unpause physics"),
-        ("1",       "Toggle fog"),
     ]);
 }
 
@@ -336,7 +336,7 @@ fn tab_day_night(ui: &mut egui::Ui) {
 
     ui.add_space(8.0);
     ui.strong("Aircraft lights");
-    ui.label("Navigation lights (red left wingtip, green right, white tail) are always on. Strobes flash automatically. The landing light is toggled with L and casts a forward spotlight useful for night approaches. All light positions and intensities are adjustable in F3 > Lights.");
+    ui.label("Navigation lights (red left wingtip, green right, white tail) are always on. Strobes flash automatically. The landing light is toggled with N and casts a forward spotlight useful for night approaches. All light positions and intensities are adjustable in F3 > Lights.");
 
     ui.add_space(8.0);
     ui.strong("Sun orbit inclination");

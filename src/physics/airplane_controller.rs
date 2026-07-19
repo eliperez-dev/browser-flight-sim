@@ -10,7 +10,7 @@ use crate::camera::CameraMode;
 
 use super::aero_surface::{AeroSurface, ControlInputType};
 use super::aircraft_physics::{AircraftRoot, EngineState};
-use super::flight_config::FlightModelConfig;
+use super::flight_config::{isa_density_ratio, FlightModelConfig};
 
 pub fn airplane_controller(
     keys: Res<ButtonInput<KeyCode>>,
@@ -62,7 +62,7 @@ pub fn airplane_controller(
     const MIXTURE_CUTOFF: f32 = 0.05;   // lever below this = no fuel
     const START_MIN_MIXTURE: f32 = 0.3; // need at least this rich to catch
     let altitude = tf.translation.y;
-    let density_ratio = (1.0 - 2.2557e-5 * altitude).max(0.0).powf(4.2559);
+    let density_ratio = isa_density_ratio(altitude);
     let ideal_mixture = density_ratio.clamp(0.05, 1.0);
     let mixture_ratio = root.mixture / ideal_mixture;
     let mixture_power = if root.mixture < MIXTURE_CUTOFF {
@@ -110,7 +110,10 @@ pub fn airplane_controller(
         EngineState::Running => {
             let throttle_rps = cfg.propeller.prop_idle_rps
                 + root.throttle_percent * (cfg.propeller.prop_max_rps - cfg.propeller.prop_idle_rps);
-            throttle_rps * mixture_power
+            // Naturally-aspirated engines lose power as the air thins with
+            // altitude (less oxygen per cylinder stroke), on top of the
+            // separate penalty for a mismatched mixture lever.
+            throttle_rps * mixture_power * density_ratio
         }
     };
     let spool_tau = if target_rps > root.engine_rps {

@@ -1910,6 +1910,8 @@ dependencies = [
  "osmpbf",
  "rand 0.10.1",
  "tracing-wasm",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

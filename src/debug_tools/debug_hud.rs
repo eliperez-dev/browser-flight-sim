@@ -35,6 +35,7 @@ pub fn populate_debug_hud(
     hud.entries.push(("CAM", match &*mode {
         CameraMode::Free  => "FREE".into(),
         CameraMode::Orbit => "ORBIT".into(),
+        CameraMode::Fixed(i) => format!("FIXED[{i}]"),
     }));
     hud.entries.push(("FOG", if fog.enabled { "ON\t [1]" } else { "OFF \t[1]" }.into()));
 

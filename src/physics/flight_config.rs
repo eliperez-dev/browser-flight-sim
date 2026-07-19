@@ -47,7 +47,12 @@ pub struct FlightModelConfig {
     /// this the body has no drag and the aircraft flies like a steerable
     /// velocity vector.
     pub fuselage_drag: Vec3,
-    /// Air density (kg/m³). Standard sea-level ISA = 1.225.
+    /// Sea-level air density (kg/m³). Standard ISA = 1.225. This is the
+    /// reference value at the sim's zero altitude (equivalent to setting
+    /// local QNH); [`isa_density_ratio`] scales it down with altitude to get
+    /// the actual density fed into the aero/drag forces, so thinner air at
+    /// altitude means less lift, less drag, and less engine power — all from
+    /// one consistent atmosphere model.
     pub air_density: f32,
     /// Gravitational acceleration (m/s²).
     pub gravity: f32,
@@ -399,6 +404,15 @@ impl Default for LandingGearConfig {
 }
 
 
+/// ISA (International Standard Atmosphere) troposphere density ratio σ =
+/// ρ(altitude)/ρ(sea level), from the standard barometric formula. Shared by
+/// the aero/drag forces (scales `air_density`), the mixture lever (its ideal
+/// setting leans with this same ratio), and the baro instrument readout, so
+/// all three agree on what the air is doing at a given altitude.
+pub fn isa_density_ratio(altitude_m: f32) -> f32 {
+    (1.0 - 2.2557e-5 * altitude_m).max(0.0).powf(4.2559)
+}
+
 impl Default for FlightModelConfig {
     fn default() -> Self {
         Self {
@@ -419,7 +433,7 @@ impl Default for FlightModelConfig {
             // streamlined (small Z) and is the only term that acts in normal
             // flight; the flank/belly terms bite in a skid or a high-AoA mush.
             // Roughly broadside Cd·A for a light-aircraft fuselage.
-            fuselage_drag:        Vec3::new(1.5, 2.0, 0.10),
+            fuselage_drag:        Vec3::new(3.0, 4.0, 0.20),
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,

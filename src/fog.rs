@@ -26,12 +26,12 @@ impl Default for FogSettings {
         // Matches the original hand-tuned look.
         Self {
             enabled: true,
-            visibility: 10000.0,
+            visibility: 8000.0,
             color: [0.55, 0.68, 0.82],
             extinction_color: [0.35, 0.5, 0.66],
             inscattering_color: [0.8, 0.844, 1.0],
             directional_light_color: [1.0, 0.95, 0.85],
-            directional_light_exponent: 4.0,
+            directional_light_exponent: 30.0,
         }
     }
 }

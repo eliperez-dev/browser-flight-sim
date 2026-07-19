@@ -1,10 +1,14 @@
 //! My Plane window — pilot-facing controls for the aircraft: engine power,
 //! loadout, flight assists, and control sensitivity. Toggled from the menu bar.
 
+use avian3d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
+use crate::physics::aircraft_physics::AircraftRoot;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
+use crate::plane::{Airplane, PlaneState, spawn_position};
+use crate::terrain::WorldGenerator;
 use crate::ui::menu_bar::MenuBar;
 
 // Mirrors instrument_panel.rs's palette so the loadout gauges read as the
@@ -29,10 +33,13 @@ impl Plugin for PlaneMenuPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_plane_menu(
     mut bar: ResMut<MenuBar>,
     mut cfg: ResMut<FlightModelConfig>,
     mut contexts: EguiContexts,
+    world_gen: Res<WorldGenerator>,
+    mut plane_q: Query<(&mut Transform, &mut LinearVelocity, &mut AngularVelocity, &mut PlaneState, &mut AircraftRoot), With<Airplane>>,
 ) -> Result {
     if !bar.my_plane { return Ok(()); }
 
@@ -45,7 +52,25 @@ fn draw_plane_menu(
         .default_width(300.0)
         .resizable(true)
         .show(ctx, |ui| {
+            // ── Reset ────────────────────────────────────────────────────────
+            // Puts the aircraft back on the runway at the same spot and
+            // orientation as the initial spawn (main.rs::setup), zeroing
+            // velocities and transient flags — a quick fix for a glitched
+            // position (stuck in terrain, flipped over, etc.) without
+            // restarting the whole sim.
+            if ui.button("Reset Plane to Runway").clicked()
+                && let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut()
+            {
+                *transform = Transform::from_translation(spawn_position(world_gen.as_ref()))
+                    .with_scale(Vec3::splat(0.1));
+                lin_vel.0 = Vec3::ZERO;
+                ang_vel.0 = Vec3::ZERO;
+                state.crashed = false;
+                root.throttle_percent = 0.0;
+            }
+
             // ── Engine ──────────────────────────────────────────────────────
+            ui.add_space(8.0);
             ui.heading("Engine");
             ui.separator();
             ui.add(egui::Slider::new(&mut cfg.thrust_max, 0.0..=20_000.0)

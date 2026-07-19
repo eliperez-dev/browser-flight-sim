@@ -14,9 +14,10 @@ pub struct MenuBar {
     pub flight_model: bool,
     pub map: bool,
     pub handbook: bool,
-    pub weather: bool,
+    pub world: bool,
     pub my_plane: bool,
     pub gizmos: bool,
+    pub camera: bool,
 }
 
 impl Default for MenuBar {
@@ -26,9 +27,10 @@ impl Default for MenuBar {
             map: false,
             // Handbook opens by default so new players see controls immediately.
             handbook: true,
-            weather: false,
+            world: false,
             my_plane: false,
             gizmos: false,
+            camera: false,
         }
     }
 }
@@ -72,8 +74,9 @@ pub fn draw_menu_bar(
                     ui.horizontal(|ui| {
                         menu_button(ui, "Map", &mut bar.map);
                         menu_button(ui, "Handbook", &mut bar.handbook);
-                        menu_button(ui, "Weather", &mut bar.weather);
+                        menu_button(ui, "World", &mut bar.world);
                         menu_button(ui, "My Plane", &mut bar.my_plane);
+                        menu_button(ui, "Camera", &mut bar.camera);
                         ui.separator();
                         menu_button(ui, "Gizmos", &mut bar.gizmos);
                         ui.separator();

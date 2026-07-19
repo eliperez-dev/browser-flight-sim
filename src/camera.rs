@@ -15,6 +15,45 @@ pub enum CameraMode {
     Free,
     #[default]
     Orbit,
+    /// Rigidly mounted to a point on the plane; index into [`FixedCameraMounts`].
+    Fixed(usize),
+}
+
+/// One rigid mount point on the aircraft: a translation offset (metres, in the
+/// plane's local space) and a yaw/pitch to aim the camera once mounted there.
+#[derive(Clone, Copy)]
+pub struct FixedCameraMount {
+    pub name: &'static str,
+    pub offset: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// The default fixed-camera mounts, editable at runtime from the debug menu.
+#[derive(Resource, Clone)]
+pub struct FixedCameraMounts {
+    pub mounts: Vec<FixedCameraMount>,
+}
+
+impl Default for FixedCameraMounts {
+    fn default() -> Self {
+        Self {
+            // The aircraft's flight direction is local +Z (see plane.rs), but a
+            // Bevy camera looks down its own local -Z by default, so a mount
+            // facing forward (down the direction of travel) needs yaw = PI,
+            // and a mount facing backward (toward the fuselage) needs yaw = 0.
+            mounts: vec![
+                // Nose: just ahead of the prop hub, looking forward.
+                FixedCameraMount { name: "Nose", offset: Vec3::new(0.0, 1.0, 1.41), yaw: std::f32::consts::PI, pitch: 0.0 },
+                // Tail: behind the rudder, looking forward over the aircraft.
+                FixedCameraMount { name: "Tail", offset: Vec3::new(0.0, 1.8, -12.0), yaw: std::f32::consts::PI, pitch: -0.13 },
+                // Left wingtip, looking inward at the fuselage.
+                FixedCameraMount { name: "Left Wing", offset: Vec3::new(-6.8, 1.00, 0.5), yaw: -1.5708, pitch: -0.20 },
+                // Right wingtip, looking inward at the fuselage.
+                FixedCameraMount { name: "Right Wing", offset: Vec3::new(3.7, 0.8, -1.0), yaw: 2.5, pitch: -0.25 },
+            ],
+        }
+    }
 }
 
 /// State for the free-look camera (yaw/pitch accumulated from arrow keys).
@@ -49,7 +88,79 @@ pub fn fit_canvas(
     }
 }
 
-/// Cycles Free → Orbit → Chase → Free with F.
+/// F11 toggles real browser fullscreen on the canvas element. This leaves the
+/// canvas's backing resolution untouched — `fit_canvas` (driven by the
+/// resulting `WindowResized` event) handles rescaling the pixel-art output to
+/// whatever size the fullscreen canvas ends up being.
+pub fn toggle_fullscreen_hotkey(keys: Res<ButtonInput<KeyCode>>) {
+    if !keys.just_pressed(KeyCode::F11) {
+        return;
+    }
+    request_toggle_fullscreen();
+}
+
+/// Enters/exits browser fullscreen on the canvas. Shared by the F11 hotkey and
+/// the Camera menu's Fullscreen button.
+pub fn request_toggle_fullscreen() {
+    #[cfg(target_arch = "wasm32")]
+    web_fullscreen::toggle();
+}
+
+/// Whether the canvas is currently in browser fullscreen, for the menu button's
+/// pressed state. Always false on native builds.
+pub fn is_fullscreen() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    return web_fullscreen::is_fullscreen();
+    #[cfg(not(target_arch = "wasm32"))]
+    false
+}
+
+#[cfg(target_arch = "wasm32")]
+mod web_fullscreen {
+    use wasm_bindgen::JsCast;
+
+    pub fn toggle() {
+        let Some(window) = web_sys::window() else { return };
+        let Some(document) = window.document() else { return };
+        if document.fullscreen_element().is_some() {
+            document.exit_fullscreen();
+            return;
+        }
+        let Some(canvas) = document.query_selector("canvas").ok().flatten() else { return };
+        let canvas: web_sys::Element = canvas.unchecked_into();
+        let _ = canvas.request_fullscreen();
+    }
+
+    pub fn is_fullscreen() -> bool {
+        web_sys::window()
+            .and_then(|w| w.document())
+            .is_some_and(|d| d.fullscreen_element().is_some())
+    }
+}
+
+/// Digit keys 1-9/0 map to fixed-camera mount index (1 → mount 0, 2 → mount 1,
+/// ... 9 → mount 8, 0 → mount 9), instantly snapping into `Fixed(index)` for
+/// whichever mounts exist. Extra keys beyond the mount count are ignored.
+const FIXED_CAM_KEYS: [KeyCode; 10] = [
+    KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5,
+    KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9, KeyCode::Digit0,
+];
+
+/// Snaps directly into a fixed-camera mount when its number key is pressed.
+pub fn fixed_cam_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mounts: Res<FixedCameraMounts>,
+    mut mode: ResMut<CameraMode>,
+) {
+    for (index, key) in FIXED_CAM_KEYS.iter().enumerate() {
+        if keys.just_pressed(*key) && index < mounts.mounts.len() {
+            *mode = CameraMode::Fixed(index);
+        }
+    }
+}
+
+/// Cycles Free → Orbit → Free with F. Fixed cameras are only entered from the
+/// Camera menu, not via this cycle.
 pub fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut mode: ResMut<CameraMode>,
@@ -59,8 +170,8 @@ pub fn toggle_camera_mode(
         return;
     }
     *mode = match *mode {
-        CameraMode::Free  => CameraMode::Orbit,
-        CameraMode::Orbit => {
+        CameraMode::Free => CameraMode::Orbit,
+        CameraMode::Orbit | CameraMode::Fixed(_) => {
             if let Ok((tf, mut free, _)) = cam_query.single_mut() {
                 let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
                 free.yaw = yaw;
@@ -128,7 +239,7 @@ pub fn free_cam_control(
     if keys.pressed(KeyCode::KeyQ) { transform.translation -= Vec3::Y * move_speed * dt; }
 }
 
-/// Orbit / Chase camera — only active when mode is Orbit or Chase.
+/// Orbit camera — only active when mode is Orbit.
 pub fn track_cam_control(
     time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -136,7 +247,7 @@ pub fn track_cam_control(
     plane_query: Query<&Transform, With<Airplane>>,
     mut cam_query: Query<(&mut Transform, &mut TrackCam), Without<Airplane>>,
 ) {
-    if matches!(*mode, CameraMode::Free) {
+    if !matches!(*mode, CameraMode::Orbit) {
         return;
     }
 
@@ -173,6 +284,26 @@ pub fn track_cam_control(
             cam_tf.translation = plane_tf.translation + offset;
             cam_tf.look_at(plane_tf.translation, Vec3::Y);
         }
-        CameraMode::Free => {}
+        CameraMode::Free | CameraMode::Fixed(_) => {}
     }
+}
+
+/// Fixed camera — rigidly mounted to a point on the plane (nose, tail, wingtips,
+/// ...). Only active when mode is `Fixed`. The mount offset is in metres,
+/// world-aligned to the plane's own rotation (not the local ×0.1-scaled mesh
+/// space used for wing/aileron attachment points).
+pub fn fixed_cam_control(
+    mode: Res<CameraMode>,
+    mounts: Res<FixedCameraMounts>,
+    plane_query: Query<&Transform, With<Airplane>>,
+    mut cam_query: Query<&mut Transform, (With<FreeCam>, Without<Airplane>)>,
+) {
+    let CameraMode::Fixed(index) = *mode else { return };
+    let Some(mount) = mounts.mounts.get(index) else { return };
+    let Ok(plane_tf) = plane_query.single() else { return };
+    let Ok(mut cam_tf) = cam_query.single_mut() else { return };
+
+    cam_tf.translation = plane_tf.translation + plane_tf.rotation * mount.offset;
+    cam_tf.rotation = plane_tf.rotation
+        * Quat::from_euler(EulerRot::YXZ, mount.yaw, mount.pitch, 0.0);
 }

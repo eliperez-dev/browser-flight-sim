@@ -13,7 +13,8 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui::{self, Frame}};
 
 use crate::camera::CameraMode;
-use crate::physics::aircraft_physics::AircraftRoot;
+use crate::lights::LightTimers;
+use crate::physics::aircraft_physics::{AircraftRoot, EngineState};
 use crate::physics::flight_config::FlightModelConfig;
 use crate::plane::{Airplane, PlaneState};
 
@@ -56,18 +57,19 @@ fn panel_frame() -> Frame {
         .inner_margin(egui::Margin::same(8))
 }
 
+
 #[allow(clippy::too_many_arguments)]
 fn draw_instrument_panel(
     mut contexts: EguiContexts,
     camera_mode: Res<CameraMode>,
     mut cfg: ResMut<FlightModelConfig>,
-    mut plane_q: Query<(&Transform, &PlaneState, &LinearVelocity, &mut AircraftRoot), With<Airplane>>,
+    mut plane_q: Query<(&Transform, &PlaneState, &LinearVelocity, &mut AircraftRoot, &mut LightTimers), With<Airplane>>,
 ) -> Result {
     // Only makes sense while actually looking at the aircraft in flight.
     if matches!(*camera_mode, CameraMode::Free) {
         return Ok(());
     }
-    let Ok((transform, state, velocity, mut root)) = plane_q.single_mut() else { return Ok(()) };
+    let Ok((transform, state, velocity, mut root, mut lights)) = plane_q.single_mut() else { return Ok(()) };
 
     let forward = transform.forward().as_vec3();
     let heading = heading_from_forward(forward);
@@ -80,15 +82,31 @@ fn draw_instrument_panel(
 
     let ctx = contexts.ctx_mut()?;
 
-    // ALT, VS, and IAS all share the same window height so the bottom row
-    // of tapes lines up evenly across the screen.
-    const TAPE_WINDOW_HEIGHT: f32 = 236.0;
+    // Every bottom-row panel is laid out from explicit widths so adjacent
+    // windows stack at a fixed gap (rather than hand-tuned offsets that drift
+    // out of sync whenever one panel's width changes).
+    const MARGIN: f32 = 22.0; // distance from the screen edge to the outermost panels
+    const GAP: f32 = 16.0; // breathing room between adjacent panels in a cluster
+    const TAPE_WINDOW_HEIGHT: f32 = 260.0; // IAS height
+    const VS_WINDOW_HEIGHT: f32 = 225.0; // slightly shorter than IAS
+    const ALT_WINDOW_HEIGHT: f32 = 225.0; // shorter container than VS/IAS
+    const TAPE_WIDTH: f32 = 72.0; // ALT and VS width
+    const ATTITUDE_WIDTH: f32 = 146.0;
+    const ATTITUDE_HEIGHT: f32 = 190.0;
+
+    // Right-anchored cluster, laid right-to-left: ALT, then VS, then ATTITUDE.
+    let alt_offset = -MARGIN;
+    let vspeed_offset = alt_offset - TAPE_WIDTH - GAP;
+    let attitude_offset = vspeed_offset - TAPE_WIDTH - GAP;
 
     egui::Window::new("instrument_altitude")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::RIGHT_BOTTOM, [-20.0, -20.0])
-        .fixed_size([72.0, TAPE_WINDOW_HEIGHT])
+        .anchor(egui::Align2::RIGHT_BOTTOM, [alt_offset, -MARGIN])
+        .fixed_size([TAPE_WIDTH, ALT_WINDOW_HEIGHT])
+        .min_height(ALT_WINDOW_HEIGHT)
+        .max_height(ALT_WINDOW_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
@@ -103,23 +121,32 @@ fn draw_instrument_panel(
 
     egui::Window::new("instrument_vspeed")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::RIGHT_BOTTOM, [-102.0, -20.0])
-        .fixed_size([72.0, TAPE_WINDOW_HEIGHT])
+        .anchor(egui::Align2::RIGHT_BOTTOM, [vspeed_offset, -MARGIN])
+        .fixed_size([TAPE_WIDTH, VS_WINDOW_HEIGHT])
+        .min_height(VS_WINDOW_HEIGHT)
+        .max_height(VS_WINDOW_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("VS (fpm)").size(11.0).color(TEXT_DIM));
-                draw_vspeed_tape(ui, vertical_speed_fpm);
+            });
+            let tape_height = ui.available_height();
+            ui.vertical_centered(|ui| {
+                draw_vspeed_tape(ui, vertical_speed_fpm, tape_height);
             });
         });
 
     egui::Window::new("instrument_attitude")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::RIGHT_BOTTOM, [-184.0, -20.0])
-        .fixed_size([180.0, 210.0])
+        .anchor(egui::Align2::RIGHT_BOTTOM, [attitude_offset, -MARGIN])
+        .fixed_size([ATTITUDE_WIDTH, ATTITUDE_HEIGHT])
+        .min_height(ATTITUDE_HEIGHT)
+        .max_height(ATTITUDE_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
@@ -131,72 +158,146 @@ fn draw_instrument_panel(
 
     egui::Window::new("instrument_airspeed")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_BOTTOM, [20.0, -20.0])
-        .fixed_size([72.0, TAPE_WINDOW_HEIGHT])
+        .anchor(egui::Align2::LEFT_BOTTOM, [MARGIN, -MARGIN])
+        .fixed_size([TAPE_WIDTH, TAPE_WINDOW_HEIGHT])
+        .min_height(TAPE_WINDOW_HEIGHT)
+        .max_height(TAPE_WINDOW_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("IAS (kt)").size(11.0).color(TEXT_DIM));
+            });
+            ui.add_space((ui.available_height() - 220.0).max(0.0) / 2.0);
+            ui.vertical_centered(|ui| {
                 draw_airspeed_tape(ui, speed_kt);
             });
         });
 
+    // Left-anchored cluster: ENGINE, then THR/MIX, then FLAP/TRIM, then
+    // BUTTONS, laid left-to-right starting just after the airspeed tape, all
+    // sharing the same row height so nothing has to hand-fit a stacked panel
+    // on top of another.
+    const ENGINE_WIDTH: f32 = 142.0;
+    // Tall enough to fit ENGINE's gauge + IGN indicator stack (its tallest
+    // content column) without clipping — THR/MIX and FLAP/TRIM share this
+    // same height even though their own content is a bit shorter.
+    const ENGINE_HEIGHT: f32 = 170.0;
+    const QUADRANT_WIDTH: f32 = 74.0;
+    const SURFACES_WIDTH: f32 = 74.0;
+    const BUTTONS_WIDTH: f32 = 110.0;
+    const BUTTONS_HEIGHT: f32 = 70.0; // just the label + one switch row, not the full row height
+
+    let engine_offset = MARGIN + TAPE_WIDTH + GAP;
+    let quadrant_offset = engine_offset + ENGINE_WIDTH + GAP;
+    let surfaces_offset = quadrant_offset + QUADRANT_WIDTH + GAP;
+    let buttons_offset = surfaces_offset + SURFACES_WIDTH + GAP;
+
     egui::Window::new("instrument_engine")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_BOTTOM, [150.0, -20.0])
-        .fixed_size([150.0, 145.0])
+        .anchor(egui::Align2::LEFT_BOTTOM, [engine_offset, -MARGIN])
+        .fixed_size([ENGINE_WIDTH, ENGINE_HEIGHT])
+        .min_height(ENGINE_HEIGHT)
+        .max_height(ENGINE_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("ENGINE").size(11.0).color(TEXT_DIM));
+            });
+            ui.add_space((ui.available_height() - 96.0 - 4.0 - 26.0).max(0.0) / 2.0);
+            ui.vertical_centered(|ui| {
                 draw_engine_gauge(ui, &root, cfg.propeller.prop_max_rps);
+                ui.add_space(4.0);
+                let (ign_label, ign_on, ign_color) = match root.engine_state {
+                    EngineState::Off => ("OFF", false, OFF_TEXT),
+                    EngineState::Cranking => (" START...", true, CAUTION),
+                    EngineState::Running => ("ON", true, GOOD),
+                };
+                light_indicator(ui, &format!("IGN {ign_label}"), ign_on, ign_color);
             });
         });
 
     egui::Window::new("instrument_quadrant")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_BOTTOM, [310.0, -20.0])
-        .fixed_size([90.0, 145.0])
+        .anchor(egui::Align2::LEFT_BOTTOM, [quadrant_offset, -MARGIN])
+        .fixed_size([QUADRANT_WIDTH, ENGINE_HEIGHT])
+        .min_height(ENGINE_HEIGHT)
+        .max_height(ENGINE_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("THR / MIX").size(11.0).color(TEXT_DIM));
+            });
+            ui.add_space((ui.available_height() - 146.0).max(0.0) / 2.0);
+            const LEVER_PAIR_WIDTH: f32 = 28.0 * 2.0 + 2.0;
+            ui.horizontal(|ui| {
+                ui.add_space((ui.available_width() - LEVER_PAIR_WIDTH).max(0.0) / 2.0);
                 draw_throttle_mixture_levers(ui, &mut root);
             });
         });
 
     egui::Window::new("instrument_surfaces")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_BOTTOM, [410.0, -20.0])
-        .fixed_size([90.0, 145.0])
+        .anchor(egui::Align2::LEFT_BOTTOM, [surfaces_offset, -MARGIN])
+        .fixed_size([SURFACES_WIDTH, ENGINE_HEIGHT])
+        .min_height(ENGINE_HEIGHT)
+        .max_height(ENGINE_HEIGHT)
         .frame(panel_frame())
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("FLAP / TRIM").size(11.0).color(TEXT_DIM));
-                ui.horizontal(|ui| {
-                    draw_flap_lever(ui, &mut root);
-                    draw_trim_lever(ui, &mut cfg.elevator_trim);
-                });
+            });
+            ui.add_space((ui.available_height() - 146.0).max(0.0) / 2.0);
+            const LEVER_PAIR_WIDTH: f32 = 28.0 * 2.0 + 2.0;
+            ui.horizontal(|ui| {
+                ui.add_space((ui.available_width() - LEVER_PAIR_WIDTH).max(0.0) / 2.0);
+                ui.spacing_mut().item_spacing.x = 2.0;
+                draw_flap_lever(ui, &mut root);
+                draw_trim_lever(ui, &mut cfg.elevator_trim);
+            });
+        });
+
+    egui::Window::new("instrument_buttons")
+        .title_bar(false)
+        .order(egui::Order::Foreground)
+        .resizable(false)
+        .anchor(egui::Align2::LEFT_BOTTOM, [buttons_offset, -MARGIN])
+        .fixed_size([BUTTONS_WIDTH, BUTTONS_HEIGHT])
+        .min_height(BUTTONS_HEIGHT)
+        .max_height(BUTTONS_HEIGHT)
+        .frame(panel_frame())
+        .show(ctx, |ui| {
+            ui.visuals_mut().override_text_color = Some(TEXT);
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new("LIGHTS").size(11.0).color(TEXT_DIM));
+                draw_switch_panel(ui, &mut lights);
             });
         });
 
     egui::Window::new("instrument_heading")
         .title_bar(false)
+        .order(egui::Order::Foreground)
         .resizable(false)
         .anchor(egui::Align2::LEFT_TOP, [20.0, 20.0])
-        .fixed_size([120.0, 120.0])
+        .fixed_size([120.0, 140.0])
+        .min_height(140.0)
+        .max_height(140.0)
         .frame(panel_frame().inner_margin(egui::Margin::same(3)))
         .show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new("COMPASS").size(11.0).color(TEXT_DIM));
                 draw_heading_compass(ui, heading);
                 ui.label(egui::RichText::new(format!("{:03.0}°", heading)).size(13.0).color(TEXT));
             });
@@ -226,9 +327,9 @@ fn roll_from_transform(transform: &Transform) -> f32 {
 }
 
 fn draw_artificial_horizon(ui: &mut egui::Ui, pitch: f32, roll: f32) {
-    let (response, painter) = ui.allocate_painter(egui::Vec2::new(160.0, 160.0), egui::Sense::hover());
-    let center = response.rect.center();
-    let radius = 72.0;
+    let (response, painter) = ui.allocate_painter(egui::Vec2::new(126.0, 140.0), egui::Sense::hover());
+    let center = egui::Pos2::new(response.rect.center().x, response.rect.top() + 60.0);
+    let radius = 56.0;
 
     let pitch_offset = (pitch / 90.0) * radius;
     let roll_rad = (-roll).to_radians();
@@ -296,6 +397,22 @@ fn draw_artificial_horizon(ui: &mut egui::Ui, pitch: f32, roll: f32) {
     painter.circle_filled(center, 2.5, ACCENT);
 
     painter.circle_stroke(center, radius, egui::Stroke::new(1.5, BORDER));
+
+    // Numeric pitch/roll readout in the corners, below the dial circle.
+    painter.text(
+        egui::Pos2::new(response.rect.left(), response.rect.bottom()),
+        egui::Align2::LEFT_BOTTOM,
+        format!("P {pitch:+.0}°"),
+        egui::FontId::proportional(10.0),
+        TEXT_DIM,
+    );
+    painter.text(
+        egui::Pos2::new(response.rect.right(), response.rect.bottom()),
+        egui::Align2::RIGHT_BOTTOM,
+        format!("R {roll:+.0}°"),
+        egui::FontId::proportional(10.0),
+        TEXT_DIM,
+    );
 }
 
 fn draw_altitude_tape(ui: &mut egui::Ui, altitude_ft: f32) {
@@ -327,15 +444,18 @@ fn draw_altitude_tape(ui: &mut egui::Ui, altitude_ft: f32) {
 /// tape against) with a needle-style bug marking the live rate. Positive
 /// (climbing) shown above centre in green, negative (descending) below in
 /// caution/warn depending on how steep.
-fn draw_vspeed_tape(ui: &mut egui::Ui, vs_fpm: f32) {
-    let (response, painter) = ui.allocate_painter(egui::Vec2::new(56.0, 160.0), egui::Sense::hover());
+fn draw_vspeed_tape(ui: &mut egui::Ui, vs_fpm: f32, height: f32) {
+    let (response, painter) = ui.allocate_painter(egui::Vec2::new(56.0, height), egui::Sense::hover());
     let rect = response.rect;
     let center_y = rect.center().y;
 
     const VS_RANGE_FPM: f32 = 2000.0;
-    let px_per_fpm = (rect.height() / 2.0 - 10.0) / VS_RANGE_FPM;
+    // Scaled down from the full painter height so adjacent 1000 fpm ticks sit
+    // closer together (a smaller vertical "throw") instead of spanning the
+    // whole tall container end to end.
+    let px_per_fpm = (rect.height() / 2.0 - 10.0) / VS_RANGE_FPM * 0.55;
 
-    for mark in [-2000, -1000, 0, 1000, 2000] {
+    for mark in [-3000, -2000, -1000, 0, 1000, 2000, 3000] {
         let y = center_y - mark as f32 * px_per_fpm;
         let is_zero = mark == 0;
         let tick_len = if is_zero { 12.0 } else { 8.0 };
@@ -344,7 +464,7 @@ fn draw_vspeed_tape(ui: &mut egui::Ui, vs_fpm: f32) {
             egui::Stroke::new(1.5, TEXT_DIM),
         );
         painter.text(egui::Pos2::new(rect.left() + 2.0, y), egui::Align2::LEFT_CENTER,
-            format!("{}", mark / 100), egui::FontId::proportional(9.0), TEXT_DIM);
+            format!("{}", mark), egui::FontId::proportional(11.0), TEXT_DIM);
     }
 
     let vs_clamped = vs_fpm.clamp(-VS_RANGE_FPM, VS_RANGE_FPM);
@@ -355,7 +475,7 @@ fn draw_vspeed_tape(ui: &mut egui::Ui, vs_fpm: f32) {
 /// tapes (72px window vs. the airspeed tape's original wider layout).
 fn draw_center_bug_small(painter: &egui::Painter, rect: egui::Rect, center_y: f32, label: String) {
     let center_x = rect.center().x;
-    let (w, h, tip) = (52.0, 20.0, 7.0);
+    let (w, h, tip) = (56.0, 24.0, 7.0);
     let points = vec![
         egui::Pos2::new(center_x - w / 2.0, center_y - h / 2.0),
         egui::Pos2::new(center_x + w / 2.0 - tip, center_y - h / 2.0),
@@ -365,22 +485,23 @@ fn draw_center_bug_small(painter: &egui::Painter, rect: egui::Rect, center_y: f3
     ];
     painter.add(egui::Shape::convex_polygon(points, egui::Color32::from_rgb(28, 40, 64), egui::Stroke::new(1.0, ACCENT)));
     painter.text(egui::Pos2::new(center_x - 3.0, center_y), egui::Align2::CENTER_CENTER,
-        label, egui::FontId::proportional(12.0), TEXT);
+        label, egui::FontId::proportional(15.0), TEXT);
 }
 
-// Extends the bottom warning band a bit past zero so the low-speed red
-// doesn't read as hard-clipped right at the 0 line — a small visual buffer,
-// not a claim the aircraft can actually show negative airspeed.
-const V_NEGATIVE_BUFFER_KT: f32 = 15.0;
-
 fn draw_airspeed_tape(ui: &mut egui::Ui, speed_kt: f32) {
-    let (response, painter) = ui.allocate_painter(egui::Vec2::new(47.0, 160.0), egui::Sense::hover());
+    let (response, painter) = ui.allocate_painter(egui::Vec2::new(56.0, 220.0), egui::Sense::hover());
     let rect = response.rect;
     let center_y = rect.center().y;
-    let px_per_kt = 1.4;
+    let px_per_kt = 1.9;
+
+    // The low-speed warning band's floor is derived from the painter's own
+    // height (however far below 0 the tape can currently scroll) rather than
+    // a fixed buffer, so the red never reads as hard-clipped at the 0 line
+    // no matter how far the tape is showing into negative speed.
+    let visible_floor_kt = speed_kt - (rect.bottom() - center_y) / px_per_kt - 20.0;
 
     let bands = [
-        (-V_NEGATIVE_BUFFER_KT, V_STALL_KT, WARN),
+        (visible_floor_kt, V_STALL_KT, WARN),
         (V_STALL_KT, V_CRUISE_KT, GOOD),
         (V_CRUISE_KT, V_NE_KT, CAUTION),
         (V_NE_KT, V_NE_KT * 1.4, WARN),
@@ -413,7 +534,7 @@ fn draw_airspeed_tape(ui: &mut egui::Ui, speed_kt: f32) {
         );
         if is_major {
             painter.text(egui::Pos2::new(rect.right() - 2.0, y), egui::Align2::RIGHT_CENTER,
-                format!("{}", spd), egui::FontId::proportional(9.0), TEXT);
+                format!("{}", spd), egui::FontId::proportional(11.0), TEXT);
         }
     }
 
@@ -449,13 +570,85 @@ fn draw_heading_compass(ui: &mut egui::Ui, heading: f32) {
     );
 }
 
+/// Bright annunciator-style colors: dim when off (just outline/text), lit
+/// with a filled bright background when on, matching the "brightness of the
+/// outline/text vs. filled" look of real cockpit switch panels.
+const NAV_LIT:    egui::Color32 = egui::Color32::from_rgb(90, 200, 130);
+const STROBE_LIT: egui::Color32 = egui::Color32::from_rgb(230, 230, 230);
+const LAND_LIT:   egui::Color32 = egui::Color32::from_rgb(250, 220, 90);
+const OFF_FILL:   egui::Color32 = egui::Color32::from_rgb(15, 19, 28);
+const OFF_TEXT:   egui::Color32 = egui::Color32::from_rgb(90, 100, 120);
+
+/// Grid of bright toggle/annunciator indicators: NAV, STROBE, and LANDING
+/// lights (clickable — flips the same `LightTimers` fields the exterior
+/// lights read from), plus read-only BRAKE and IGNITION status lights.
+/// Toggled switches fill with their lit color when on; read-only ones just
+/// reflect live state and aren't clickable.
+fn draw_switch_panel(ui: &mut egui::Ui, lights: &mut LightTimers) {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            light_switch(ui, "NAV", &mut lights.nav_on, NAV_LIT);
+            light_switch(ui, "STRB", &mut lights.strobe_on, STROBE_LIT);
+            light_switch(ui, "LAND", &mut lights.landing_light_on, LAND_LIT);
+        });
+    });
+}
+
+/// Alpha used for a lit switch's fill — the glow is a translucent tint over
+/// the panel background rather than a solid block, so the bright outline
+/// and text (still fully opaque) read as the "on" cue, not the fill alone.
+const LIT_FILL_ALPHA: u8 = 70;
+
+fn lit_fill(color: egui::Color32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), LIT_FILL_ALPHA)
+}
+
+/// A single clickable rectangular switch. Semi-transparent tint of
+/// `lit_color` plus a bright outline/text when `*on`, otherwise a dark fill
+/// with dim outline/text — clicking anywhere on the rectangle flips it.
+fn light_switch(ui: &mut egui::Ui, label: &str, on: &mut bool, lit_color: egui::Color32) {
+    let size = egui::Vec2::new(40.0, 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+    }
+
+    let painter = ui.painter();
+    let (fill, text_color, stroke_color) = if *on {
+        (lit_fill(lit_color), lit_color, lit_color)
+    } else {
+        (OFF_FILL, OFF_TEXT, OFF_TEXT)
+    };
+    painter.rect_filled(rect, egui::CornerRadius::from(3u8), fill);
+    painter.rect_stroke(rect, egui::CornerRadius::from(3u8), egui::Stroke::new(1.0, stroke_color), egui::StrokeKind::Outside);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0), text_color);
+}
+
+/// A read-only annunciator light — same visual language as `light_switch`
+/// but not clickable, just reflecting `on`'s current state.
+fn light_indicator(ui: &mut egui::Ui, label: &str, on: bool, lit_color: egui::Color32) {
+    let size = egui::Vec2::new(58.0, 26.0);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+
+    let painter = ui.painter();
+    let (fill, text_color, stroke_color) = if on {
+        (lit_fill(lit_color), lit_color, lit_color)
+    } else {
+        (OFF_FILL, OFF_TEXT, OFF_TEXT)
+    };
+    painter.rect_filled(rect, egui::CornerRadius::from(3u8), fill);
+    painter.rect_stroke(rect, egui::CornerRadius::from(3u8), egui::Stroke::new(1.0, stroke_color), egui::StrokeKind::Outside);
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, label, egui::FontId::proportional(10.0), text_color);
+}
+
 /// Arc tachometer — dial position is engine RPM against the propeller's
 /// governed redline (`prop_max_rps`), not throttle lever position, since
 /// those two only agree at steady state.
 fn draw_engine_gauge(ui: &mut egui::Ui, root: &AircraftRoot, max_rps: f32) {
-    let (response, painter) = ui.allocate_painter(egui::Vec2::new(128.0, 84.0), egui::Sense::hover());
+    let (response, painter) = ui.allocate_painter(egui::Vec2::new(120.0, 96.0), egui::Sense::hover());
     let rect = response.rect;
-    let radius = 52.0;
+    let radius = 58.0;
     let center = egui::Pos2::new(rect.center().x, rect.top() + radius + 2.0);
 
     let rpm = root.engine_rps * 60.0;
@@ -504,10 +697,10 @@ fn draw_engine_gauge(ui: &mut egui::Ui, root: &AircraftRoot, max_rps: f32) {
     painter.circle_filled(center, 4.0, ACCENT);
 
     painter.text(
-        egui::Pos2::new(center.x, center.y + 6.0),
+        egui::Pos2::new(center.x, center.y + 8.0),
         egui::Align2::CENTER_TOP,
         format!("{:.0} RPM", rpm),
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(16.0),
         TEXT,
     );
 }
@@ -522,6 +715,7 @@ const FLAP_MAX_DEG: f32 = 30.0;
 /// knob, red mixture knob). Forward/up = pushed in = more power/richer.
 fn draw_throttle_mixture_levers(ui: &mut egui::Ui, root: &mut AircraftRoot) {
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
         lever(ui, "THR", &mut root.throttle_percent, 0.0..=1.0, THROTTLE_HANDLE, None,
             Some(|t| format!("{:.0}%", t * 100.0)));
 
@@ -580,11 +774,11 @@ fn lever(
     step: Option<f32>,
     label_fn: Option<impl Fn(f32) -> String>,
 ) {
-    ui.allocate_ui(egui::vec2(40.0, 130.0), |ui| {
+    ui.allocate_ui(egui::vec2(28.0, 146.0), |ui| {
         ui.vertical_centered(|ui| {
             ui.label(egui::RichText::new(label).size(10.0).color(TEXT_DIM));
 
-            let rail_size = egui::Vec2::new(28.0, 90.0);
+            let rail_size = egui::Vec2::new(18.0, 108.0);
             let (rect, response) = ui.allocate_exact_size(rail_size, egui::Sense::click_and_drag());
 
             let (start, end) = (*range.start(), *range.end());
@@ -667,6 +861,6 @@ fn baro_at_altitude(sea_level_density: f32, altitude_m: f32) -> (f32, f32) {
 fn draw_baro_readout(ui: &mut egui::Ui, sea_level_density: f32, altitude_m: f32) {
     let (density, pressure_inhg) = baro_at_altitude(sea_level_density, altitude_m);
 
-    ui.label(egui::RichText::new(format!("{:.2} inHg", pressure_inhg)).size(12.0).color(TEXT));
-    ui.label(egui::RichText::new(format!("ρ {:.3} kg/m³", density)).size(9.5).color(TEXT_DIM));
+    ui.label(egui::RichText::new(format!("{:.2} inHg", pressure_inhg)).size(14.0).color(TEXT));
+    ui.label(egui::RichText::new(format!("ρ {:.3} kg/m³", density)).size(11.0).color(TEXT_DIM));
 }

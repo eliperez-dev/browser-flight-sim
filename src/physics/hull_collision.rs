@@ -16,6 +16,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::aircraft_physics::AircraftRoot;
+use crate::camera::CameraMode;
 use crate::plane::{Airplane, PlaneState};
 use crate::terrain::WorldGenerator;
 
@@ -66,5 +67,24 @@ pub fn detect_hull_collision(
         state.crashed = true;
         *forces.linear_velocity_mut() = Vec3::ZERO;
         *forces.angular_velocity_mut() = Vec3::ZERO;
+    }
+}
+
+/// TEMPORARY test hook: when a crash is detected, dump the camera into free
+/// roam and immediately clear the flag so the crash state doesn't stick
+/// around. Lets the crash-detection logic be exercised without a real
+/// game-over/respawn flow yet. Replace with an actual crash-response system
+/// once that's designed.
+pub fn react_to_crash(
+    mut camera_mode: ResMut<CameraMode>,
+    mut aircraft_q: Query<&mut PlaneState, With<Airplane>>,
+) {
+    let Ok(mut state) = aircraft_q.single_mut() else {
+        return;
+    };
+
+    if state.crashed {
+        *camera_mode = CameraMode::Free;
+        state.crashed = false;
     }
 }

@@ -4,18 +4,21 @@
 //! All sliders write directly into [`FlightModelConfig`], so changes take
 //! effect on the very next physics tick.
 
+use avian3d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
+use crate::camera::FixedCameraMounts;
 use crate::debug_tools::debug_hud::DebugHud;
 use crate::fog::FogSettings;
 use crate::lights::LightTimers;
 use crate::map::MapIconSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
+use crate::physics::aircraft_physics::AircraftRoot;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
-use crate::plane::Airplane;
+use crate::plane::{Airplane, PlaneState, spawn_position};
 use crate::sky::DayNightCycle;
-use crate::terrain::{BiomeShape, WorldGenConfig};
+use crate::terrain::{BiomeShape, WorldGenConfig, WorldGenerator};
 use crate::ui::menu_bar::MenuBar;
 use crate::water::WaterSettings;
 
@@ -77,7 +80,10 @@ fn draw_menu(
     mut map_icons: ResMut<MapIconSettings>,
     mut sky: ResMut<DayNightCycle>,
     mut light_timers_q: Query<&mut LightTimers, With<Airplane>>,
+    mut fixed_cams: ResMut<FixedCameraMounts>,
     hud: Res<DebugHud>,
+    world_gen: Res<WorldGenerator>,
+    mut plane_q: Query<(&mut Transform, &mut LinearVelocity, &mut AngularVelocity, &mut PlaneState, &mut AircraftRoot), With<Airplane>>,
 ) -> Result {
     if !bar.flight_model { return Ok(()); }
 
@@ -104,6 +110,29 @@ fn draw_menu(
             if ui.button("Reset to defaults").clicked() {
                 *cfg = defaults.clone();
                 w = WorldGenConfig::default();
+            }
+
+            ui.separator();
+
+            // ---------------------------------------------------------------
+            // Quick Cheats — one-off actions for fast iteration/testing,
+            // as opposed to the tunable sliders/values below.
+            // ---------------------------------------------------------------
+            ui.heading("Quick Cheats");
+            if ui.button("+1000 m altitude").clicked()
+                && let Ok((mut tf, ..)) = plane_q.single_mut()
+            {
+                tf.translation.y += 1000.0;
+            }
+            if ui.button("Reset Plane to Runway").clicked()
+                && let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut()
+            {
+                *transform = Transform::from_translation(spawn_position(world_gen.as_ref()))
+                    .with_scale(Vec3::splat(0.1));
+                lin_vel.0 = Vec3::ZERO;
+                ang_vel.0 = Vec3::ZERO;
+                state.crashed = false;
+                root.throttle_percent = 0.0;
             }
 
             ui.separator();
@@ -388,6 +417,31 @@ fn draw_menu(
                     ui.separator();
                     if ui.button("Reset fog").clicked() {
                         *fog = FogSettings::default();
+                    }
+                });
+
+            // ---------------------------------------------------------------
+            // Fixed camera mounts — nose/tail/wingtip rigid offsets, editable
+            // live so a mount can be dialed in while flying (Camera menu
+            // switches which one is active). Offsets are metres in the
+            // plane's local space; yaw/pitch aim the camera once mounted.
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Fixed Cameras")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for mount in fixed_cams.mounts.iter_mut() {
+                        ui.label(mount.name);
+                        ui.add(egui::Slider::new(&mut mount.offset.x, -8.0..=8.0).text("X"));
+                        ui.add(egui::Slider::new(&mut mount.offset.y, -4.0..=4.0).text("Y"));
+                        ui.add(egui::Slider::new(&mut mount.offset.z, -10.0..=10.0).text("Z"));
+                        ui.add(egui::Slider::new(&mut mount.yaw, -std::f32::consts::PI..=std::f32::consts::PI)
+                            .text("Yaw (rad)"));
+                        ui.add(egui::Slider::new(&mut mount.pitch, -1.5..=1.5)
+                            .text("Pitch (rad)"));
+                        ui.separator();
+                    }
+                    if ui.button("Reset fixed cameras").clicked() {
+                        *fixed_cams = FixedCameraMounts::default();
                     }
                 });
 
@@ -725,7 +779,7 @@ fn biome_controls(ui: &mut egui::Ui, name: &str, b: &mut BiomeShape) {
 fn surface_controls(ui: &mut egui::Ui, c: &mut AeroSurfaceConfig) {
     ui.add(egui::Slider::new(&mut c.lift_slope, 0.1..=10.0)
         .text("Lift slope (1/rad)"));
-    ui.add(egui::Slider::new(&mut c.skin_friction, 0.1..=0.2)
+    ui.add(egui::Slider::new(&mut c.skin_friction, 0.0..=0.2)
         .text("Skin friction (Cd)"));
     ui.add(egui::Slider::new(&mut c.zero_lift_aoa, -10.0..=10.0)
         .text("Zero-lift AoA (°)"));

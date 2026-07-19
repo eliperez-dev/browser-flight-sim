@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use super::aero_surface::AeroSurface;
 use super::bi_vector3::BiVector3;
-use super::flight_config::FlightModelConfig;
+use super::flight_config::{isa_density_ratio, FlightModelConfig};
 use super::landing_gear::GROUND_Y;
 use crate::plane::PlaneState;
 
@@ -104,7 +104,12 @@ pub fn apply_aero_forces(
     // nose = aircraft local +Z in world space (model faces +Z, parent scale 0.1)
     let nose = rot * Vec3::Z;
 
-    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
+    // `air_density` is the sea-level reference; thin it out with altitude using
+    // the same ISA model the mixture lever and baro gauge already use, so lift,
+    // drag, and engine power all agree on what the air is doing up there.
+    let air_density = cfg.air_density * isa_density_ratio(origin.y);
+
+    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
 
     // Thrust follows engine RPM, not the throttle directly: the throttle sets a
     // target RPM that the engine spools toward (airplane_controller), so thrust
@@ -133,7 +138,7 @@ pub fn apply_aero_forces(
     let ang_accel = inertia_world_rot * accel_local;
     let ang_vel_pred = ang_vel + dt * cfg.prediction_fraction * ang_accel;
 
-    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, ROOT_SCALE, children, &surface_q, cfg.air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
+    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, ROOT_SCALE, children, &surface_q, air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
@@ -153,7 +158,7 @@ pub fn apply_aero_forces(
     // CoM (no moment); the fin/stabilizer supply the weathervaning. Per-axis
     // v·|v| keeps the sign and gives the usual v² magnitude.
     let v_body = rot.inverse() * lin_vel;
-    let drag_body = -0.5 * cfg.air_density * Vec3::new(
+    let drag_body = -0.5 * air_density * Vec3::new(
         cfg.fuselage_drag.x * v_body.x * v_body.x.abs(),
         cfg.fuselage_drag.y * v_body.y * v_body.y.abs(),
         cfg.fuselage_drag.z * v_body.z * v_body.z.abs(),

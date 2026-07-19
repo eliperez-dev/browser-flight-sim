@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{camera::{
-    CameraMode, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, fit_canvas, free_cam_control, toggle_camera_mode, track_cam_control
+    CameraMode, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
 }, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
@@ -29,7 +29,7 @@ use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
 use crate::physics::airplane_controller::{airplane_controller, flight_assist};
 use crate::physics::flight_config::FlightModelConfig;
-use crate::physics::hull_collision::detect_hull_collision;
+use crate::physics::hull_collision::{detect_hull_collision, react_to_crash};
 use crate::physics::landing_gear::apply_landing_gear;
 
 mod airport_names;
@@ -74,9 +74,10 @@ fn main() {
         .add_plugins((
             crate::ui::MenuBarPlugin,
             crate::ui::StylePlugin,
-            crate::ui::WeatherMenuPlugin,
+            crate::ui::WorldMenuPlugin,
             crate::ui::PlaneMenuPlugin,
             crate::ui::InstrumentPanelPlugin,
+            crate::ui::CameraMenuPlugin,
         ))
         // Cap the virtual-time step so a stutter frame never gives the physics
         // integrator a huge dt that over-compresses the spring-damper struts.
@@ -93,6 +94,7 @@ fn main() {
         .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
         .init_resource::<FlightModelConfig>()
         .init_resource::<CameraMode>()
+        .init_resource::<FixedCameraMounts>()
         .init_resource::<DebugHud>()
         .init_resource::<GizmosVisible>()
         .add_systems(Startup, (setup, setup_gizmo_config))
@@ -111,6 +113,9 @@ fn main() {
         )
         .add_systems(Update, (
             toggle_camera_mode,
+            toggle_fullscreen_hotkey,
+            fixed_cam_hotkeys,
+            react_to_crash,
             toggle_gizmos,
             toggle_pause,
             free_cam_control,
@@ -125,7 +130,7 @@ fn main() {
         // EguiPostUpdateSet::EndPass (which runs EguiPrimaryContextPass) is also
         // ordered after TransformPropagate to guarantee the label projection matches
         // the same-frame GlobalTransform that the 3D stalk uses.
-        .add_systems(PostUpdate, track_cam_control.before(TransformSystems::Propagate))
+        .add_systems(PostUpdate, (track_cam_control, fixed_cam_control).before(TransformSystems::Propagate))
         .add_systems(PostUpdate, (draw_aero_gizmos, draw_light_gizmos).after(TransformSystems::Propagate))
         .configure_sets(PostUpdate, EguiPostUpdateSet::EndPass.after(TransformSystems::Propagate))
         .run();
@@ -247,15 +252,11 @@ fn setup(
     // Spawn the aircraft on the origin runway, which now sits at the natural
     // terrain height. `get_terrain_height` returns the runway surface here (the
     // spawn point is on the pavement); add the gear standoff so the struts settle.
-    const SPAWN_X: f32 = 0.0;
-    const SPAWN_Z: f32 = -900.0;
-    const GEAR_STANDOFF: f32 = 1.25;
-    let spawn_y = world_gen.get_terrain_height(SPAWN_X, SPAWN_Z) + GEAR_STANDOFF;
     let aircraft = spawn_aircraft(
         &mut commands,
         &asset_server,
         &cfg,
-        Vec3::new(SPAWN_X, spawn_y, SPAWN_Z),
+        crate::plane::spawn_position(world_gen.as_ref()),
     );
     let light_children = spawn_aircraft_lights(&mut commands, &cfg);
     commands.entity(aircraft)

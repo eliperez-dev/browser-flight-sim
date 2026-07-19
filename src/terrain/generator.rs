@@ -152,16 +152,16 @@ pub struct WorldGenConfig {
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 3, ///rand::random(),
+            seed: 3, //rand::random(),
             horizontal_scale: DEFAULT_HORIZONTAL_SCALE,
             height_scale: DEFAULT_HEIGHT_SCALE,
-            render_distance: 32,
+            render_distance: 28,
             max_chunks_per_frame: 4,
             lod_levels: [
-                (2.0, 16),
-                (6.0, 10),
-                (20.0, 4),
-                (30.0, 2),
+                (2.0, 14),
+                (6.0, 9),
+                (18.0, 4),
+                (25.0, 1),
             ],
             sea_level_threshold: DEFAULT_SEA_LEVEL_THRESHOLD,
             ocean_transition_width: DEFAULT_OCEAN_TRANSITION_WIDTH,

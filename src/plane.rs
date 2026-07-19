@@ -7,6 +7,25 @@ use crate::{camera::PIXEL_LAYER, physics::{aero_surface::{AeroSurface, ControlIn
 #[derive(Component)]
 pub struct Airplane;
 
+/// Origin-runway spawn point, shared by the initial `setup()` spawn in
+/// main.rs and the "Reset Plane" button (ui::plane_menu) so both place the
+/// aircraft identically. `SPAWN_Y` is added to the live terrain height at
+/// (SPAWN_X, SPAWN_Z) — see `spawn_position` below — since the runway isn't
+/// flat across the whole map.
+pub const SPAWN_X: f32 = 0.0;
+pub const SPAWN_Z: f32 = -900.0;
+/// Gear standoff (rest_length - mount_height = 1.1 - (-0.15) = 1.25 m) added
+/// on top of the terrain height so the struts just touch down and settle
+/// onto their springs instead of spawning embedded in the ground.
+pub const GEAR_STANDOFF: f32 = 1.25;
+
+/// Computes the world-space spawn position on the origin runway, given the
+/// current terrain height there.
+pub fn spawn_position(world_gen: &crate::terrain::WorldGenerator) -> Vec3 {
+    let spawn_y = world_gen.get_terrain_height(SPAWN_X, SPAWN_Z) + GEAR_STANDOFF;
+    Vec3::new(SPAWN_X, spawn_y, SPAWN_Z)
+}
+
 /// Marker for the child entity holding the visual GLTF scene, so its local
 /// offset can be adjusted at runtime (see `model_offset` in the debug menu).
 #[derive(Component)]

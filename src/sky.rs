@@ -294,7 +294,10 @@ fn update_daylight_cycle(
 
     // Orbit the sun around the world's X axis, then tilt the whole orbit by the
     // inclination around Z so it doesn't pass straight through the zenith.
-    let angle = cycle.time_of_day * std::f32::consts::TAU;
+    // Offset by a quarter turn so the sun is actually overhead at
+    // `time_of_day = 0.5` (noon) rather than 0.75 — otherwise the displayed
+    // clock reads 6 hours behind the sun's real position in the sky.
+    let angle = cycle.time_of_day * std::f32::consts::TAU + std::f32::consts::FRAC_PI_2;
     let final_rotation = Quat::from_rotation_z(cycle.inclination) * Quat::from_rotation_x(angle);
     let sun_dir = final_rotation * Vec3::NEG_Z;
     // How far above the horizon the sun is (1 = overhead, <0 = below horizon).

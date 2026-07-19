@@ -72,11 +72,24 @@ pub struct LightTimers {
     pub beacon_t: f32,
     /// Whether the landing light is currently on.
     pub landing_light_on: bool,
+    /// Master switch for nav lights (red/green/white wingtip+tail). Real
+    /// aircraft leave these on for the whole flight, but the cockpit panel
+    /// exposes a switch, so it needs to be toggleable rather than always on.
+    pub nav_on: bool,
+    /// Master switch for the anti-collision strobes. Independent of the
+    /// beacon, which is tied to engine state rather than a manual switch.
+    pub strobe_on: bool,
 }
 
 impl Default for LightTimers {
     fn default() -> Self {
-        Self { strobe_t: 0.0, beacon_t: 0.0, landing_light_on: true }
+        Self {
+            strobe_t: 0.0,
+            beacon_t: 0.0,
+            landing_light_on: true,
+            nav_on: true,
+            strobe_on: true,
+        }
     }
 }
 
@@ -253,8 +266,8 @@ pub fn animate_strobes(
     let lc = &cfg.lights;
     for mut t in &mut timers_q {
         t.strobe_t = (t.strobe_t + time.delta_secs()) % lc.strobe_period;
-        let on = t.strobe_t < lc.strobe_on_time;
-        let intensity = if on { lc.strobe_intensity } else { 0.0 };
+        let flash_on = t.strobe_t < lc.strobe_on_time;
+        let intensity = if t.strobe_on && flash_on { lc.strobe_intensity } else { 0.0 };
         for mut l in &mut str_l_q { l.intensity = intensity; }
         for mut l in &mut str_r_q { l.intensity = intensity; }
         for mut l in &mut str_t_q { l.intensity = intensity; }
@@ -307,20 +320,12 @@ pub fn apply_lights_to_entities(
     let lc = &cfg.lights;
     let s = ROOT_SCALE;
 
-    // Nav intensities and positions (config-driven only)
+    // Positions/angles (config-driven only — no need to touch these every
+    // frame, just when the debug panel edits them).
     if cfg.is_changed() {
-        for (mut l, mut tf) in &mut nav_l_q {
-            l.intensity = lc.nav_intensity;
-            tf.translation = lc.nav_left_pos * s;
-        }
-        for (mut l, mut tf) in &mut nav_r_q {
-            l.intensity = lc.nav_intensity;
-            tf.translation = lc.nav_right_pos * s;
-        }
-        for (mut l, mut tf) in &mut nav_t_q {
-            l.intensity = lc.nav_intensity;
-            tf.translation = lc.nav_tail_pos * s;
-        }
+        for (_, mut tf) in &mut nav_l_q { tf.translation = lc.nav_left_pos * s; }
+        for (_, mut tf) in &mut nav_r_q { tf.translation = lc.nav_right_pos * s; }
+        for (_, mut tf) in &mut nav_t_q { tf.translation = lc.nav_tail_pos * s; }
         for (_, mut tf) in &mut str_l_q { tf.translation = lc.strobe_left_pos * s; }
         for (_, mut tf) in &mut str_r_q { tf.translation = lc.strobe_right_pos * s; }
         for (_, mut tf) in &mut str_t_q { tf.translation = lc.strobe_tail_pos * s; }
@@ -336,8 +341,18 @@ pub fn apply_lights_to_entities(
         }
     }
 
-    // Landing light on/off from LightTimers
-    let landing_on = timers_q.iter().next().map(|t| t.landing_light_on).unwrap_or(false);
+    // Nav on/off and landing light on/off from LightTimers, re-applied every
+    // frame (unlike position/angle above) since these flip from cockpit
+    // switches rather than the debug config panel.
+    let (nav_on, landing_on) = timers_q.iter().next()
+        .map(|t| (t.nav_on, t.landing_light_on))
+        .unwrap_or((true, false));
+
+    let nav_intensity = if nav_on { lc.nav_intensity } else { 0.0 };
+    for (mut l, _) in &mut nav_l_q { l.intensity = nav_intensity; }
+    for (mut l, _) in &mut nav_r_q { l.intensity = nav_intensity; }
+    for (mut l, _) in &mut nav_t_q { l.intensity = nav_intensity; }
+
     for (mut sl, _) in &mut landing_q {
         sl.intensity = if landing_on { lc.landing_intensity } else { 0.0 };
     }
