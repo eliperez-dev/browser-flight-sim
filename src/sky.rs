@@ -68,7 +68,7 @@ pub struct DayNightCycle {
 impl Default for DayNightCycle {
     fn default() -> Self {
         Self {
-            time_of_day: 0.65,
+            time_of_day: 0.5,
             speed: 0.002,
             inclination: 0.3,
             tint_fog: true,

@@ -36,6 +36,13 @@ pub struct PlaneVisual;
 #[derive(Component)]
 pub struct Propeller;
 
+/// Marker on the fixed vertical stabilizer (the fin the rudder hinges to).
+/// Distinguishes it from the `body_lift` panels, which are also non-control
+/// `AeroSurface::wing`s but use a different config slot in
+/// `apply_config_to_entities`.
+#[derive(Component)]
+pub struct VerticalFin;
+
 /// Shared output written each frame by whichever physics model is active.
 /// All other systems (HUD, camera, etc.) read from here instead of from
 /// model-specific components, so they stay decoupled from the active model.
@@ -97,6 +104,7 @@ pub fn spawn_aircraft(
     let wing_config = cfg.wing.clone();
     let stab_h = cfg.elevator.clone();
     let stab_v = cfg.rudder.clone();
+    let fin_config = cfg.vertical_fin.clone();
 
     // Children spawned separately so we can get their entity IDs
     // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
@@ -177,6 +185,16 @@ pub fn spawn_aircraft(
         Transform::from_xyz(0.0, 10.0, -58.0).with_rotation(rudder_rot),
     )).id();
 
+    // Fixed vertical fin, just forward of the rudder — the non-control tail
+    // fin the rudder hinges to. Provides yaw weathervaning and sideslip drag
+    // even with no rudder input, matching the real C172's fixed-fin +
+    // hinged-rudder split (the rudder alone has no fixed portion).
+    let vertical_fin = commands.spawn((
+        AeroSurface::wing(fin_config),
+        VerticalFin,
+        Transform::from_xyz(0.0, 10.0, -50.0).with_rotation(rudder_rot),
+    )).id();
+
     // Visual mesh is a separate child so it can be offset independently of the physics origin.
     // The model's Y origin is at the belly; shifting it down -10 local units (-1 m world)
     // aligns the fuselage center with the CoM and the simulated wing positions.
@@ -238,7 +256,7 @@ pub fn spawn_aircraft(
         TransformInterpolation,
         PIXEL_LAYER,
     ))
-    .add_children(&[visual, propeller, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder])
+    .add_children(&[visual, propeller, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder, vertical_fin])
     .id()
 }
 

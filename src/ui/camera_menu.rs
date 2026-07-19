@@ -5,7 +5,8 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{CameraMode, FixedCameraMounts, FreeCam, TrackCam, is_fullscreen, request_toggle_fullscreen};
+use crate::camera::{CameraMode, ChaseCam, FixedCameraMounts, FreeCam, TrackCam, is_fullscreen, request_toggle_fullscreen};
+use crate::plane::Airplane;
 use crate::ui::menu_bar::MenuBar;
 
 pub struct CameraMenuPlugin;
@@ -21,7 +22,8 @@ fn draw_camera_menu(
     mut mode: ResMut<CameraMode>,
     mounts: Res<FixedCameraMounts>,
     mut contexts: EguiContexts,
-    mut cam_query: Query<(&Transform, &mut FreeCam, &mut TrackCam)>,
+    mut cam_query: Query<(&Transform, &mut FreeCam, &mut ChaseCam, &mut TrackCam)>,
+    plane_query: Query<&Transform, (With<Airplane>, Without<FreeCam>)>,
 ) -> Result {
     if !bar.camera { return Ok(()); }
 
@@ -45,10 +47,21 @@ fn draw_camera_menu(
             if ui.selectable_label(matches!(*mode, CameraMode::Orbit), "Orbit").clicked() {
                 *mode = CameraMode::Orbit;
             }
+            if ui.selectable_label(matches!(*mode, CameraMode::Chase), "Chase").clicked() {
+                // Seed ChaseCam's look angles and plane-relative offset from
+                // wherever the camera currently is — mirrors toggle_camera_mode.
+                if let (Ok((tf, _, mut chase, _)), Ok(plane_tf)) = (cam_query.single_mut(), plane_query.single()) {
+                    let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+                    chase.yaw = yaw;
+                    chase.pitch = pitch;
+                    chase.offset = tf.translation - plane_tf.translation;
+                }
+                *mode = CameraMode::Chase;
+            }
             if ui.selectable_label(matches!(*mode, CameraMode::Free), "Free Fly").clicked() {
                 // Seed FreeCam's look angles from the current camera orientation
                 // so switching in doesn't snap the view — mirrors toggle_camera_mode.
-                if let Ok((tf, mut free, _)) = cam_query.single_mut() {
+                if let Ok((tf, mut free, _, _)) = cam_query.single_mut() {
                     let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
                     free.yaw = yaw;
                     free.pitch = pitch;

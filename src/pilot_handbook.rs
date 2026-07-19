@@ -160,11 +160,11 @@ fn tab_controls(ui: &mut egui::Ui) {
 
     ui.add_space(10.0);
     ctrl_section(ui, "Camera", &[
-        ("F",            "Toggle orbit / free camera"),
+        ("F",            "Cycle Orbit -> Chase -> Free camera"),
         ("Arrow keys",   "Look up / down / left / right"),
-        ("W A S D",      "Free cam move forward / strafe"),
-        ("E / Q",        "Free cam up / down"),
-        ("Shift",        "Free cam speed boost"),
+        ("W A S D",      "Free/Chase cam move forward / strafe"),
+        ("E / Q",        "Free/Chase cam up / down"),
+        ("Shift",        "Free/Chase cam speed boost"),
         ("[ / ]",        "Orbit camera zoom in / out"),
         ("1-9, 0",       "Jump to fixed camera mount 1-10"),
         ("F11",          "Toggle fullscreen"),

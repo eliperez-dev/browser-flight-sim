@@ -34,6 +34,7 @@ pub fn populate_debug_hud(
 
     hud.entries.push(("CAM", match &*mode {
         CameraMode::Free  => "FREE".into(),
+        CameraMode::Chase => "CHASE".into(),
         CameraMode::Orbit => "ORBIT".into(),
         CameraMode::Fixed(i) => format!("FIXED[{i}]"),
     }));

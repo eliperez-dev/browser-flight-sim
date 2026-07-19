@@ -739,6 +739,8 @@ fn draw_menu(
                         .show(ui, |ui| surface_controls(ui, &mut cfg.elevator));
                     egui::CollapsingHeader::new("Rudder (v-stab)")
                         .show(ui, |ui| surface_controls(ui, &mut cfg.rudder));
+                    egui::CollapsingHeader::new("Vertical fin (fixed)")
+                        .show(ui, |ui| surface_controls(ui, &mut cfg.vertical_fin));
                     egui::CollapsingHeader::new("Body lift")
                         .show(ui, |ui| surface_controls(ui, &mut cfg.body_lift));
                 });

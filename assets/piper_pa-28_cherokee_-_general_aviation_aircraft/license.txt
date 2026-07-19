@@ -1,0 +1,11 @@
+Model Information:
+* title:	Piper PA-28 Cherokee - General Aviation Aircraft
+* source:	https://sketchfab.com/3d-models/piper-pa-28-cherokee-general-aviation-aircraft-0c65c2677bbc463787905434544f035f
+* author:	INGSOC1984 (https://sketchfab.com/INGSOC1984)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Piper PA-28 Cherokee - General Aviation Aircraft" (https://sketchfab.com/3d-models/piper-pa-28-cherokee-general-aviation-aircraft-0c65c2677bbc463787905434544f035f) by INGSOC1984 (https://sketchfab.com/INGSOC1984) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

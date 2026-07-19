@@ -166,8 +166,14 @@ pub struct FlightModelConfig {
     pub aileron: AeroSurfaceConfig,
     /// Horizontal stabilizer / elevator (`ControlInputType::Pitch`).
     pub elevator: AeroSurfaceConfig,
-    /// Vertical stabilizer / rudder (`ControlInputType::Yaw`).
+    /// Movable rudder, hinged to the fixed vertical fin (`ControlInputType::Yaw`).
     pub rudder: AeroSurfaceConfig,
+    /// Fixed vertical stabilizer (non-control). Provides yaw weathervaning and
+    /// sideslip drag even with no rudder input — without it, releasing the
+    /// rudder key removed essentially all directional stability, since the
+    /// rudder itself was the only tail-fin area and it relaxes to zero
+    /// deflection when not commanded.
+    pub vertical_fin: AeroSurfaceConfig,
     /// Fuselage lift surfaces — small non-control panels at the body.
     pub body_lift: AeroSurfaceConfig,
 }
@@ -433,7 +439,7 @@ impl Default for FlightModelConfig {
             // streamlined (small Z) and is the only term that acts in normal
             // flight; the flank/belly terms bite in a skid or a high-AoA mush.
             // Roughly broadside Cd·A for a light-aircraft fuselage.
-            fuselage_drag:        Vec3::new(3.0, 4.0, 0.20),
+            fuselage_drag:        Vec3::new(1.875, 2.5, 0.125),
             air_density:          1.2,
             gravity:              9.81,
             prediction_fraction:  0.5,
@@ -492,12 +498,18 @@ impl Default for FlightModelConfig {
             //   Full wingspan: 2 × (0.475 root + 4.05 wing + 0.95 aileron) ≈ 11.0 m.
             //   aspect_ratio is the full-wing AR (7.32) so the lift-slope correction
             //   and induced drag use the real value, independent of per-panel geometry.
-            //   Stall speed Vs ≈ 46 kt (real C172: 44–48 kt).
+            //   Stall speed Vs ≈ 46 kt at the ideal 2π lift slope (real C172:
+            //   44–48 kt); the 0.9x lift_slope trim below raises this somewhat.
             wing: AeroSurfaceConfig {
                 flap_fraction: 0.2,
                 span: 4.05,
                 chord: 1.62,
                 aspect_ratio: 7.32,
+                // Trimmed ~10% below the thin-airfoil ideal (2π) so the wing
+                // makes less lift per degree of AoA — previously excess lift
+                // let the aircraft convert speed straight into altitude
+                // instead of building airspeed on the ground/in a dive.
+                lift_slope: std::f32::consts::TAU * 0.9,
                 ..AeroSurfaceConfig::default()
             },
             // Ailerons: outer panels, 0.95 m span × 1.62 m chord ≈ 1.54 m² each.
@@ -509,9 +521,18 @@ impl Default for FlightModelConfig {
                 aspect_ratio: 7.32,
                 ..AeroSurfaceConfig::default()
             },
-            // Tail sized to a real C172: horizontal ≈ 3.4 m², vertical ≈ 2.2 m².
+            // Tail sized to a real C172: horizontal ≈ 3.4 m², vertical ≈ 2.2 m²
+            // total, split fin/rudder like the real aircraft's fixed fin +
+            // hinged rudder (~60/40 by area) so releasing the rudder still
+            // leaves a fixed fin producing weathervaning and sideslip drag.
             elevator: AeroSurfaceConfig::stabilizer(3.4, 1.0),
-            rudder:   AeroSurfaceConfig::stabilizer(2.2, 0.8),
+            rudder:   AeroSurfaceConfig::stabilizer(1.3, 0.8),
+            vertical_fin: AeroSurfaceConfig {
+                span: 1.9,
+                chord: 0.8,
+                aspect_ratio: 1.9 / 0.8,
+                ..AeroSurfaceConfig::default()
+            },
             // Small fuselage lift panels (no flaps).
             body_lift: AeroSurfaceConfig {
                 flap_fraction: 0.0,

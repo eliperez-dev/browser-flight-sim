@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{camera::{
-    CameraMode, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
+    CameraMode, ChaseCam, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, chase_cam_control, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
 }, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
@@ -130,7 +130,7 @@ fn main() {
         // EguiPostUpdateSet::EndPass (which runs EguiPrimaryContextPass) is also
         // ordered after TransformPropagate to guarantee the label projection matches
         // the same-frame GlobalTransform that the 3D stalk uses.
-        .add_systems(PostUpdate, (track_cam_control, fixed_cam_control).before(TransformSystems::Propagate))
+        .add_systems(PostUpdate, (track_cam_control, chase_cam_control, fixed_cam_control).before(TransformSystems::Propagate))
         .add_systems(PostUpdate, (draw_aero_gizmos, draw_light_gizmos).after(TransformSystems::Propagate))
         .configure_sets(PostUpdate, EguiPostUpdateSet::EndPass.after(TransformSystems::Propagate))
         .run();
@@ -175,7 +175,7 @@ fn apply_config_to_entities(
     // Surfaces also carry their own Transform (the mounted orientation); the
     // Without filters keep this disjoint from the visual/propeller Transform
     // queries above so Bevy can run them together.
-    mut surface_q: Query<(&mut AeroSurface, &mut Transform), (Without<PlaneVisual>, Without<Propeller>)>,
+    mut surface_q: Query<(&mut AeroSurface, &mut Transform, Has<crate::plane::VerticalFin>), (Without<PlaneVisual>, Without<Propeller>)>,
     mut gravity: ResMut<Gravity>,
 ) {
     if !cfg.is_changed() {
@@ -201,12 +201,13 @@ fn apply_config_to_entities(
         inertia.principal = inertia_eff;
         damping.0 = cfg.angular_damping;
     }
-    for (mut surface, mut tf) in &mut surface_q {
+    for (mut surface, mut tf, is_vertical_fin) in &mut surface_q {
         let new_config = match (surface.is_control_surface, surface.input_type) {
             (true, ControlInputType::Flap)  => &cfg.wing,
             (true, ControlInputType::Roll)  => &cfg.aileron,
             (true, ControlInputType::Pitch) => &cfg.elevator,
             (true, ControlInputType::Yaw)   => &cfg.rudder,
+            (false, _) if is_vertical_fin   => &cfg.vertical_fin,
             (false, _)                      => &cfg.body_lift,
         };
         surface.config = new_config.clone();
@@ -285,6 +286,7 @@ fn setup(
         Transform::from_xyz(0.0, 8.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
         FreeCam { yaw: 0.0, pitch: -0.3 },
         TrackCam { yaw: 0.0, pitch: 0.3, distance: 15.0 },
+        ChaseCam { yaw: 0.0, pitch: -0.3, offset: Vec3::new(0.0, 8.0, 20.0) },
     ));
     
 

@@ -20,10 +20,11 @@ pub fn airplane_controller(
     time: Res<Time>,
     camera_mode: Res<CameraMode>,
 ) {
-    // In free-cam, WASD/QE drive the camera, so the matching attitude controls
-    // are suppressed below — but throttle, mixture, the engine state machine and
-    // the RPM spool must keep running regardless of which camera is active.
-    let in_free_cam = *camera_mode == CameraMode::Free;
+    // In free-cam and chase-cam, WASD/QE drive the camera, so the matching
+    // attitude controls are suppressed below — but throttle, mixture, the
+    // engine state machine and the RPM spool must keep running regardless of
+    // which camera is active.
+    let in_free_cam = matches!(*camera_mode, CameraMode::Free | CameraMode::Chase);
     let Ok((children, tf, mut root)) = aircraft_q.single_mut() else { return };
 
     let dt = time.delta_secs();
@@ -198,8 +199,8 @@ pub fn flight_assist(
 ) {
     let Ok(mut forces) = aircraft_q.single_mut() else { return };
 
-    // Suppress attitude inputs in free-cam (same gate as airplane_controller).
-    if *camera_mode == CameraMode::Free {
+    // Suppress attitude inputs in free-cam/chase-cam (same gate as airplane_controller).
+    if matches!(*camera_mode, CameraMode::Free | CameraMode::Chase) {
         return;
     }
 

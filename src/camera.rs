@@ -13,6 +13,11 @@ pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);
 #[derive(Resource, Default, PartialEq, Eq)]
 pub enum CameraMode {
     Free,
+    /// Free-look, but the camera's position tracks the plane instead of
+    /// staying fixed in world space — like Free, WASD/EQ move the camera and
+    /// arrow keys pan, except movement changes an offset from the plane
+    /// rather than an absolute world position, so the camera rides along.
+    Chase,
     #[default]
     Orbit,
     /// Rigidly mounted to a point on the plane; index into [`FixedCameraMounts`].
@@ -70,6 +75,17 @@ pub struct TrackCam {
     pub pitch: f32,
     /// Orbit-mode radius around the plane.
     pub distance: f32,
+}
+
+/// State for the chase camera: free-look angles plus a world-space offset
+/// from the plane. WASD/EQ move the offset (not an absolute position) and
+/// arrow keys pan, so the camera rides along with the plane while still
+/// letting you freely reposition and look around like Free cam.
+#[derive(Component)]
+pub struct ChaseCam {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub offset: Vec3,
 }
 
 /// Marker for the outer 2D camera that upscales the pixel canvas to the screen.
@@ -159,26 +175,38 @@ pub fn fixed_cam_hotkeys(
     }
 }
 
-/// Cycles Free → Orbit → Free with F. Fixed cameras are only entered from the
-/// Camera menu, not via this cycle.
+/// Cycles Orbit → Chase → Free → Orbit with F. Each step seeds the next
+/// mode's look angles (and Chase's offset) from wherever the camera currently
+/// is, so switching in never snaps the view. Fixed cameras are only entered
+/// from the Camera menu, not via this cycle.
 pub fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut mode: ResMut<CameraMode>,
-    mut cam_query: Query<(&Transform, &mut FreeCam, &mut TrackCam)>,
+    plane_query: Query<&Transform, With<Airplane>>,
+    mut cam_query: Query<(&Transform, &mut FreeCam, &mut ChaseCam, &mut TrackCam)>,
 ) {
     if !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
     *mode = match *mode {
-        CameraMode::Free => CameraMode::Orbit,
         CameraMode::Orbit | CameraMode::Fixed(_) => {
-            if let Ok((tf, mut free, _)) = cam_query.single_mut() {
+            if let (Ok((tf, _, mut chase, _)), Ok(plane_tf)) = (cam_query.single_mut(), plane_query.single()) {
+                let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+                chase.yaw = yaw;
+                chase.pitch = pitch;
+                chase.offset = tf.translation - plane_tf.translation;
+            }
+            CameraMode::Chase
+        }
+        CameraMode::Chase => {
+            if let Ok((tf, mut free, _, _)) = cam_query.single_mut() {
                 let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
                 free.yaw = yaw;
                 free.pitch = pitch;
             }
             CameraMode::Free
         }
+        CameraMode::Free => CameraMode::Orbit,
     };
 }
 
@@ -239,6 +267,60 @@ pub fn free_cam_control(
     if keys.pressed(KeyCode::KeyQ) { transform.translation -= Vec3::Y * move_speed * dt; }
 }
 
+/// Chase camera — free-look, but WASD/EQ move an offset from the plane
+/// instead of an absolute world position, so the camera rides along with the
+/// aircraft while still panning and repositioning like Free cam.
+/// Only active when mode is Chase.
+pub fn chase_cam_control(
+    time: Res<Time<Real>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mode: Res<CameraMode>,
+    plane_query: Query<&Transform, With<Airplane>>,
+    mut cam_query: Query<(&mut Transform, &mut ChaseCam), Without<Airplane>>,
+) {
+    if !matches!(*mode, CameraMode::Chase) {
+        return;
+    }
+
+    let move_speed: f32 = match keys.pressed(KeyCode::ShiftLeft) {
+        false => 5.0,
+        true => match keys.pressed(KeyCode::ShiftRight) {
+            false => 300.0,
+            true => 2000.0,
+        },
+    };
+    const LOOK_SPEED: f32 = 1.5;
+
+    let Ok(plane_tf) = plane_query.single() else { return };
+    let Ok((mut transform, mut cam)) = cam_query.single_mut() else { return };
+    let dt = time.delta_secs();
+
+    // Same look-angle accumulation as Free cam.
+    if keys.pressed(KeyCode::ArrowLeft) { cam.yaw += LOOK_SPEED * dt; }
+    if keys.pressed(KeyCode::ArrowRight) { cam.yaw -= LOOK_SPEED * dt; }
+    if keys.pressed(KeyCode::ArrowUp) {
+        cam.pitch = (cam.pitch + LOOK_SPEED * dt).clamp(-1.5, 1.5);
+    }
+    if keys.pressed(KeyCode::ArrowDown) {
+        cam.pitch = (cam.pitch - LOOK_SPEED * dt).clamp(-1.5, 1.5);
+    }
+    transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
+
+    // WASD/EQ move the plane-relative offset along the camera's own axes,
+    // same as Free cam — but it's the offset that accumulates, not world
+    // position, so the camera tracks the plane every frame below.
+    let forward = transform.forward();
+    let right = transform.right();
+    if keys.pressed(KeyCode::KeyW) { cam.offset += forward * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyS) { cam.offset -= forward * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyA) { cam.offset -= right * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyD) { cam.offset += right * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyE) { cam.offset += Vec3::Y * move_speed * dt; }
+    if keys.pressed(KeyCode::KeyQ) { cam.offset -= Vec3::Y * move_speed * dt; }
+
+    transform.translation = plane_tf.translation + cam.offset;
+}
+
 /// Orbit camera — only active when mode is Orbit.
 pub fn track_cam_control(
     time: Res<Time<Real>>,
@@ -284,7 +366,7 @@ pub fn track_cam_control(
             cam_tf.translation = plane_tf.translation + offset;
             cam_tf.look_at(plane_tf.translation, Vec3::Y);
         }
-        CameraMode::Free | CameraMode::Fixed(_) => {}
+        CameraMode::Free | CameraMode::Chase | CameraMode::Fixed(_) => {}
     }
 }
 

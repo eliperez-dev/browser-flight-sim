@@ -65,8 +65,10 @@ fn draw_instrument_panel(
     mut cfg: ResMut<FlightModelConfig>,
     mut plane_q: Query<(&Transform, &PlaneState, &LinearVelocity, &mut AircraftRoot, &mut LightTimers), With<Airplane>>,
 ) -> Result {
-    // Only makes sense while actually looking at the aircraft in flight.
-    if matches!(*camera_mode, CameraMode::Free) {
+    // Only makes sense while actually looking at the aircraft in flight —
+    // Free and Chase both repurpose WASD/EQ for camera movement, so flight
+    // controls (and this HUD) are suppressed the same way in both.
+    if matches!(*camera_mode, CameraMode::Free | CameraMode::Chase) {
         return Ok(());
     }
     let Ok((transform, state, velocity, mut root, mut lights)) = plane_q.single_mut() else { return Ok(()) };

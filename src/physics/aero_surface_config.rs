@@ -19,7 +19,7 @@ impl Default for AeroSurfaceConfig {
         let span = 2.1_f32;
         Self {
             lift_slope: std::f32::consts::TAU,
-            skin_friction: 0.04,
+            skin_friction: 0.025,
             zero_lift_aoa: -3.0,
             stall_angle_high: 17.0,
             stall_angle_low: -17.0,
@@ -35,7 +35,7 @@ impl AeroSurfaceConfig {
     pub fn stabilizer(span: f32, chord: f32) -> Self {
         Self {
             lift_slope: std::f32::consts::TAU,
-            skin_friction: 0.04,
+            skin_friction: 0.025,
             // Negative incidence: tail produces a nose-down download in cruise,
             // countering the wing's natural nose-up pitching moment. Real C172
             // horizontal stab is set at roughly -2° relative to the fuselage.
