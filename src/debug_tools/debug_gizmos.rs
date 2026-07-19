@@ -7,14 +7,17 @@ use crate::physics::aircraft_physics::{AircraftRoot, ground_effect_factor};
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::{GROUND_Y, gear_legs};
 use crate::plane::Airplane;
+use crate::ui::menu_bar::MenuBar;
 
 #[derive(Resource, Default)]
 pub struct GizmosVisible(pub bool);
 
-pub fn toggle_gizmos(keys: Res<ButtonInput<KeyCode>>, mut visible: ResMut<GizmosVisible>) {
+/// G key mirrors the menu bar gizmos toggle; also syncs GizmosVisible from the bar.
+pub fn toggle_gizmos(keys: Res<ButtonInput<KeyCode>>, mut bar: ResMut<MenuBar>, mut visible: ResMut<GizmosVisible>) {
     if keys.just_pressed(KeyCode::KeyG) {
-        visible.0 = !visible.0;
+        bar.gizmos = !bar.gizmos;
     }
+    visible.0 = bar.gizmos;
 }
 
 /// Draw the aero gizmos on top of the aircraft mesh instead of letting it

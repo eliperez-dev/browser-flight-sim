@@ -152,7 +152,7 @@ pub struct WorldGenConfig {
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 3,
+            seed: 3, ///rand::random(),
             horizontal_scale: DEFAULT_HORIZONTAL_SCALE,
             height_scale: DEFAULT_HEIGHT_SCALE,
             render_distance: 35,

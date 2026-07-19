@@ -143,6 +143,7 @@ pub struct RunwayInstance {
     pub cell: (i32, i32),
 }
 
+
 impl RunwayInstance {
     /// The two runway numbers (one per direction), each `round(heading° / 10)`
     /// mapped to 1..=36, with the reciprocal 180° opposite. e.g. heading 170° →
@@ -320,7 +321,6 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
 
     let h = cell_hash(generator.seed(), gx, gz);
 
-    // 20% spawn chance — skip 80% of cells entirely.
     if !hash_u32(h ^ 0xdeadbeef).is_multiple_of(2) {
         return vec![];
     }
@@ -424,6 +424,7 @@ pub fn runway_ident(seed: u32, cell: (i32, i32)) -> String {
     }
     ident
 }
+
 
 /// Runways for every cell overlapping the world-space box, padded by one cell so
 /// strips whose influence reaches in from a neighbour are included (water cells

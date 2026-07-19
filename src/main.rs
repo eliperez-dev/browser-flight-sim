@@ -21,6 +21,7 @@ use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
+use crate::ui::menu_bar::MenuBar;
 use crate::fog::FogPlugin;
 use crate::water::WaterPlugin;
 use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller, wing_panel_rotation};
@@ -38,9 +39,11 @@ mod lights;
 mod map;
 mod physics;
 mod debug_tools;
+mod pilot_handbook;
 mod plane;
 mod sky;
 mod terrain;
+mod ui;
 mod water;
 mod waypoints;
 
@@ -63,10 +66,13 @@ fn main() {
             },
             FogPlugin,
             PhysicsPlugins::default(),
+            crate::ui::MenuBarPlugin,
+            crate::ui::StylePlugin,
             DebugFlightMenuPlugin,
             TerrainPlugin,
             WaterPlugin,
             crate::map::MapPlugin,
+            crate::pilot_handbook::PilotHandbookPlugin,
             crate::sky::SkyPlugin,
             AircraftLightsPlugin,
             crate::waypoints::WaypointsPlugin,
@@ -110,6 +116,7 @@ fn main() {
             update_fps,
             fit_canvas,
             apply_config_to_entities,
+            sync_hud_visibility,
             // Locate the propeller node once its scene loads, then spin it.
             (tag_propeller, spin_propeller).chain(),
             (populate_debug_hud, render_debug_hud).chain(),
@@ -125,6 +132,16 @@ fn main() {
         .run();
 }
 
+
+fn sync_hud_visibility(
+    bar: Res<MenuBar>,
+    mut hud_q: Query<&mut Visibility, With<DebugHudText>>,
+    mut fps_q: Query<&mut Visibility, (With<FpsText>, Without<DebugHudText>)>,
+) {
+    let vis = if bar.hud { Visibility::Visible } else { Visibility::Hidden };
+    for mut v in &mut hud_q { *v = vis; }
+    for mut v in &mut fps_q { *v = vis; }
+}
 
 fn toggle_pause(
     keys: Res<ButtonInput<KeyCode>>,

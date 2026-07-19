@@ -1,11 +1,8 @@
 //! In-game debug panel for tweaking flight-model constants at runtime.
 //!
-//! Press **F3** to show / hide the panel.  All sliders write directly into
-//! [`FlightModelConfig`], so changes take effect on the very next physics tick.
-//! The "Reset to defaults" button restores the original hand-tuned values.
-//!
-//! The panel is drawn with `bevy_egui` and intentionally uses an immediate-mode
-//! style: no extra state, no events — just sliders that mutate the resource.
+//! Toggle via the menu bar ("Flight Model" button) or press **F3**.
+//! All sliders write directly into [`FlightModelConfig`], so changes take
+//! effect on the very next physics tick.
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
@@ -18,6 +15,7 @@ use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelC
 use crate::plane::Airplane;
 use crate::sky::DayNightCycle;
 use crate::terrain::{BiomeShape, WorldGenConfig};
+use crate::ui::menu_bar::MenuBar;
 use crate::water::WaterSettings;
 
 // ---------------------------------------------------------------------------
@@ -30,15 +28,14 @@ pub struct DebugFlightMenuPlugin;
 impl Plugin for DebugFlightMenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(EguiPlugin::default())
-            .init_resource::<DebugMenuVisible>()
             // Disable auto-attach so we can pin the egui context to a specific
             // camera (the screen-space Camera2d) via PrimaryEguiContext in main.rs.
             .add_systems(Startup, disable_auto_primary_context)
-            .add_systems(Update, toggle_menu)
+            .add_systems(Update, toggle_menu_key)
             // draw_menu must run inside EguiPrimaryContextPass so it targets
             // the camera marked with PrimaryEguiContext rather than defaulting
             // to whichever camera bevy_egui picks first.
-            .add_systems(EguiPrimaryContextPass, draw_menu);
+            .add_systems(EguiPrimaryContextPass, draw_menu.in_set(crate::ui::UiSet));
     }
 }
 
@@ -50,28 +47,17 @@ fn disable_auto_primary_context(mut settings: ResMut<EguiGlobalSettings>) {
 }
 
 // ---------------------------------------------------------------------------
-// Resources
-// ---------------------------------------------------------------------------
-
-/// Whether the debug flight-model panel is currently open.
-#[derive(Resource, Default)]
-pub struct DebugMenuVisible(pub bool);
-
-// ---------------------------------------------------------------------------
 // Systems
 // ---------------------------------------------------------------------------
 
-/// Toggle panel visibility with 1.
-fn toggle_menu(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut visible: ResMut<DebugMenuVisible>,
-) {
-    if keys.just_pressed(KeyCode::Digit1) || keys.just_pressed(KeyCode::F3) {
-        visible.0 = !visible.0;
+/// F3 keyboard shortcut mirrors the menu bar toggle.
+fn toggle_menu_key(keys: Res<ButtonInput<KeyCode>>, mut bar: ResMut<MenuBar>) {
+    if keys.just_pressed(KeyCode::F3) {
+        bar.flight_model = !bar.flight_model;
     }
 }
 
-/// Draw the egui panel when visible.
+/// Draw the egui window when the menu bar has it open.
 ///
 /// Each slider clamps to a physically sensible range so it is hard to
 /// accidentally enter a value that crashes the simulation (e.g. zero servo tau
@@ -82,7 +68,7 @@ fn toggle_menu(
 #[allow(clippy::too_many_arguments)]
 fn draw_menu(
     mut contexts: EguiContexts,
-    visible: Res<DebugMenuVisible>,
+    mut bar: ResMut<MenuBar>,
     mut cfg: ResMut<FlightModelConfig>,
     mut world: ResMut<WorldGenConfig>,
     mut fog: ResMut<FogSettings>,
@@ -91,7 +77,7 @@ fn draw_menu(
     mut sky: ResMut<DayNightCycle>,
     mut light_timers_q: Query<&mut LightTimers, With<Airplane>>,
 ) -> Result {
-    if !visible.0 { return Ok(()); }
+    if !bar.flight_model { return Ok(()); }
 
     let defaults = FlightModelConfig::default();
 
@@ -100,15 +86,17 @@ fn draw_menu(
     // would otherwise flag it changed continuously and defeat the regen debounce.
     let mut w = world.clone();
 
-    egui::SidePanel::right("flight_debug_panel")
+    egui::Window::new("Flight Model")
+        .open(&mut bar.flight_model)
+        .order(egui::Order::Foreground)
+        .default_pos(egui::pos2(16.0, 48.0))
+        .default_width(300.0)
         .resizable(true)
-        .min_width(280.0)
         .show(contexts.ctx_mut()?, |ui| {
             // Wrap the whole panel so the (long) list of sections scrolls with the
             // mouse wheel instead of overflowing the window.
             egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading("Flight Model Debug");
-            ui.label("Press F3 to close");
             ui.separator();
 
             if ui.button("Reset to defaults").clicked() {

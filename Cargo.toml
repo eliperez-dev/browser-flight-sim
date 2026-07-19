@@ -9,6 +9,10 @@ bevy = { version = "0.18.1" }
 bevy_egui = "0.39"
 noise = "0.9.0"
 osmpbf = "0.3.8"
+rand = "0.10.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
 tracing-wasm = "0.2"
 
 # Enable a small amount of optimization in the dev profile.
@@ -20,7 +24,6 @@ opt-level = 1
 opt-level = 3
 
 [profile.release]
-debug = true       # Keeps debug symbols for function names
 
 [target.wasm32-unknown-unknown]
 runner = "wasm-server-runner"

@@ -29,6 +29,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, egui};
 
 use crate::plane::Airplane;
 use crate::terrain::{Airport, TerrainCamera, WorldGenerator, airport_name, airports_in_region, runway_ident};
+use crate::ui::menu_bar::MenuBar;
 use crate::water::WaterSettings;
 
 use render::{TEX, View, half_span};
@@ -139,7 +140,6 @@ const BAKE_ROWS_PER_FRAME: u32 = 20;
 /// the *baked* fields fall out of step with the live view (see [`view_changed`]).
 #[derive(Resource)]
 pub struct MapState {
-    open: bool,
     /// World (x, z) at the centre of the map.
     center: Vec2,
     /// Zoom: world metres covered by one texture texel. Larger = more area.
@@ -191,10 +191,10 @@ impl Plugin for MapPlugin {
         app.init_resource::<BreadcrumbTrail>()
             .init_resource::<MapIconSettings>()
             .add_systems(Startup, setup_map)
-            .add_systems(Update, (toggle_map, log_breadcrumbs))
+            .add_systems(Update, (toggle_map_key, log_breadcrumbs))
             // Drawing (and the bake it may trigger) runs in the egui pass so it
             // targets the screen-space context, like the F3 debug panel.
-            .add_systems(EguiPrimaryContextPass, draw_map);
+            .add_systems(EguiPrimaryContextPass, draw_map.in_set(crate::ui::UiSet));
     }
 }
 
@@ -210,7 +210,6 @@ fn setup_map(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         RenderAssetUsages::all(),
     );
     commands.insert_resource(MapState {
-        open: false,
         center: Vec2::ZERO,
         // ~250 m/texel ⇒ a ~64 km span, so several of the 10 km-spaced strips show.
         world_per_texel: 250.0,
@@ -231,13 +230,11 @@ fn setup_map(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     });
 }
 
-/// F4 opens / closes the map.
-fn toggle_map(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<MapState>) {
+/// F4 keyboard shortcut mirrors the menu bar map toggle.
+fn toggle_map_key(keys: Res<ButtonInput<KeyCode>>, mut bar: ResMut<MenuBar>, mut state: ResMut<MapState>) {
     if keys.just_pressed(KeyCode::F4) {
-        state.open = !state.open;
-        // Re-opening re-arms follow, so a user who panned off can recover the
-        // plane without a button (there are none yet).
-        if state.open {
+        bar.map = !bar.map;
+        if bar.map {
             state.follow = true;
         }
     }
@@ -271,6 +268,7 @@ fn log_breadcrumbs(
 #[allow(clippy::too_many_arguments)]
 fn draw_map(
     mut contexts: EguiContexts,
+    mut bar: ResMut<MenuBar>,
     mut state: ResMut<MapState>,
     mut images: ResMut<Assets<Image>>,
     generator: Res<WorldGenerator>,
@@ -280,7 +278,7 @@ fn draw_map(
     plane_q: Query<&Transform, With<Airplane>>,
     cam_q: Query<&Transform, (With<TerrainCamera>, Without<Airplane>)>,
 ) -> Result {
-    if !state.open {
+    if !bar.map {
         return Ok(());
     }
 
@@ -349,7 +347,9 @@ fn draw_map(
         });
 
     egui::Window::new("Map")
-        .default_pos(egui::pos2(16.0, 16.0))
+        .open(&mut bar.map)
+        .order(egui::Order::Foreground)
+        .default_pos(egui::pos2(16.0, 48.0))
         .resizable(false)
         .show(ctx, |ui| {
             // Layer tabs + the track-plane toggle. Tabs write the active layer (a
