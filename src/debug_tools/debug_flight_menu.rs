@@ -16,7 +16,7 @@ use crate::map::MapIconSettings;
 use crate::physics::aero_surface_config::AeroSurfaceConfig;
 use crate::physics::aircraft_physics::AircraftRoot;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
-use crate::plane::{Airplane, PlaneState, spawn_position};
+use crate::plane::{Airplane, PlaneState, reset_to_runway};
 use crate::sky::DayNightCycle;
 use crate::terrain::{BiomeShape, WorldGenConfig, WorldGenerator};
 use crate::ui::menu_bar::MenuBar;
@@ -127,12 +127,7 @@ fn draw_menu(
             if ui.button("Reset Plane to Runway").clicked()
                 && let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut()
             {
-                *transform = Transform::from_translation(spawn_position(world_gen.as_ref()))
-                    .with_scale(Vec3::splat(0.1));
-                lin_vel.0 = Vec3::ZERO;
-                ang_vel.0 = Vec3::ZERO;
-                state.crashed = false;
-                root.throttle_percent = 0.0;
+                reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, world_gen.as_ref());
             }
 
             ui.separator();

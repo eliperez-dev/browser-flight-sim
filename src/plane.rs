@@ -26,6 +26,25 @@ pub fn spawn_position(world_gen: &crate::terrain::WorldGenerator) -> Vec3 {
     Vec3::new(SPAWN_X, spawn_y, SPAWN_Z)
 }
 
+/// Puts the aircraft back on the runway at the spawn position/orientation,
+/// zeroing velocities and transient flight state. Shared by the "Reset Plane
+/// to Runway" UI buttons, the crash-recovery hotkey, and the terrain-regen
+/// auto-recovery, so all three reset paths can't drift apart.
+pub fn reset_to_runway(
+    transform: &mut Transform,
+    lin_vel: &mut avian3d::prelude::LinearVelocity,
+    ang_vel: &mut avian3d::prelude::AngularVelocity,
+    state: &mut PlaneState,
+    root: &mut crate::physics::aircraft_physics::AircraftRoot,
+    world_gen: &crate::terrain::WorldGenerator,
+) {
+    *transform = Transform::from_translation(spawn_position(world_gen)).with_scale(Vec3::splat(0.1));
+    lin_vel.0 = Vec3::ZERO;
+    ang_vel.0 = Vec3::ZERO;
+    state.crashed = false;
+    root.throttle_percent = 0.0;
+}
+
 /// Marker for the child entity holding the visual GLTF scene, so its local
 /// offset can be adjusted at runtime (see `model_offset` in the debug menu).
 #[derive(Component)]
@@ -62,6 +81,10 @@ pub struct PlaneState {
     pub on_ground: bool,
     /// True while the wheel brakes (B) are applied.
     pub braking: bool,
+    /// Manually toggled by the cockpit PARK switch — holds the brakes on
+    /// regardless of throttle/speed, in addition to the automatic
+    /// throttle-idle-and-stopped parking brake in `apply_landing_gear`.
+    pub parking_brake_set: bool,
     /// True once a hull point has struck the terrain (see `hull_collision.rs`).
     /// Sticky until the aircraft is respawned/reset.
     pub crashed: bool,

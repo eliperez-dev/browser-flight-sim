@@ -11,6 +11,7 @@
 //! sampling happens in [`AsyncComputeTaskPool`] tasks that are polled and
 //! rate-limited rather than run inline.
 
+use avian3d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
@@ -18,6 +19,8 @@ use bevy::tasks::futures_lite::future;
 use bevy::tasks::AsyncComputeTaskPool;
 
 use crate::camera::PIXEL_LAYER;
+use crate::physics::aircraft_physics::AircraftRoot;
+use crate::plane::{Airplane, PlaneState, reset_to_runway};
 
 use super::chunk::{
     lod_for_distance_sq, Chunk, ChunkManager, ChunkTask, SharedTerrainMaterial,
@@ -48,6 +51,10 @@ pub fn regenerate_terrain(
     mut commands: Commands,
     mut pending: Local<Option<f32>>,
     mut last: Local<Option<WorldGenConfig>>,
+    mut plane_q: Query<
+        (&mut Transform, &mut LinearVelocity, &mut AngularVelocity, &mut PlaneState, &mut AircraftRoot),
+        With<Airplane>,
+    >,
 ) {
     if config.is_changed() {
         // Mirror cheap streaming params live (read by the streaming systems).
@@ -111,6 +118,16 @@ pub fn regenerate_terrain(
     manager.to_spawn.clear();
     manager.lod_to_update.clear();
     manager.last_camera_chunk = None; // force a full rescan
+
+    // The terrain under (and around) the aircraft just changed shape, so a
+    // crashed plane's wreck no longer means anything — recover it immediately
+    // rather than leaving it stuck in a crashed state against terrain that no
+    // longer exists.
+    if let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut()
+        && state.crashed
+    {
+        reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, &generator);
+    }
 }
 
 /// Camera position rounded to chunk coordinates, or `None` if the camera isn't

@@ -29,7 +29,7 @@ use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
 use crate::physics::airplane_controller::{airplane_controller, flight_assist};
 use crate::physics::flight_config::FlightModelConfig;
-use crate::physics::hull_collision::{detect_hull_collision, react_to_crash};
+use crate::physics::hull_collision::{detect_hull_collision, react_to_crash, reset_on_crash_key};
 use crate::physics::landing_gear::apply_landing_gear;
 
 mod airport_names;
@@ -116,6 +116,7 @@ fn main() {
             toggle_fullscreen_hotkey,
             fixed_cam_hotkeys,
             react_to_crash,
+            reset_on_crash_key,
             toggle_gizmos,
             toggle_pause,
             free_cam_control,

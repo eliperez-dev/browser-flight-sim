@@ -7,7 +7,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::physics::aircraft_physics::AircraftRoot;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
-use crate::plane::{Airplane, PlaneState, spawn_position};
+use crate::plane::{Airplane, PlaneState, reset_to_runway};
 use crate::terrain::WorldGenerator;
 use crate::ui::menu_bar::MenuBar;
 
@@ -29,8 +29,40 @@ pub struct PlaneMenuPlugin;
 
 impl Plugin for PlaneMenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(EguiPrimaryContextPass, draw_plane_menu.in_set(crate::ui::UiSet));
+        app.add_systems(
+            EguiPrimaryContextPass,
+            (draw_plane_menu, draw_crash_banner).in_set(crate::ui::UiSet),
+        );
     }
+}
+
+/// Always-on (not menu-gated) banner shown while `PlaneState.crashed` is set,
+/// telling the player how to recover. `react_to_crash` (hull_collision.rs)
+/// has already dropped the camera into chase mode by the time this is visible.
+fn draw_crash_banner(
+    mut contexts: EguiContexts,
+    plane_q: Query<&PlaneState, With<Airplane>>,
+) -> Result {
+    let Ok(state) = plane_q.single() else { return Ok(()) };
+    if !state.crashed {
+        return Ok(());
+    }
+
+    let ctx = contexts.ctx_mut()?;
+    egui::Area::new(egui::Id::new("crash_banner"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(egui::Color32::from_rgba_unmultiplied(30, 10, 10, 220))
+                .stroke(egui::Stroke::new(1.5, WARN))
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.colored_label(WARN, egui::RichText::new("CRASHED").size(20.0).strong());
+                        ui.label(egui::RichText::new("Press R to reset to runway").color(TEXT_DIM));
+                    });
+                });
+        });
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -61,12 +93,7 @@ fn draw_plane_menu(
             if ui.button("Reset Plane to Runway").clicked()
                 && let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut()
             {
-                *transform = Transform::from_translation(spawn_position(world_gen.as_ref()))
-                    .with_scale(Vec3::splat(0.1));
-                lin_vel.0 = Vec3::ZERO;
-                ang_vel.0 = Vec3::ZERO;
-                state.crashed = false;
-                root.throttle_percent = 0.0;
+                reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, world_gen.as_ref());
             }
 
             // ── Engine ──────────────────────────────────────────────────────

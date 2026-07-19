@@ -433,7 +433,7 @@ impl Default for FlightModelConfig {
             throttle_rate:        0.5,
             servo_tau:            0.45,
   
-            elevator_trim:        0.0,
+            elevator_trim:        3.0,
 
             // Supplemental damping only — the tail/fin/wings already provide the
             // primary rate damping aerodynamically, so keep this low to avoid
@@ -461,7 +461,7 @@ impl Default for FlightModelConfig {
             pitch_rate_damp:       20.0,
             bank_turn_strength:   12.0,
 
-            thrust_max:           3_200.0,
+            thrust_max:           2_800.0,
             // Lycoming-ish throttle response: winds up in ~1.2 s, settles back to
             // idle in ~1.5 s. (A real fixed-pitch single responds in a second or
             // two; the deliberate slow throttle push pilots use is technique.)

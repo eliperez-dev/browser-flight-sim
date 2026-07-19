@@ -63,7 +63,7 @@ fn draw_instrument_panel(
     mut contexts: EguiContexts,
     camera_mode: Res<CameraMode>,
     mut cfg: ResMut<FlightModelConfig>,
-    mut plane_q: Query<(&Transform, &PlaneState, &LinearVelocity, &mut AircraftRoot, &mut LightTimers), With<Airplane>>,
+    mut plane_q: Query<(&Transform, &mut PlaneState, &LinearVelocity, &mut AircraftRoot, &mut LightTimers), With<Airplane>>,
 ) -> Result {
     // Only makes sense while actually looking at the aircraft in flight —
     // Free and Chase both repurpose WASD/EQ for camera movement, so flight
@@ -71,7 +71,7 @@ fn draw_instrument_panel(
     if matches!(*camera_mode, CameraMode::Free | CameraMode::Chase) {
         return Ok(());
     }
-    let Ok((transform, state, velocity, mut root, mut lights)) = plane_q.single_mut() else { return Ok(()) };
+    let Ok((transform, mut state, velocity, mut root, mut lights)) = plane_q.single_mut() else { return Ok(()) };
 
     let forward = transform.forward().as_vec3();
     let heading = heading_from_forward(forward);
@@ -189,13 +189,18 @@ fn draw_instrument_panel(
     const ENGINE_HEIGHT: f32 = 170.0;
     const QUADRANT_WIDTH: f32 = 74.0;
     const SURFACES_WIDTH: f32 = 74.0;
-    const BUTTONS_WIDTH: f32 = 110.0;
+    // Content width: 3 switches * 40 + 2 * 3px spacing + 2 * 8px inner margin.
+    const BUTTONS_WIDTH: f32 = 142.0;
     const BUTTONS_HEIGHT: f32 = 70.0; // just the label + one switch row, not the full row height
+    // Content width: one 58px indicator + one 40px switch + 3px spacing + 2 * 8px inner margin.
+    const BRAKES_WIDTH: f32 = 117.0;
+    const BRAKES_HEIGHT: f32 = 70.0;
 
     let engine_offset = MARGIN + TAPE_WIDTH + GAP;
     let quadrant_offset = engine_offset + ENGINE_WIDTH + GAP;
     let surfaces_offset = quadrant_offset + QUADRANT_WIDTH + GAP;
     let buttons_offset = surfaces_offset + SURFACES_WIDTH + GAP;
+    let brakes_offset = buttons_offset + BUTTONS_WIDTH + GAP;
 
     egui::Window::new("instrument_engine")
         .title_bar(false)
@@ -284,6 +289,23 @@ fn draw_instrument_panel(
             ui.vertical_centered(|ui| {
                 ui.label(egui::RichText::new("LIGHTS").size(11.0).color(TEXT_DIM));
                 draw_switch_panel(ui, &mut lights);
+            });
+        });
+
+    egui::Window::new("instrument_brakes")
+        .title_bar(false)
+        .order(egui::Order::Foreground)
+        .resizable(false)
+        .anchor(egui::Align2::LEFT_BOTTOM, [brakes_offset, -MARGIN])
+        .fixed_size([BRAKES_WIDTH, BRAKES_HEIGHT])
+        .min_height(BRAKES_HEIGHT)
+        .max_height(BRAKES_HEIGHT)
+        .frame(panel_frame())
+        .show(ctx, |ui| {
+            ui.visuals_mut().override_text_color = Some(TEXT);
+            ui.vertical_centered(|ui| {
+                ui.label(egui::RichText::new("BRAKES").size(11.0).color(TEXT_DIM));
+                draw_brake_panel(ui, &mut state);
             });
         });
 
@@ -578,21 +600,44 @@ fn draw_heading_compass(ui: &mut egui::Ui, heading: f32) {
 const NAV_LIT:    egui::Color32 = egui::Color32::from_rgb(90, 200, 130);
 const STROBE_LIT: egui::Color32 = egui::Color32::from_rgb(230, 230, 230);
 const LAND_LIT:   egui::Color32 = egui::Color32::from_rgb(250, 220, 90);
+const BRAKE_LIT:  egui::Color32 = egui::Color32::from_rgb(235, 90, 90);
+const PARK_LIT:   egui::Color32 = egui::Color32::from_rgb(235, 90, 90);
 const OFF_FILL:   egui::Color32 = egui::Color32::from_rgb(15, 19, 28);
 const OFF_TEXT:   egui::Color32 = egui::Color32::from_rgb(90, 100, 120);
 
 /// Grid of bright toggle/annunciator indicators: NAV, STROBE, and LANDING
 /// lights (clickable — flips the same `LightTimers` fields the exterior
-/// lights read from), plus read-only BRAKE and IGNITION status lights.
+/// lights read from). The IGNITION status light lives in the ENGINE panel,
+/// and BRAKE/PARK have their own panel — see `draw_brake_panel`.
 /// Toggled switches fill with their lit color when on; read-only ones just
 /// reflect live state and aren't clickable.
 fn draw_switch_panel(ui: &mut egui::Ui, lights: &mut LightTimers) {
     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-        ui.horizontal(|ui| {
+        let content_width = 3.0 * 40.0 + 2.0 * 3.0;
+        ui.allocate_ui(egui::Vec2::new(content_width, 26.0), |ui| {
             ui.spacing_mut().item_spacing.x = 3.0;
-            light_switch(ui, "NAV", &mut lights.nav_on, NAV_LIT);
-            light_switch(ui, "STRB", &mut lights.strobe_on, STROBE_LIT);
-            light_switch(ui, "LAND", &mut lights.landing_light_on, LAND_LIT);
+            ui.horizontal(|ui| {
+                light_switch(ui, "NAV", &mut lights.nav_on, NAV_LIT);
+                light_switch(ui, "STRB", &mut lights.strobe_on, STROBE_LIT);
+                light_switch(ui, "LAND", &mut lights.landing_light_on, LAND_LIT);
+            });
+        });
+    });
+}
+
+/// BRAKES panel: a read-only BRAKE annunciator (lit whenever the wheel
+/// brakes are actually applied, from any source — B, auto parking brake, or
+/// PARK) next to a clickable PARK toggle that latches the brakes on
+/// regardless of throttle/speed via `PlaneState::parking_brake_set`.
+fn draw_brake_panel(ui: &mut egui::Ui, state: &mut PlaneState) {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+        let content_width = 58.0 + 40.0 + 3.0;
+        ui.allocate_ui(egui::Vec2::new(content_width, 26.0), |ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            ui.horizontal(|ui| {
+                light_indicator(ui, "BRAKE", state.braking, BRAKE_LIT);
+                light_switch(ui, "PARK", &mut state.parking_brake_set, PARK_LIT);
+            });
         });
     });
 }

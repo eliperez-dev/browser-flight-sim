@@ -74,9 +74,11 @@ pub fn gear_legs(flight_model: &FlightModelConfig) -> [GearLeg; 3] {
 /// with the ground, and records the on-ground / braking status in
 /// [`PlaneState`] for the HUD and other systems to read.
 ///
-/// Holding **B** applies the wheel brakes, which add `gear_brake_strength` to
-/// the rolling-resistance coefficient so the tyres bite and decelerate the
-/// rollout (and, like rolling resistance, the force scales with wheel load).
+/// Holding **B**, an automatic throttle-idle-and-stopped parking brake, or the
+/// cockpit PARK switch (`PlaneState::parking_brake_set`) all apply the wheel
+/// brakes, which add `gear_brake_strength` to the rolling-resistance
+/// coefficient so the tyres bite and decelerate the rollout (and, like
+/// rolling resistance, the force scales with wheel load).
 ///
 /// Runs chained after `apply_aero_forces` so it shares the same physics step;
 /// both accumulate onto Avian's per-step force buffer, which is cleared after
@@ -94,10 +96,11 @@ pub fn apply_landing_gear(
     let cfg = &flight_model.landing_gear;
 
     let speed = forces.linear_velocity().length();
-    let parking_brake = speed < 1.0 && root.throttle_percent == 0.0;
+    let auto_parking_brake = speed < 1.0 && root.throttle_percent == 0.0;
 
-    // Brakes engage when B is held or the parking brake is active.
-    let braking = keys.pressed(KeyCode::KeyB) || parking_brake;
+    // Brakes engage when B is held, the throttle-idle-and-stopped parking
+    // brake kicks in automatically, or the cockpit PARK switch is set.
+    let braking = keys.pressed(KeyCode::KeyB) || auto_parking_brake || state.parking_brake_set;
     let rolling_crr = cfg.gear_rolling_resistance + if braking { cfg.gear_brake_strength } else { 0.0 };
 
     let origin: Vec3 = forces.position().0;

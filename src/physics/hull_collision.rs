@@ -16,8 +16,8 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use super::aircraft_physics::AircraftRoot;
-use crate::camera::CameraMode;
-use crate::plane::{Airplane, PlaneState};
+use crate::camera::{CameraMode, ChaseCam};
+use crate::plane::{Airplane, PlaneState, reset_to_runway};
 use crate::terrain::WorldGenerator;
 
 /// Fixed hull sample points in the body frame (metres; +Z nose, +Y up, +X
@@ -70,21 +70,60 @@ pub fn detect_hull_collision(
     }
 }
 
-/// TEMPORARY test hook: when a crash is detected, dump the camera into free
-/// roam and immediately clear the flag so the crash state doesn't stick
-/// around. Lets the crash-detection logic be exercised without a real
-/// game-over/respawn flow yet. Replace with an actual crash-response system
-/// once that's designed.
+/// When a crash is first detected, drop the camera into chase mode so the
+/// player keeps the wreck in view while still being able to look around.
+/// `airplane_controller`/`flight_assist` already suppress attitude input in
+/// `CameraMode::Chase`, so this alone takes the pilot off the controls without
+/// a separate `crashed` gate on those systems. The flag stays sticky (see
+/// `PlaneState::crashed`) until `reset_on_crash_key` or a UI "Reset Plane to
+/// Runway" button clears it.
 pub fn react_to_crash(
     mut camera_mode: ResMut<CameraMode>,
-    mut aircraft_q: Query<&mut PlaneState, With<Airplane>>,
+    aircraft_q: Query<&PlaneState, With<Airplane>>,
+    plane_query: Query<&Transform, With<Airplane>>,
+    mut cam_query: Query<(&Transform, &mut ChaseCam), Without<Airplane>>,
+    mut was_crashed: Local<bool>,
 ) {
-    let Ok(mut state) = aircraft_q.single_mut() else {
+    let Ok(state) = aircraft_q.single() else {
         return;
     };
 
-    if state.crashed {
-        *camera_mode = CameraMode::Free;
-        state.crashed = false;
+    if state.crashed && !*was_crashed {
+        // Seed the chase offset from wherever the camera currently sits (same
+        // approach as the Orbit→Chase leg of `toggle_camera_mode`), so the
+        // switch doesn't snap the view to some stale offset from last time
+        // chase mode was used.
+        if let (Ok((tf, mut chase)), Ok(plane_tf)) = (cam_query.single_mut(), plane_query.single()) {
+            let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            chase.yaw = yaw;
+            chase.pitch = pitch;
+            chase.offset = tf.translation - plane_tf.translation;
+        }
+        *camera_mode = CameraMode::Chase;
     }
+    *was_crashed = state.crashed;
+}
+
+/// While crashed, R resets the aircraft back to the runway (position,
+/// velocity, throttle, and the `crashed` flag itself) — the keyboard
+/// equivalent of the "Reset Plane to Runway" button, so recovering from a
+/// crash doesn't require digging into a menu.
+pub fn reset_on_crash_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    world_gen: Res<WorldGenerator>,
+    mut aircraft_q: Query<
+        (&mut Transform, &mut LinearVelocity, &mut AngularVelocity, &mut PlaneState, &mut AircraftRoot),
+        With<Airplane>,
+    >,
+) {
+    if !keys.just_pressed(KeyCode::KeyR) {
+        return;
+    }
+    let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = aircraft_q.single_mut() else {
+        return;
+    };
+    if !state.crashed {
+        return;
+    }
+    reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, world_gen.as_ref());
 }
