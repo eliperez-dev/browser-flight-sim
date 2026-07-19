@@ -39,6 +39,7 @@ mod lights;
 mod map;
 mod physics;
 mod debug_tools;
+mod network;
 mod pilot_handbook;
 mod plane;
 mod sky;
@@ -70,6 +71,7 @@ fn main() {
             crate::sky::SkyPlugin,
             AircraftLightsPlugin,
             crate::waypoints::WaypointsPlugin,
+            crate::network::NetworkPlugin,
         ))
         .add_plugins((
             crate::ui::MenuBarPlugin,

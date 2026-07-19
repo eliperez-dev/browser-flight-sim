@@ -287,6 +287,12 @@ pub struct LandingGearConfig {
     /// so ~0.5–0.8 gives a firm but realistic ground deceleration. Fades near a
     /// standstill, so it slows the rollout rather than locking a parked aircraft.
     pub gear_brake_strength: f32,
+    /// Max nosewheel steering angle (degrees) at full rudder deflection.
+    /// Without this the nose wheel's rolling axis is locked to the fuselage
+    /// heading, so nothing actively points the aircraft on the ground and it
+    /// drifts/skates instead of tracking — real light aircraft steer ~10-15°
+    /// through the rudder pedals at taxi speed.
+    pub gear_nose_steer_deg: f32,
 
     // Gear geometry — strut mount points in the body frame (metres). The struts
     // hang straight down (body −Y) by `gear_rest_length` from these; the wheel
@@ -376,7 +382,7 @@ impl Default for LightsConfig {
             beacon_period: 1.0,
 
             // Landing light: on the nose, angled ~5° down to light the runway.
-            landing_pos:       Vec3::new(0.0, 5.0, 320.0),
+            landing_pos:       Vec3::new(0.0, -30.0, 320.0),
             landing_pitch_deg: -5.0,
             landing_outer_deg: 65.0,
             landing_inner_deg: 25.0,
@@ -402,6 +408,7 @@ impl Default for LandingGearConfig {
             gear_grip:               6_000.0,
             gear_rolling_resistance: 0.01,
             gear_brake_strength:     0.65,
+            gear_nose_steer_deg:     12.0,
 
             // Tricycle layout: nose wheel forward, mains just aft of the CoM
             // with a ~2.5 m track, mounts tucked just below the origin.
@@ -433,7 +440,7 @@ impl Default for FlightModelConfig {
             throttle_rate:        0.5,
             servo_tau:            0.45,
   
-            elevator_trim:        3.0,
+            elevator_trim:        0.0524,
 
             // Supplemental damping only — the tail/fin/wings already provide the
             // primary rate damping aerodynamically, so keep this low to avoid

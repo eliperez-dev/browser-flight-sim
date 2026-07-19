@@ -199,7 +199,8 @@ const PLANE: egui::Color32 = egui::Color32::from_rgb(255, 230, 60);
 const CAMERA: egui::Color32 = egui::Color32::from_rgb(120, 220, 255);
 const WAYPOINT: egui::Color32 = egui::Color32::from_rgb(255, 140, 40);
 
-/// Draws one map pin per airport (one per cell, regardless of parallel strip count).
+/// Draws one map pin per airport (one per cell), with every strip drawn at its
+/// own heading and to-scale length — so non-parallel runways render correctly.
 pub fn draw_airports(
     painter: &egui::Painter,
     airports: &[Airport],
@@ -209,32 +210,28 @@ pub fn draw_airports(
     icons: &MapIconSettings,
     view: &View,
 ) {
-    let stroke = egui::Stroke::new(icons.runway_width, AIRPORT);
-    let circle_d = icons.airport_circle * 2.0;
+    let stroke = egui::Stroke::new(icons.runway_width, egui::Color32::WHITE);
+    // Cap the dot's *world-space* footprint so zooming way out (many airports
+    // per screen) shrinks it down instead of the fixed pixel size overlapping
+    // neighbours into a solid mass. Still floored to stay visible up close.
+    let dot_radius = icons
+        .airport_circle
+        .min(600.0 / view.world_per_px())
+        .max(10.0);
     for ap in airports {
-        let primary = ap.primary();
         let (ax, az) = ap.pos();
         let center = view.to_screen(Vec2::new(ax, az));
-        let (s, c) = primary.heading.sin_cos();
-        let hdir = egui::vec2(s, c);
 
-        // Always draw the circle anchor so the airport reads as one pin.
-        // When zoomed in enough, also draw each strip's to-scale line on top.
-        painter.circle(center, icons.airport_circle, AIRPORT, egui::Stroke::NONE);
-        let screen_len = primary.length / view.world_per_px();
-        if screen_len > circle_d {
-            for strip in &ap.strips {
-                let sc = view.to_screen(Vec2::new(strip.x, strip.z));
-                let strip_screen_len = strip.length / view.world_per_px();
-                let half = hdir * (strip_screen_len * 0.5);
-                painter.line_segment([sc - half, sc + half], stroke);
-            }
-        } else {
-            let half = hdir * (icons.airport_circle * 1.3);
-            painter.line_segment(
-                [center - half, center + half],
-                egui::Stroke::new(icons.runway_width, egui::Color32::WHITE),
-            );
+        // Always draw the circle anchor so the airport reads as one pin, then
+        // draw each strip's own line on top, each using its own heading/length.
+        painter.circle(center, dot_radius, AIRPORT, egui::Stroke::NONE);
+        for strip in &ap.strips {
+            let sc = view.to_screen(Vec2::new(strip.x, strip.z));
+            let (s, c) = strip.heading.sin_cos();
+            let hdir = egui::vec2(s, c);
+            let strip_screen_len = strip.length / view.world_per_px();
+            let half = hdir * (strip_screen_len * 0.5);
+            painter.line_segment([sc - half, sc + half], stroke);
         }
 
         if selected == Some(ap.cell) {
@@ -246,7 +243,7 @@ pub fn draw_airports(
         }
         if show_idents {
             painter.text(
-                center + egui::vec2(icons.airport_circle + 3.0, 0.0),
+                center + egui::vec2(dot_radius + 3.0, 0.0),
                 egui::Align2::LEFT_CENTER,
                 runway_ident(seed, ap.cell),
                 egui::FontId::proportional(icons.label_font),

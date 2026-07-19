@@ -136,6 +136,7 @@ pub fn airplane_controller(
             if keys.pressed(KeyCode::KeyE) { 1.0 } else if keys.pressed(KeyCode::KeyQ) { -1.0 } else { 0.0 },
         )
     };
+    root.yaw_input = yaw;
 
     // Flaps: notched lever like a C172 (0/10/20/30°) on the keyboard, but
     // `flap_target` itself is continuous — the instrument panel's flap lever

@@ -163,6 +163,8 @@ const FIXED_CAM_KEYS: [KeyCode; 10] = [
 ];
 
 /// Snaps directly into a fixed-camera mount when its number key is pressed.
+/// Pressing the same key again while already on that mount toggles back to
+/// Orbit instead of re-snapping in place.
 pub fn fixed_cam_hotkeys(
     keys: Res<ButtonInput<KeyCode>>,
     mounts: Res<FixedCameraMounts>,
@@ -170,7 +172,11 @@ pub fn fixed_cam_hotkeys(
 ) {
     for (index, key) in FIXED_CAM_KEYS.iter().enumerate() {
         if keys.just_pressed(*key) && index < mounts.mounts.len() {
-            *mode = CameraMode::Fixed(index);
+            *mode = if *mode == CameraMode::Fixed(index) {
+                CameraMode::Orbit
+            } else {
+                CameraMode::Fixed(index)
+            };
         }
     }
 }

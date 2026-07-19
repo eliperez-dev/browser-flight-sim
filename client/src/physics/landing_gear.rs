@@ -10,7 +10,9 @@
 //!
 //! A simple tyre-friction model on top of that keeps the aircraft tracking
 //! straight while taxiing: strong resistance to sliding sideways, light rolling
-//! resistance fore-and-aft.
+//! resistance fore-and-aft, and rudder-linked nosewheel steering so the pilot
+//! can actively correct a developing yaw instead of relying on the (weak, at
+//! taxi speed) aerodynamic rudder alone.
 //!
 //! All forces are applied through Avian's [`Forces`] API at the contact point,
 //! so each strut also generates the correct pitch/roll moment about the centre
@@ -117,7 +119,13 @@ pub fn apply_landing_gear(
 
     let mut any_contact = false;
 
-    for leg in gear_legs(&flight_model) {
+    // Nose wheel steers with the rudder pedals (Q/E), same input as the
+    // aerodynamic rudder — without this the nose wheel's rolling axis is
+    // locked to the fuselage heading and nothing actively points the
+    // aircraft on the ground, so it skates instead of tracking straight.
+    let steer_angle = -root.yaw_input * cfg.gear_nose_steer_deg.to_radians();
+
+    for (index, leg) in gear_legs(&flight_model).into_iter().enumerate() {
         // If the strut is not pointing meaningfully downward (aircraft on its
         // side or inverted) the flat-ground intersection is undefined — skip it.
         if down.y > -1.0e-3 {
@@ -172,7 +180,15 @@ pub fn apply_landing_gear(
         // Horizontal velocity in the ground-tangent plane (strip the strut-axis
         // component), split into rolling (along the nose heading) and lateral.
         let v_tangent = v_point - up * v_point.dot(up);
-        let heading = (rot * Vec3::Z - up * (rot * Vec3::Z).dot(up)).normalize_or_zero();
+        let fuselage_heading = (rot * Vec3::Z - up * (rot * Vec3::Z).dot(up)).normalize_or_zero();
+        // Leg 0 is the nose wheel (see `gear_legs`) — rotate its rolling axis
+        // about the strut's up vector by the steering angle so it points
+        // where the rudder pedals command instead of straight ahead.
+        let heading = if index == 0 {
+            Quat::from_axis_angle(up, steer_angle) * fuselage_heading
+        } else {
+            fuselage_heading
+        };
         let rolling_speed = v_tangent.dot(heading);
         let lateral_v = v_tangent - heading * rolling_speed;
 

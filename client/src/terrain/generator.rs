@@ -173,7 +173,7 @@ impl Default for WorldGenConfig {
             //   dry→wet at cold = grasslands→taiga, dry→wet at hot = desert→forest.
             desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 0.3 },
             grasslands: BiomeShape { elevation: 0.04, relief: 0.02,  abundance: 1.0 },
-            forest:     BiomeShape { elevation: 0.5,  relief: 0.05,  abundance: 1.0 },
+            forest:     BiomeShape { elevation: 1.2,  relief: 0.1,   abundance: 1.0 },
             taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.5 },
             temp_bias: -0.15,
             humidity_bias: -0.15,
@@ -219,6 +219,11 @@ pub struct WorldGenerator {
     /// Low-frequency land/sea mask: high = continental interior, low = ocean.
     /// Independent of the climate field — geography decides where water is.
     continent_layer: PerlinLayer,
+    /// Domain-warp fields: displace (x, z) before every other sample so biome
+    /// borders and terrain features follow wobbly, organic curves instead of
+    /// the straight/grid-aligned contours raw Perlin produces on its own.
+    warp_x: PerlinLayer,
+    warp_z: PerlinLayer,
 }
 
 impl WorldGenerator {
@@ -251,18 +256,37 @@ impl WorldGenerator {
             latitude_strength: cfg.latitude_strength,
             latitude_band: cfg.latitude_band.max(1.0),
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
+            // Ratios between octaves are deliberately non-round (not clean
+            // doublings) so they don't phase-lock into a repeating lattice.
             terrain_layers: vec![
                 PerlinLayer::new(seed,       0.08 * hs, 4.5),
-                PerlinLayer::new(seed,       0.20 * hs, 3.5),
-                PerlinLayer::new(seed + 100, 0.50 * hs, 1.75),
-                PerlinLayer::new(seed + 200, 1.00 * hs, 0.50),
-                PerlinLayer::new(seed + 300, 2.00 * hs, 0.40),
+                PerlinLayer::new(seed,       0.21 * hs, 3.5),
+                PerlinLayer::new(seed + 100, 0.47 * hs, 1.75),
+                PerlinLayer::new(seed + 200, 0.93 * hs, 0.50),
+                PerlinLayer::new(seed + 300, 2.13 * hs, 0.40),
             ],
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
             continent_layer: PerlinLayer::new(seed + 600, continent_freq, 1.0),
+            // Low-frequency, high-amplitude relative to what they displace so the
+            // warp is clearly visible in the climate/continent borders and coarse
+            // height features. Frequencies are offset from climate_freq/continent_freq
+            // (not multiples) so the warp itself never lines up with what it's warping.
+            warp_x: PerlinLayer::new(seed + 700, climate_freq * 0.37, 1.0),
+            warp_z: PerlinLayer::new(seed + 800, climate_freq * 0.37, 1.0),
         }
+    }
+
+    /// Displaces (x, z) by a slow, large-amplitude noise field before sampling
+    /// climate/continent/height, so their contours bend into organic curves
+    /// instead of following raw Perlin's grid-aligned bias. `strength` is in
+    /// world metres and should be a good fraction of the feature wavelength
+    /// being warped, or the effect is invisible.
+    fn warp(&self, x: f32, z: f32, strength: f32) -> (f32, f32) {
+        let dx = self.warp_x.get(x, z) / self.warp_x.vertical_scale;
+        let dz = self.warp_z.get(x, z) / self.warp_z.vertical_scale;
+        (x + dx * strength, z + dz * strength)
     }
 
     /// World seed, used to derive the per-cell runway layout deterministically.
@@ -287,8 +311,11 @@ impl WorldGenerator {
     /// here lets the one noise sample feed both the coastal humidity and the ocean
     /// shaping without re-evaluating it.
     fn climate_and_continent(&self, x: f32, z: f32) -> (f32, f32, f32) {
-        let raw_temp = self.temperature_layer.get(x, z);
-        let raw_hum = self.humidity_layer.get(x, z);
+        // Warp the sample point before reading climate so biome borders bend
+        // into organic curves instead of following the underlying Perlin grid.
+        let (wx, wz) = self.warp(x, z, 800.0);
+        let raw_temp = self.temperature_layer.get(wx, wz);
+        let raw_hum = self.humidity_layer.get(wx, wz);
         let temp = ((raw_temp / self.temperature_layer.vertical_scale) + 1.0) * 0.5;
         let hum = ((raw_hum / self.humidity_layer.vertical_scale) + 1.0) * 0.5;
         let continentalness = self.continentalness(x, z);
@@ -312,7 +339,10 @@ impl WorldGenerator {
     /// Land/sea mask at (x, z), 0..1: low = ocean, high = continental interior.
     /// A standalone low-frequency Perlin field, independent of the climate.
     fn continentalness(&self, x: f32, z: f32) -> f32 {
-        let raw = self.continent_layer.get(x, z);
+        // Continents have a much longer wavelength than climate, so they need a
+        // proportionally larger warp to visibly bend their coastlines.
+        let (wx, wz) = self.warp(x, z, 3000.0);
+        let raw = self.continent_layer.get(wx, wz);
         (((raw / self.continent_layer.vertical_scale) + 1.0) * 0.5).clamp(0.0, 1.0)
     }
 
@@ -363,9 +393,13 @@ impl WorldGenerator {
         let (temp_base, hum, continentalness) = self.climate_and_continent(x, z);
         let ocean = self.ocean_factor(continentalness);
 
+        // Warp only the two broadest octaves: their long wavelength is what
+        // reads as a "grid" of ridges/valleys at a glance, and warping them
+        // bends that into organic curves without smearing fine detail.
+        let (wx, wz) = self.warp(x, z, 200.0);
         let mut base = 0.0;
-        for layer in &self.terrain_layers {
-            base += layer.get(x, z);
+        for (i, layer) in self.terrain_layers.iter().enumerate() {
+            base += if i < 2 { layer.get(wx, wz) } else { layer.get(x, z) };
         }
 
         // Altitude → temperature: estimate the elevation using the sea-level
@@ -504,34 +538,38 @@ struct TerrainStop {
 }
 
 const GRASSLANDS_LEVELS: &[TerrainStop] = &[
-    TerrainStop { height: -1.0, color: Color::srgb(0.3, 0.2, 0.1) },
-    TerrainStop { height: -0.5, color: Color::srgb(0.8, 0.7, 0.5) },
-    TerrainStop { height: 0.2,  color: Color::srgb(0.2, 0.5, 0.2) },
-    TerrainStop { height: 2.5,  color: Color::srgb(0.5, 0.5, 0.5) },
+    TerrainStop { height: -1.0, color: Color::srgb(0.32, 0.22, 0.1) },
+    TerrainStop { height: -0.5, color: Color::srgb(0.75, 0.65, 0.4) },
+    TerrainStop { height: 0.2,  color: Color::srgb(0.45, 0.7, 0.2) },
+    TerrainStop { height: 1.2,  color: Color::srgb(0.35, 0.55, 0.15) },
+    TerrainStop { height: 1.8,  color: Color::srgb(0.45, 0.42, 0.38) },
+    TerrainStop { height: 2.5,  color: Color::srgb(0.55, 0.52, 0.48) },
 ];
 
 const DESERT_LEVELS: &[TerrainStop] = &[
-    TerrainStop { height: -1.0, color: Color::srgb(0.6, 0.4, 0.2) },
-    TerrainStop { height: -0.5, color: Color::srgb(0.9, 0.8, 0.5) },
-    TerrainStop { height: 0.7,  color: Color::srgb(0.8, 0.6, 0.3) },
-    TerrainStop { height: 1.5,  color: Color::srgb(0.7, 0.4, 0.2) },
-    TerrainStop { height: 2.5,  color: Color::srgb(0.6, 0.3, 0.1) },
+    TerrainStop { height: -1.0, color: Color::srgb(0.55, 0.34, 0.14) },
+    TerrainStop { height: -0.5, color: Color::srgb(0.85, 0.7, 0.4) },
+    TerrainStop { height: 0.7,  color: Color::srgb(0.8, 0.55, 0.25) },
+    TerrainStop { height: 1.5,  color: Color::srgb(0.65, 0.35, 0.14) },
+    TerrainStop { height: 2.5,  color: Color::srgb(0.55, 0.26, 0.1) },
 ];
 
 const TAIGA_LEVELS: &[TerrainStop] = &[
-    TerrainStop { height: -1.0, color: Color::srgb(0.2, 0.2, 0.2) },
-    TerrainStop { height: -0.5, color: Color::srgb(0.4, 0.4, 0.4) },
-    TerrainStop { height: 0.3,  color: Color::srgb(0.1, 0.3, 0.2) },
-    TerrainStop { height: 0.8,  color: Color::srgb(0.5, 0.5, 0.5) },
-    TerrainStop { height: 1.0,  color: Color::WHITE },
+    TerrainStop { height: -1.0, color: Color::srgb(0.18, 0.18, 0.18) },
+    TerrainStop { height: -0.5, color: Color::srgb(0.35, 0.35, 0.35) },
+    TerrainStop { height: 0.3,  color: Color::srgb(0.08, 0.28, 0.18) },
+    TerrainStop { height: 2.2,  color: Color::srgb(0.22, 0.32, 0.22) },
+    TerrainStop { height: 3.4,  color: Color::srgb(0.42, 0.4, 0.38) },
+    TerrainStop { height: 4.2,  color: Color::srgb(0.92, 0.94, 0.97) },
 ];
 
 const FOREST_LEVELS: &[TerrainStop] = &[
-    TerrainStop { height: -1.0, color: Color::srgb(0.3, 0.2, 0.1) },
-    TerrainStop { height: -0.5, color: Color::srgb(0.2, 0.4, 0.1) },
-    TerrainStop { height: 0.3,  color: Color::srgb(0.1, 0.8, 0.1) },
-    TerrainStop { height: 2.7,  color: Color::srgb(0.05, 0.9, 0.05) },
-    TerrainStop { height: 3.0,  color: Color::WHITE },
+    TerrainStop { height: -1.0, color: Color::srgb(0.32, 0.22, 0.1) },
+    TerrainStop { height: -0.5, color: Color::srgb(0.18, 0.38, 0.08) },
+    TerrainStop { height: 0.3,  color: Color::srgb(0.08, 0.5, 0.08) },
+    TerrainStop { height: 2.6,  color: Color::srgb(0.1, 0.42, 0.1) },
+    TerrainStop { height: 3.8,  color: Color::srgb(0.4, 0.38, 0.35) },
+    TerrainStop { height: 4.6,  color: Color::srgb(0.94, 0.95, 0.97) },
 ];
 
 /// Linear colour for `height` within one biome palette, interpolated between the

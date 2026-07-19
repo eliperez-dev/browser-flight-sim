@@ -52,6 +52,11 @@ pub struct AircraftRoot {
     /// Actual flap deflection (radians), which moves toward `flap_target` at a
     /// finite rate so flaps extend/retract over a couple of seconds.
     pub flap_setting: f32,
+    /// Raw rudder pedal input, -1 (left) to 1 (right), before sensitivity
+    /// scaling. Set each frame in `airplane_controller`; read by
+    /// `apply_landing_gear` to steer the nosewheel, so ground and air yaw
+    /// control share the same Q/E input.
+    pub yaw_input: f32,
 }
 
 impl Default for AircraftRoot {
@@ -64,6 +69,7 @@ impl Default for AircraftRoot {
             mixture: 1.0,
             flap_target: 0.0,
             flap_setting: 0.0,
+            yaw_input: 0.0,
         }
     }
 }

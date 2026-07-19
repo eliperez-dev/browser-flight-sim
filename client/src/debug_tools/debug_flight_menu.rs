@@ -627,6 +627,8 @@ fn draw_menu(
                         .text("Rolling resistance (Crr)"));
                     ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_brake_strength, 0.0..=2.0)
                         .text("Brake strength (B)"));
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_nose_steer_deg, 0.0..=30.0)
+                        .text("Nosewheel steering (deg)"));
 
                     ui.separator();
                     ui.label("Geometry (G to show struts)");

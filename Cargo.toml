@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["client", "protocol", "server"]
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+panic = "abort"
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+panic = "abort"
