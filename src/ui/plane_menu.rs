@@ -7,6 +7,20 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
 use crate::ui::menu_bar::MenuBar;
 
+// Mirrors instrument_panel.rs's palette so the loadout gauges read as the
+// same instrument family as the rest of the panel.
+const BORDER:   egui::Color32 = egui::Color32::from_rgb(45, 74, 122);
+const TEXT_DIM: egui::Color32 = egui::Color32::from_rgb(139, 154, 181);
+const ACCENT:   egui::Color32 = egui::Color32::from_rgb(59, 130, 246);
+const WARN:     egui::Color32 = egui::Color32::from_rgb(235, 90, 90);
+const CAUTION:  egui::Color32 = egui::Color32::from_rgb(230, 200, 80);
+const GOOD:     egui::Color32 = egui::Color32::from_rgb(90, 200, 130);
+// Fuel fill uses yellow/amber tones (distinct from cargo's green) so the two
+// gauge types read differently at a glance even at a full fill level.
+const FUEL_LOW:  egui::Color32 = WARN;
+const FUEL_MID:  egui::Color32 = egui::Color32::from_rgb(235, 165, 40);
+const FUEL_FULL: egui::Color32 = egui::Color32::from_rgb(235, 200, 60);
+
 pub struct PlaneMenuPlugin;
 
 impl Plugin for PlaneMenuPlugin {
@@ -28,8 +42,8 @@ fn draw_plane_menu(
         .open(&mut bar.my_plane)
         .order(egui::Order::Tooltip)
         .default_pos(egui::pos2(240.0, 48.0))
-        .default_width(280.0)
-        .resizable(false)
+        .default_width(300.0)
+        .resizable(true)
         .show(ctx, |ui| {
             // ── Engine ──────────────────────────────────────────────────────
             ui.heading("Engine");
@@ -56,6 +70,26 @@ fn draw_plane_menu(
                 .text("Occupants")
                 .integer());
 
+            ui.add_space(6.0);
+            // Fixed-width strip so the painter-based gauges can't blow out
+            // the window's auto-sized width the way they did nested inside
+            // a plain `ui.horizontal` (each vertical_centered child would
+            // request unbounded width from its horizontal parent).
+            ui.allocate_ui(egui::vec2(280.0, 80.0), |ui| {
+                ui.horizontal(|ui| {
+                    // Fuel tanks sit right next to each other (tight spacing)
+                    // since they're the same kind of gauge; a wider gap
+                    // separates them from cargo/seats.
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    fill_bar(ui, "L TANK", cfg.cargo.fuel_left_kg, FUEL_TANK_MAX_KG, FillKind::Fuel, |f| format!("{f:.0}"));
+                    fill_bar(ui, "R TANK", cfg.cargo.fuel_right_kg, FUEL_TANK_MAX_KG, FillKind::Fuel, |f| format!("{f:.0}"));
+                    ui.add_space(12.0);
+                    fill_bar(ui, "CARGO", cfg.cargo.cargo_kg, CARGO_MAX_KG, FillKind::Cargo, |f| format!("{f:.0}"));
+                    ui.add_space(12.0);
+                    seat_grid(ui, cfg.cargo.passengers);
+                });
+            });
+
             // ── Flight Assists ───────────────────────────────────────────────
             ui.add_space(8.0);
             ui.heading("Flight Assists");
@@ -80,4 +114,84 @@ fn draw_plane_menu(
         });
 
     Ok(())
+}
+
+/// Which color ramp a `fill_bar` uses — fuel reads yellow/amber, cargo reads
+/// green, so the two gauge types are visually distinct even both when full.
+#[derive(Clone, Copy)]
+enum FillKind {
+    Fuel,
+    Cargo,
+}
+
+impl FillKind {
+    fn color(self, frac: f32) -> egui::Color32 {
+        match self {
+            FillKind::Fuel => if frac < 0.15 { FUEL_LOW } else if frac < 0.3 { FUEL_MID } else { FUEL_FULL },
+            FillKind::Cargo => if frac < 0.15 { WARN } else if frac < 0.3 { CAUTION } else { GOOD },
+        }
+    }
+}
+
+/// A small vertical fill-bar gauge (fuel/cargo level), styled like the
+/// instrument panel's fuel bars. `label_fn` formats the value shown below it.
+fn fill_bar(ui: &mut egui::Ui, label: &str, value: f32, max: f32, kind: FillKind, label_fn: impl Fn(f32) -> String) {
+    ui.allocate_ui(egui::vec2(40.0, 80.0), |ui| {
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(label).size(9.0).color(TEXT_DIM));
+
+            let size = egui::Vec2::new(20.0, 48.0);
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let painter = ui.painter();
+
+            painter.rect_filled(rect, egui::CornerRadius::from(3u8), egui::Color32::from_rgb(10, 13, 20));
+            painter.rect_stroke(rect, egui::CornerRadius::from(3u8), egui::Stroke::new(1.0, BORDER), egui::StrokeKind::Outside);
+
+            let frac = (value / max).clamp(0.0, 1.0);
+            let fill_height = rect.height() * frac;
+            let fill_rect = egui::Rect::from_min_max(
+                egui::Pos2::new(rect.left(), rect.bottom() - fill_height),
+                egui::Pos2::new(rect.right(), rect.bottom()),
+            );
+            painter.rect_filled(fill_rect, egui::CornerRadius::from(3u8), kind.color(frac));
+
+            ui.label(egui::RichText::new(label_fn(value)).size(9.0).color(TEXT_DIM));
+        });
+    });
+}
+
+/// Occupancy readout: a 2x2 seat grid. Seat 1 (the pilot/PIC) is always
+/// shown filled since `passengers` is clamped to a minimum of 1 (the pilot
+/// is never absent), and is labelled distinctly (accent blue) from the
+/// remaining passenger seats (green). Filled in seat order 1,2,3,4 reading
+/// left-to-right, top-to-bottom.
+fn seat_grid(ui: &mut egui::Ui, passengers: u32) {
+    ui.allocate_ui(egui::vec2(56.0, 80.0), |ui| {
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("SEATS").size(9.0).color(TEXT_DIM));
+
+            let seat_size = egui::Vec2::new(22.0, 22.0);
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+            for row in 0..2u32 {
+                ui.horizontal(|ui| {
+                    for col in 0..2u32 {
+                        let seat = row * 2 + col + 1;
+                        let (rect, _) = ui.allocate_exact_size(seat_size, egui::Sense::hover());
+                        let painter = ui.painter();
+                        painter.rect_stroke(rect, egui::CornerRadius::from(3u8), egui::Stroke::new(1.0, BORDER), egui::StrokeKind::Outside);
+
+                        let occupied = seat <= passengers.max(1);
+                        let color = if seat == 1 { ACCENT } else { GOOD };
+                        painter.rect_filled(
+                            rect,
+                            egui::CornerRadius::from(3u8),
+                            if occupied { color } else { egui::Color32::from_rgb(10, 13, 20) },
+                        );
+                    }
+                });
+            }
+
+            ui.label(egui::RichText::new(format!("{}/4", passengers.max(1))).size(9.0).color(TEXT_DIM));
+        });
+    });
 }

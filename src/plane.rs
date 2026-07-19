@@ -36,6 +36,9 @@ pub struct PlaneState {
     pub on_ground: bool,
     /// True while the wheel brakes (B) are applied.
     pub braking: bool,
+    /// True once a hull point has struck the terrain (see `hull_collision.rs`).
+    /// Sticky until the aircraft is respawned/reset.
+    pub crashed: bool,
 }
 
 /// Wing dihedral (degrees per side). Shared between the geometric wingtip rise

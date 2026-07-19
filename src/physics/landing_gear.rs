@@ -140,9 +140,18 @@ pub fn apply_landing_gear(
         any_contact = true;
 
         // Compression is how far the strut is pushed up from its rest length.
-        // `t <= 0` means the mount itself is at/below ground (deep penetration);
-        // clamp so the strut bottoms out rather than producing absurd forces.
-        let compression = (leg.rest_length - t.max(0.0)).clamp(0.0, leg.rest_length);
+        // `t` can go negative when the mount itself is driven below ground on a
+        // hard landing (deep penetration) — deliberately let compression keep
+        // growing past `rest_length` in that case instead of capping it there.
+        // A cap would freeze the spring force at the same magnitude regardless
+        // of how deep the aircraft sinks, so a hard-enough touchdown could sink
+        // in faster than the capped force could push it back out, then the
+        // (still merely rest-length-sized) force slowly floats it back up
+        // through the ground over the following frames. Letting compression
+        // scale with actual depth makes the spring push back proportionally
+        // harder the deeper it goes, so it arrests the sink and settles at the
+        // correct depth instead of overshooting through the terrain.
+        let compression = (leg.rest_length - t).clamp(0.0, leg.rest_length * 2.0);
 
         // Contact point on the ground, used as the force application point.
         let contact = mount_world + down * t.clamp(0.0, leg.rest_length);

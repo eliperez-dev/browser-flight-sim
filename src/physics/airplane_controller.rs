@@ -133,22 +133,25 @@ pub fn airplane_controller(
         )
     };
 
-    // Flaps: notched lever like a C172 (0/10/20/30°). Period (>) extends a
-    // notch, Comma (<) retracts. The commanded notch is `flap_target`; the
-    // actual `flap_setting` chases it at a finite rate so flaps don't snap.
+    // Flaps: notched lever like a C172 (0/10/20/30°) on the keyboard, but
+    // `flap_target` itself is continuous — the instrument panel's flap lever
+    // (instrument_panel.rs) can set any degree by dragging, and this only
+    // reacts to just-pressed key events rather than re-snapping every frame,
+    // so it doesn't fight a value the panel set mid-drag.
     const FLAP_NOTCHES_DEG: [f32; 4] = [0.0, 10.0, 20.0, 30.0];
-    let cur_deg = root.flap_target.to_degrees();
-    let mut notch = FLAP_NOTCHES_DEG
-        .iter()
-        .position(|&n| (n - cur_deg).abs() < 0.5)
-        .unwrap_or(0);
-    if keys.just_pressed(KeyCode::Period) {
-        notch = (notch + 1).min(FLAP_NOTCHES_DEG.len() - 1);
+    if keys.just_pressed(KeyCode::Period) || keys.just_pressed(KeyCode::Comma) {
+        let cur_deg = root.flap_target.to_degrees();
+        let nearest = FLAP_NOTCHES_DEG
+            .iter()
+            .position(|&n| (n - cur_deg).abs() < 0.5)
+            .unwrap_or(0);
+        let notch = if keys.just_pressed(KeyCode::Period) {
+            (nearest + 1).min(FLAP_NOTCHES_DEG.len() - 1)
+        } else {
+            nearest.saturating_sub(1)
+        };
+        root.flap_target = FLAP_NOTCHES_DEG[notch].to_radians();
     }
-    if keys.just_pressed(KeyCode::Comma) {
-        notch = notch.saturating_sub(1);
-    }
-    root.flap_target = FLAP_NOTCHES_DEG[notch].to_radians();
     let flap_rate = 15_f32.to_radians(); // flap travel speed (rad/s)
     let flap_step = (root.flap_target - root.flap_setting).clamp(-flap_rate * dt, flap_rate * dt);
     root.flap_setting += flap_step;

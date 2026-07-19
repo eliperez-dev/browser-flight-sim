@@ -29,6 +29,7 @@ use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
 use crate::physics::airplane_controller::{airplane_controller, flight_assist};
 use crate::physics::flight_config::FlightModelConfig;
+use crate::physics::hull_collision::detect_hull_collision;
 use crate::physics::landing_gear::apply_landing_gear;
 
 mod airport_names;
@@ -75,6 +76,7 @@ fn main() {
             crate::ui::StylePlugin,
             crate::ui::WeatherMenuPlugin,
             crate::ui::PlaneMenuPlugin,
+            crate::ui::InstrumentPanelPlugin,
         ))
         // Cap the virtual-time step so a stutter frame never gives the physics
         // integrator a huge dt that over-compresses the spring-damper struts.
@@ -101,7 +103,7 @@ fn main() {
             // framerate — no slowdown at low fps. TransformInterpolation on
             // the aircraft entity handles smooth rendering between steps.
             PhysicsSchedule,
-            (airplane_controller, flight_assist, apply_aero_forces, apply_landing_gear)
+            (airplane_controller, flight_assist, apply_aero_forces, apply_landing_gear, detect_hull_collision)
                 .chain()
                 .after(PhysicsStepSystems::First)
                 .before(PhysicsStepSystems::BroadPhase)
@@ -315,7 +317,7 @@ fn setup(
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
-            left: Val::Px(8.0),
+            right: Val::Px(8.0),
             ..default()
         },
     ));

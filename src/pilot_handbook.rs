@@ -58,10 +58,20 @@ fn draw_handbook(
 
     let ctx = contexts.ctx_mut()?;
 
+    // Centre the window on first open only (an explicit `default_pos`, not an
+    // `anchor` — `anchor` would make it immovable, which breaks dragging on
+    // this resizable window). Estimated against a typical ~480x520 window
+    // size since egui doesn't know the real size until after the first show.
+    let screen = ctx.screen_rect();
+    let default_pos = egui::pos2(
+        (screen.width() / 2.0 - 240.0).max(8.0),
+        (screen.height() / 2.0 - 260.0).max(8.0),
+    );
+
     egui::Window::new("Pilot's Handbook")
         .open(&mut bar.handbook)
         .order(egui::Order::Tooltip)
-        .default_pos(egui::pos2(16.0, 48.0))
+        .default_pos(default_pos)
         .default_width(480.0)
         .resizable(true)
         .show(ctx, |ui| {

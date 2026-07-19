@@ -49,6 +49,9 @@ pub fn populate_debug_hud(
         hud.entries.push(("KTS",    format!("{:.1} kt",  state.speed * 1.943_844)));
         hud.entries.push(("ALT",    format!("{:.1} m",   tf.translation.y)));
         hud.entries.push(("GND",    if state.on_ground { "ON GROUND" } else { "AIRBORNE" }.into()));
+        if state.crashed {
+            hud.entries.push(("STATUS", "CRASHED".into()));
+        }
         hud.entries.push(("ENGINE", match root.engine_state {
             EngineState::Off      => "OFF  \t[I]",
             EngineState::Cranking => "CRANKING...",

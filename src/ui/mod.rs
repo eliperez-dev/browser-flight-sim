@@ -1,3 +1,4 @@
+pub mod instrument_panel;
 pub mod menu_bar;
 pub mod plane_menu;
 pub mod style;
@@ -10,6 +11,7 @@ use bevy::prelude::*;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UiSet;
 
+pub use instrument_panel::InstrumentPanelPlugin;
 pub use menu_bar::MenuBarPlugin;
 pub use plane_menu::PlaneMenuPlugin;
 pub use style::StylePlugin;
