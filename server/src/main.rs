@@ -79,11 +79,11 @@ async fn handle_connection(
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     // Wait for the Join message before allocating an id / admitting the player.
-    let name = loop {
+    let (name, model) = loop {
         match ws_rx.next().await {
             Some(Ok(Message::Binary(bytes))) => {
                 match ClientToServer::decode(&bytes) {
-                    Some(ClientToServer::Join { name }) => break name,
+                    Some(ClientToServer::Join { name, model }) => break (name, model),
                     Some(_) => continue, // ignore state updates before join
                     None => continue,
                 }
@@ -95,15 +95,17 @@ async fn handle_connection(
     };
 
     let id = world.next_id.fetch_add(1, Ordering::Relaxed);
-    tracing::info!("{peer} joined as '{name}' (id={id})");
+    tracing::info!("{peer} joined as '{name}' (id={id}, model={model})");
 
     let initial_state = PlayerState {
         id,
         name,
+        model,
         position: protocol::Vec3 { x: 0.0, y: 0.0, z: 0.0 },
         rotation: protocol::Quat { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
         velocity: protocol::Vec3 { x: 0.0, y: 0.0, z: 0.0 },
         control_surfaces: ControlSurfaces::default(),
+        lights: protocol::LightSwitches::default(),
     };
 
     let other_players: Vec<PlayerState> = {
@@ -175,6 +177,7 @@ async fn handle_connection(
             rotation,
             velocity,
             control_surfaces,
+            lights,
         }) = ClientToServer::decode(&bytes)
         else {
             continue;
@@ -194,6 +197,7 @@ async fn handle_connection(
                 p.rotation = rotation;
                 p.velocity = velocity;
                 p.control_surfaces = control_surfaces;
+                p.lights = lights;
             }
         }
 
@@ -205,6 +209,7 @@ async fn handle_connection(
                 rotation,
                 velocity,
                 control_surfaces,
+                lights,
             },
         ));
     }

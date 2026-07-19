@@ -17,34 +17,56 @@ pub struct Quat {
     pub w: f32,
 }
 
-/// Control-surface deflection, enough to render another player's aircraft
-/// looking roughly correct instead of just an interpolated rigid hull.
+/// Control-surface deflection (radians) and engine state, enough for another
+/// client to recreate this aircraft's visual pose and animation — surface
+/// angles, propeller spin, and light switches — without re-simulating flight.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ControlSurfaces {
     pub aileron: f32,
     pub elevator: f32,
     pub rudder: f32,
     pub flap: f32,
+    /// Engine speed (revolutions per second), drives propeller spin rate.
+    pub engine_rps: f32,
+}
+
+/// Exterior light switch state. Nav/strobe/beacon *animation* (blink phase)
+/// is derived locally from `world_time` on each client rather than streamed,
+/// since it's a pure function of elapsed time — only the on/off switches
+/// (set rarely, by cockpit input) need to cross the wire.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct LightSwitches {
+    pub nav_on: bool,
+    pub strobe_on: bool,
+    pub beacon_on: bool,
+    pub landing_light_on: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerState {
     pub id: PlayerId,
     pub name: String,
+    /// Identifies which aircraft asset to render for this player, e.g.
+    /// `"low-poly-airplane"`. Only one model exists today, so every client
+    /// sends the same string — this just avoids a protocol break whenever a
+    /// model picker is added later.
+    pub model: String,
     pub position: Vec3,
     pub rotation: Quat,
     pub velocity: Vec3,
     pub control_surfaces: ControlSurfaces,
+    pub lights: LightSwitches,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientToServer {
-    Join { name: String },
+    Join { name: String, model: String },
     StateUpdate {
         position: Vec3,
         rotation: Quat,
         velocity: Vec3,
         control_surfaces: ControlSurfaces,
+        lights: LightSwitches,
     },
 }
 
@@ -64,6 +86,7 @@ pub enum ServerToClient {
         rotation: Quat,
         velocity: Vec3,
         control_surfaces: ControlSurfaces,
+        lights: LightSwitches,
     },
     PlayerLeft { id: PlayerId },
     Kick { reason: String },
