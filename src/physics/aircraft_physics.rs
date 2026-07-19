@@ -121,9 +121,13 @@ pub fn apply_aero_forces(
     let thrust_factor = rpm_fraction * rpm_fraction;
     // Fixed-pitch prop loses thrust as airspeed increases — at zero speed it
     // makes full static thrust; at prop_zero_thrust_speed the blades stall and
-    // net thrust is zero. Linear falloff matches real fixed-pitch behaviour well
-    // across the C172's normal speed range.
-    let speed_factor = (1.0 - lin_vel.length() / cfg.propeller.prop_zero_thrust_speed).clamp(0.0, 1.0);
+    // net thrust is zero. Real fixed-pitch thrust curves stay close to flat
+    // through the low/cruise speed range and only fall away sharply near the
+    // blade's stall speed, so a squared falloff (concave, not linear) keeps
+    // more thrust in reserve at cruise/high speed and raises the achievable
+    // top speed without changing static/climb thrust at low speed.
+    let speed_ratio = (lin_vel.length() / cfg.propeller.prop_zero_thrust_speed).clamp(0.0, 1.0);
+    let speed_factor = 1.0 - speed_ratio * speed_ratio;
     let thrust_force = nose * cfg.thrust_max * thrust_factor * speed_factor;
 
     // Predict velocity (trapezoidal, matching Unity AircraftPhysics.cs)

@@ -226,10 +226,15 @@ pub struct PropellerConfig {
     /// by the blades). C172 ≈ 0.94 m.
     pub prop_radius: f32,
     /// Airspeed (m/s) at which the fixed-pitch prop produces zero net thrust —
-    /// the blades stall and the thrust curve reaches zero. Thrust falls linearly
-    /// from `thrust_max` at v=0 to 0 at this speed. C172 fixed-pitch prop: ~82 m/s
-    /// (≈160 kt). At cruise (70 kt ≈ 36 m/s) this gives ~56% of static thrust,
-    /// which matches the real aircraft's available thrust at that speed.
+    /// the blades stall and the thrust curve reaches zero. Thrust falls with the
+    /// square of `v / prop_zero_thrust_speed` (flat near v=0, falling away only
+    /// as speed approaches this value), matching how a real fixed-pitch prop's
+    /// thrust stays close to static through cruise and only drops sharply near
+    /// its blade-stall speed — unlike a naive linear falloff, which bleeds
+    /// thrust too early and caps top speed well below where drag actually
+    /// balances it. 100 m/s puts the zero-thrust point safely past Vne, so the
+    /// curve is still meaningfully non-zero at cruise/high speed. At cruise
+    /// (70 kt ≈ 36 m/s) this gives ~87% of static thrust.
     pub prop_zero_thrust_speed: f32,
 }
 
@@ -244,7 +249,7 @@ impl Default for PropellerConfig {
             // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
             prop_position:        Vec3::new(0.0, 3.5, 33.0),
             prop_radius:          0.94,
-            prop_zero_thrust_speed: 82.0, // ~160 kt — fixed-pitch blade stall speed
+            prop_zero_thrust_speed: 100.0, // ~194 kt — past Vne; curve stays flat through cruise
         }
     }
 }
