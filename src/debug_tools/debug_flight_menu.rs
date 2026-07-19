@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, egui};
 
+use crate::debug_tools::debug_hud::DebugHud;
 use crate::fog::FogSettings;
 use crate::lights::LightTimers;
 use crate::map::MapIconSettings;
@@ -76,6 +77,7 @@ fn draw_menu(
     mut map_icons: ResMut<MapIconSettings>,
     mut sky: ResMut<DayNightCycle>,
     mut light_timers_q: Query<&mut LightTimers, With<Airplane>>,
+    hud: Res<DebugHud>,
 ) -> Result {
     if !bar.flight_model { return Ok(()); }
 
@@ -103,6 +105,19 @@ fn draw_menu(
                 *cfg = defaults.clone();
                 w = WorldGenConfig::default();
             }
+
+            ui.separator();
+
+            // ---------------------------------------------------------------
+            // Live flight/state readout (formerly the on-screen white HUD text).
+            // ---------------------------------------------------------------
+            egui::CollapsingHeader::new("Debug Readout")
+                .default_open(true)
+                .show(ui, |ui| {
+                    for (label, value) in &hud.entries {
+                        ui.label(format!("{label}: {value}"));
+                    }
+                });
 
             ui.separator();
 

@@ -1,7 +1,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::{camera::PIXEL_LAYER, physics::{aero_surface::{AeroSurface, ControlInputType}, aircraft_physics::{AircraftRoot, ROOT_SCALE}, flight_config::FlightModelConfig}};
+use crate::{camera::PIXEL_LAYER, physics::{aero_surface::{AeroSurface, ControlInputType}, aircraft_physics::AircraftRoot, flight_config::FlightModelConfig}};
 
 /// Marker for every flyable aircraft entity.
 #[derive(Component)]
@@ -12,23 +12,10 @@ pub struct Airplane;
 #[derive(Component)]
 pub struct PlaneVisual;
 
-/// Marker placed on the GLTF node that is the propeller, so `spin_propeller`
-/// can rotate just it. Found at runtime by `tag_propeller` once the scene loads.
+/// Marker on the propeller scene root, so `spin_propeller` can rotate it
+/// about the engine's spin axis each frame.
 #[derive(Component)]
 pub struct Propeller;
-
-/// The temporary placeholder propeller — a flat rectangle spawned by
-/// `spawn_aircraft` and named "debug propeller". Carries `Propeller` too, so it
-/// spins and draws the prop gizmo. This separate marker lets
-/// `apply_config_to_entities` reposition just the placeholder (from
-/// `prop_position`) without touching a real prop node once one is ported in.
-#[derive(Component)]
-pub struct DebugPropeller;
-
-/// Set on a `PlaneVisual` once its propeller node has been located and tagged,
-/// so `tag_propeller` stops re-scanning that scene every frame.
-#[derive(Component)]
-pub struct PropellerTagged;
 
 /// Shared output written each frame by whichever physics model is active.
 /// All other systems (HUD, camera, etc.) read from here instead of from
@@ -79,8 +66,6 @@ pub fn wing_panel_rotation(incidence_deg: f32, dihedral_sign: f32) -> Quat {
 pub fn spawn_aircraft(
     commands: &mut Commands,
     asset_server: &AssetServer,
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
     cfg: &FlightModelConfig,
     spawn_pos: Vec3,
 ) -> Entity {
@@ -173,34 +158,34 @@ pub fn spawn_aircraft(
     // Visual mesh is a separate child so it can be offset independently of the physics origin.
     // The model's Y origin is at the belly; shifting it down -10 local units (-1 m world)
     // aligns the fuselage center with the CoM and the simulated wing positions.
+    // Body and propeller are exported as separate GLTFs from the same source model, sharing
+    // the same coordinate space, so both mount at the same local offset.
     let visual = commands.spawn((
-        SceneRoot(asset_server.load("low-poly-airplane/scene.gltf#Scene0")),
+        SceneRoot(asset_server.load("low-poly-airplane/body.glb#Scene0")),
         Transform::from_xyz(0.0, -10.0, 0.0),
         PlaneVisual,
         PIXEL_LAYER,
     )).id();
 
-    // Placeholder propeller: a flat bright rectangle on the nose that spins with
-    // the engine, standing in until a real prop node is exported from the model.
-    // Dimensions are LOCAL units (×0.1 → metres): tall in Y (the swept span), a
-    // narrow chord in X, and paper-thin in Z, so it reads as a 2-blade disc as
-    // it spins about local Z (the model's forward axis). `Name` contains "prop"
-    // so it matches the same systems a real node would. Positioned from the
-    // tunable `prop_position`; `apply_config_to_entities` keeps it in sync.
-    let span = 2.0 * cfg.propeller.prop_radius / ROOT_SCALE;
-    let debug_prop = commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(span * 0.06, span, span * 0.015))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(1.0, 0.2, 0.8),
-            unlit: true,
-            ..default()
-        })),
-        Transform::from_translation(cfg.propeller.prop_position),
-        Propeller,
-        DebugPropeller,
-        Name::new("debug propeller"),
+    // Propeller hub, in the same local space as the body (glb metres × 10 = local
+    // units), offset by the same -10 Y as the body so the two models still line up.
+    // The propeller mesh's own origin is not at its hub — its vertices sit ~1.5 m
+    // up and 2.3 m forward of the model origin in the glb's coordinates — so
+    // `Propeller` is a pivot at the hub, and the scene mesh underneath it is
+    // shifted back by that same amount, keeping it visually in place while making
+    // `spin_propeller`'s rotation happen about the hub instead of the mesh origin.
+    const PROP_HUB_GLB: Vec3 = Vec3::new(-0.0015, 1.526, 2.317);
+    let prop_hub_local = PROP_HUB_GLB * 10.0 + Vec3::new(0.0, -10.0, 0.0);
+    let propeller_mesh = commands.spawn((
+        SceneRoot(asset_server.load("low-poly-airplane/propeller.glb#Scene0")),
+        Transform::from_translation(-PROP_HUB_GLB * 10.0),
         PIXEL_LAYER,
     )).id();
+    let propeller = commands.spawn((
+        Transform::from_translation(prop_hub_local),
+        Propeller,
+        Name::new("propeller"),
+    )).add_children(&[propeller_mesh]).id();
 
     let (mass_eff, com_eff, inertia_eff) = cfg.loaded_mass_properties();
     commands.spawn((
@@ -231,46 +216,8 @@ pub fn spawn_aircraft(
         TransformInterpolation,
         PIXEL_LAYER,
     ))
-    .add_children(&[visual, debug_prop, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder])
+    .add_children(&[visual, propeller, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder])
     .id()
-}
-
-/// Once a plane's GLTF scene has finished spawning its node hierarchy, walk the
-/// descendants of the `PlaneVisual` and tag the propeller node (matched by a
-/// name containing "prop", case-insensitive — the GLTF loader copies node names
-/// into `Name`). Tagging is one-shot per plane via the `PropellerTagged` marker.
-///
-/// Requires the model to export the propeller as its own node; in the bundled
-/// asset the whole airframe is a single fused mesh, so until that node exists
-/// this simply finds nothing and does no work.
-pub fn tag_propeller(
-    mut commands: Commands,
-    visual_q: Query<Entity, (With<PlaneVisual>, Without<PropellerTagged>)>,
-    children_q: Query<&Children>,
-    name_q: Query<&Name>,
-) {
-    for visual in &visual_q {
-        let mut tagged = false;
-        // Iterative DFS over the scene's node hierarchy.
-        let mut stack = vec![visual];
-        while let Some(entity) = stack.pop() {
-            if let Ok(name) = name_q.get(entity)
-                && name.as_str().to_ascii_lowercase().contains("prop") {
-                    commands.entity(entity).insert(Propeller);
-                    tagged = true;
-                }
-            if let Ok(children) = children_q.get(entity) {
-                for &child in children {
-                    stack.push(child);
-                }
-            }
-        }
-        // Only stop scanning once the node tree exists and the prop was found;
-        // the scene's children appear a frame or two after SceneRoot is added.
-        if tagged {
-            commands.entity(visual).insert(PropellerTagged);
-        }
-    }
 }
 
 /// Spins every tagged propeller about the configured local axis at the engine's

@@ -151,9 +151,13 @@ pub struct MapState {
     selected: Option<Airport>,
     /// The active "direct-to" destination, if any (drawn as a course line).
     waypoint: Option<Airport>,
-    /// CPU-baked background, handed to egui as a texture.
+    /// CPU-baked background currently shown by egui — always a *complete* bake,
+    /// never a partially-filled one, so the map never visibly wipes/flashes.
     image: Handle<Image>,
-    // --- snapshot of the view the current texture was baked for ---
+    /// Scratch texture the in-progress pass fills row by row. Swapped into
+    /// `image` only once the pass finishes, so `image` is always whole.
+    back_image: Handle<Image>,
+    // --- snapshot of the view `image` (the front buffer) was baked for ---
     baked_center: Vec2,
     baked_world_per_texel: f32,
     baked_layer: MapLayer,
@@ -200,15 +204,17 @@ impl Plugin for MapPlugin {
 
 /// Creates the (initially black) background image and inserts [`MapState`].
 fn setup_map(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let image = Image::new_fill(
-        Extent3d { width: TEX, height: TEX, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        &[0, 0, 0, 255],
-        TextureFormat::Rgba8UnormSrgb,
-        // Keep the CPU copy (MAIN_WORLD) so we can refill it on view changes, and
-        // upload it (RENDER_WORLD) so egui can sample it.
-        RenderAssetUsages::all(),
-    );
+    let new_image = || {
+        Image::new_fill(
+            Extent3d { width: TEX, height: TEX, depth_or_array_layers: 1 },
+            TextureDimension::D2,
+            &[0, 0, 0, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            // Keep the CPU copy (MAIN_WORLD) so we can refill it on view changes, and
+            // upload it (RENDER_WORLD) so egui can sample it.
+            RenderAssetUsages::all(),
+        )
+    };
     commands.insert_resource(MapState {
         center: Vec2::ZERO,
         // ~250 m/texel ⇒ a ~64 km span, so several of the 10 km-spaced strips show.
@@ -217,7 +223,8 @@ fn setup_map(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         follow: true,
         selected: None,
         waypoint: None,
-        image: images.add(image),
+        image: images.add(new_image()),
+        back_image: images.add(new_image()),
         baked_center: Vec2::ZERO,
         baked_world_per_texel: 0.0,
         baked_layer: MapLayer::default(),
@@ -297,35 +304,39 @@ fn draw_map(
     // texture slides to follow the view instead, and we kick off once it settles.
     // Only reset bake_row when there isn't already a pass in progress, so we don't
     // keep restarting from row 0 every frame while baked=false.
+    //
+    // The pass bakes into `back_image`, not `image`: `image` (and the
+    // `baked_*` fields describing it) are left completely untouched until the
+    // pass finishes, so egui always draws a whole texture and the map never
+    // flashes black or visibly wipes mid-bake.
     let force_restart = generator.is_changed() || water.is_changed();
     let pass_idle = state.bake_row >= render::TEX;
     if force_restart || (pass_idle && state.view_changed() && !state.interacting) {
-        // Snapshot the view for this pass and immediately adopt it as the display
-        // position so the partial texture is always shown at the correct location
-        // rather than at the old baked position until the pass finishes.
         state.bake_pass_center = state.center;
         state.bake_pass_world_per_texel = state.world_per_texel;
         state.bake_pass_layer = state.layer;
-        state.baked_center = state.center;
-        state.baked_world_per_texel = state.world_per_texel;
-        state.baked_layer = state.layer;
         state.bake_row = 0;
-        // Wipe the texture so stale pixels from the previous view don't bleed
-        // through while the new pass fills in row by row.
-        if let Some(image) = images.get_mut(&state.image)
-            && let Some(data) = image.data.as_mut() {
-            data.fill(0);
-        }
     }
 
     // Advance the incremental bake by up to BAKE_ROWS_PER_FRAME rows this frame.
-    if state.bake_row < render::TEX
-        && let Some(image) = images.get_mut(&state.image) {
-        let start = state.bake_row;
-        let end = (start + BAKE_ROWS_PER_FRAME).min(render::TEX);
-        render::bake_rows(image, &generator, start, end, state.bake_pass_center, state.bake_pass_world_per_texel, state.bake_pass_layer, water.sea_level);
-        state.bake_row = end;
-        if state.bake_row >= render::TEX {
+    if state.bake_row < render::TEX {
+        let mut pass_done = false;
+        if let Some(image) = images.get_mut(&state.back_image) {
+            let start = state.bake_row;
+            let end = (start + BAKE_ROWS_PER_FRAME).min(render::TEX);
+            render::bake_rows(image, &generator, start, end, state.bake_pass_center, state.bake_pass_world_per_texel, state.bake_pass_layer, water.sea_level);
+            state.bake_row = end;
+            pass_done = state.bake_row >= render::TEX;
+        }
+        if pass_done {
+            // Pass complete: swap the finished back buffer to the front so
+            // egui (and the `baked_*` view it's drawn against) update in one
+            // frame instead of streaking in row by row.
+            let state = &mut *state;
+            std::mem::swap(&mut state.image, &mut state.back_image);
+            state.baked_center = state.bake_pass_center;
+            state.baked_world_per_texel = state.bake_pass_world_per_texel;
+            state.baked_layer = state.bake_pass_layer;
             state.baked = true;
         }
     }

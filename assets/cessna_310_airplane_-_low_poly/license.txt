@@ -1,0 +1,11 @@
+Model Information:
+* title:	Cessna 310 Airplane - Low Poly
+* source:	https://sketchfab.com/3d-models/cessna-310-airplane-low-poly-bbf73d06537c4a2ba86b96a3b97209c1
+* author:	BorealRiver (https://sketchfab.com/BorealRiver)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Cessna 310 Airplane - Low Poly" (https://sketchfab.com/3d-models/cessna-310-airplane-low-poly-bbf73d06537c4a2ba86b96a3b97209c1) by BorealRiver (https://sketchfab.com/BorealRiver) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

@@ -20,11 +20,10 @@ use crate::{camera::{
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
-use crate::debug_tools::debug_hud::{DebugHud, DebugHudText, render_debug_hud};
-use crate::ui::menu_bar::MenuBar;
+use crate::debug_tools::debug_hud::DebugHud;
 use crate::fog::FogPlugin;
 use crate::water::WaterPlugin;
-use crate::plane::{Airplane, DebugPropeller, PlaneVisual, spin_propeller, tag_propeller, wing_panel_rotation};
+use crate::plane::{Airplane, PlaneVisual, Propeller, spin_propeller, wing_panel_rotation};
 use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, draw_light_gizmos, setup_gizmo_config, toggle_gizmos};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
@@ -59,10 +58,7 @@ fn main() {
                 meta_check: AssetMetaCheck::Never,
                 ..default()
             }),
-            FrameTimeDiagnosticsPlugin {
-                max_history_length: 120,
-                smoothing_factor: 2.0,
-            },
+            FrameTimeDiagnosticsPlugin::default(),
             FogPlugin,
             PhysicsPlugins::default(),
             DebugFlightMenuPlugin,
@@ -119,10 +115,8 @@ fn main() {
             update_fps,
             fit_canvas,
             apply_config_to_entities,
-            sync_hud_visibility,
-            // Locate the propeller node once its scene loads, then spin it.
-            (tag_propeller, spin_propeller).chain(),
-            (populate_debug_hud, render_debug_hud).chain(),
+            spin_propeller,
+            populate_debug_hud,
         ))
         // Camera runs before TransformPropagate so its GlobalTransform is current
         // by the time EguiPrimaryContextPass projects world positions to screen.
@@ -135,16 +129,6 @@ fn main() {
         .run();
 }
 
-
-fn sync_hud_visibility(
-    bar: Res<MenuBar>,
-    mut hud_q: Query<&mut Visibility, With<DebugHudText>>,
-    mut fps_q: Query<&mut Visibility, (With<FpsText>, Without<DebugHudText>)>,
-) {
-    let vis = if bar.hud { Visibility::Visible } else { Visibility::Hidden };
-    for mut v in &mut hud_q { *v = vis; }
-    for mut v in &mut fps_q { *v = vis; }
-}
 
 fn toggle_pause(
     keys: Res<ButtonInput<KeyCode>>,
@@ -173,10 +157,10 @@ fn toggle_pause(
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_config_to_entities(
     cfg: Res<FlightModelConfig>,
-    mut visual_q: Query<&mut Transform, (With<PlaneVisual>, Without<DebugPropeller>)>,
-    // Placeholder propeller — repositioned live from `prop_position`. Disjoint
-    // from `visual_q` (both touch Transform) via the marker filters.
-    mut debug_prop_q: Query<&mut Transform, (With<DebugPropeller>, Without<PlaneVisual>)>,
+    mut visual_q: Query<&mut Transform, (With<PlaneVisual>, Without<Propeller>)>,
+    // Propeller — repositioned live from `prop_position`. Disjoint from
+    // `visual_q` (both touch Transform) via the marker filters.
+    mut prop_q: Query<&mut Transform, (With<Propeller>, Without<PlaneVisual>)>,
     mut body_q: Query<
         (&mut CenterOfMass, &mut Mass, &mut AngularInertia, &mut AngularDamping),
         With<Airplane>,
@@ -184,7 +168,7 @@ fn apply_config_to_entities(
     // Surfaces also carry their own Transform (the mounted orientation); the
     // Without filters keep this disjoint from the visual/propeller Transform
     // queries above so Bevy can run them together.
-    mut surface_q: Query<(&mut AeroSurface, &mut Transform), (Without<PlaneVisual>, Without<DebugPropeller>)>,
+    mut surface_q: Query<(&mut AeroSurface, &mut Transform), (Without<PlaneVisual>, Without<Propeller>)>,
     mut gravity: ResMut<Gravity>,
 ) {
     if !cfg.is_changed() {
@@ -196,8 +180,8 @@ fn apply_config_to_entities(
     for mut tf in &mut visual_q {
         tf.translation = cfg.model_offset;
     }
-    // Move only the placeholder's translation; spin_propeller owns its rotation.
-    for mut tf in &mut debug_prop_q {
+    // Move only the propeller's translation; spin_propeller owns its rotation.
+    for mut tf in &mut prop_q {
         tf.translation = cfg.propeller.prop_position;
     }
     // Empty airframe + current fuel/cargo/occupant load → effective mass,
@@ -234,8 +218,6 @@ fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     windows: Query<&Window>,
     cfg: Res<FlightModelConfig>,
     world_gen: Res<WorldGenerator>,
@@ -270,8 +252,6 @@ fn setup(
     let aircraft = spawn_aircraft(
         &mut commands,
         &asset_server,
-        &mut meshes,
-        &mut materials,
         &cfg,
         Vec3::new(SPAWN_X, spawn_y, SPAWN_Z),
     );
@@ -294,11 +274,7 @@ fn setup(
         // which is what stops the runway slab and water plane z-fighting their
         // near-coplanar terrain when viewed from high up. `near` is held at the
         // closest the orbit cam can zoom (~3 m) without clipping the aircraft.
-        Projection::Perspective(PerspectiveProjection {
-            near: 1.0,
-            far: 13_000.0,
-            ..default()
-        }),
+        Projection::Perspective(PerspectiveProjection::default()),
         RenderTarget::Image(pixel_target.clone().into()),
         Msaa::Off,
         PIXEL_LAYER,
@@ -344,16 +320,4 @@ fn setup(
         },
     ));
 
-    commands.spawn((
-        Text::new(""),
-        DebugHudText,
-        TextColor(Color::linear_rgb(1.0, 1.0, 1.0)),
-        TextFont { font_size: 16.0, ..default() },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(28.0),
-            left: Val::Px(8.0),
-            ..default()
-        },
-    ));
 }

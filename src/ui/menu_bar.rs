@@ -16,7 +16,6 @@ pub struct MenuBar {
     pub handbook: bool,
     pub weather: bool,
     pub my_plane: bool,
-    pub hud: bool,
     pub gizmos: bool,
 }
 
@@ -29,7 +28,6 @@ impl Default for MenuBar {
             handbook: true,
             weather: false,
             my_plane: false,
-            hud: true,
             gizmos: false,
         }
     }
@@ -77,7 +75,6 @@ pub fn draw_menu_bar(
                         menu_button(ui, "Weather", &mut bar.weather);
                         menu_button(ui, "My Plane", &mut bar.my_plane);
                         ui.separator();
-                        menu_button(ui, "HUD", &mut bar.hud);
                         menu_button(ui, "Gizmos", &mut bar.gizmos);
                         ui.separator();
                         menu_button(ui, "Dev Tools", &mut bar.flight_model);
