@@ -88,7 +88,7 @@ fn draw_menu(
 
     egui::Window::new("Flight Model")
         .open(&mut bar.flight_model)
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Tooltip)
         .default_pos(egui::pos2(16.0, 48.0))
         .default_width(300.0)
         .resizable(true)
@@ -237,7 +237,6 @@ fn draw_menu(
                     ui.add(egui::Slider::new(&mut sky.time_of_day, 0.0..=1.0)
                         .text("Time of day"));
                     if ui.button(if sky.speed == 0.0 { "Play" } else { "Pause" }).clicked() {
-                        // Stash/restore a sensible speed so Pause→Play resumes.
                         sky.speed = if sky.speed == 0.0 { 0.005 } else { 0.0 };
                     }
                     ui.add(egui::Slider::new(&mut sky.speed, 0.0..=0.2)

@@ -14,6 +14,8 @@ pub struct MenuBar {
     pub flight_model: bool,
     pub map: bool,
     pub handbook: bool,
+    pub weather: bool,
+    pub my_plane: bool,
     pub hud: bool,
     pub gizmos: bool,
 }
@@ -25,6 +27,8 @@ impl Default for MenuBar {
             map: false,
             // Handbook opens by default so new players see controls immediately.
             handbook: true,
+            weather: false,
+            my_plane: false,
             hud: true,
             gizmos: false,
         }
@@ -54,7 +58,7 @@ pub fn draw_menu_bar(
     let screen_w = ctx.screen_rect().width();
 
     egui::Area::new(egui::Id::new("menu_bar"))
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Tooltip)
         // Anchor top-centre; we'll offset left by half the measured width after
         // the first frame. On frame 0 it snaps; after that it stays centred.
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 4.0))
@@ -68,12 +72,15 @@ pub fn draw_menu_bar(
                 .show(ui, |ui| {
                     ui.set_max_width(screen_w);
                     ui.horizontal(|ui| {
-                        menu_button(ui, "Flight Model", &mut bar.flight_model);
                         menu_button(ui, "Map", &mut bar.map);
                         menu_button(ui, "Handbook", &mut bar.handbook);
+                        menu_button(ui, "Weather", &mut bar.weather);
+                        menu_button(ui, "My Plane", &mut bar.my_plane);
                         ui.separator();
                         menu_button(ui, "HUD", &mut bar.hud);
                         menu_button(ui, "Gizmos", &mut bar.gizmos);
+                        ui.separator();
+                        menu_button(ui, "Dev Tools", &mut bar.flight_model);
                     });
                 });
         });

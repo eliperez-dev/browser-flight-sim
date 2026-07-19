@@ -18,12 +18,14 @@ tracing-wasm = "0.2"
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
 opt-level = 1
+panic = "abort"
 
 # Enable a large amount of optimization in the dev profile for dependencies.
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.release]
+panic = "abort"
 
 [target.wasm32-unknown-unknown]
 runner = "wasm-server-runner"

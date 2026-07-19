@@ -57,7 +57,6 @@ fn main() {
         .add_plugins((
             DefaultPlugins.set(AssetPlugin {
                 meta_check: AssetMetaCheck::Never,
-                
                 ..default()
             }),
             FrameTimeDiagnosticsPlugin {
@@ -66,8 +65,6 @@ fn main() {
             },
             FogPlugin,
             PhysicsPlugins::default(),
-            crate::ui::MenuBarPlugin,
-            crate::ui::StylePlugin,
             DebugFlightMenuPlugin,
             TerrainPlugin,
             WaterPlugin,
@@ -76,6 +73,12 @@ fn main() {
             crate::sky::SkyPlugin,
             AircraftLightsPlugin,
             crate::waypoints::WaypointsPlugin,
+        ))
+        .add_plugins((
+            crate::ui::MenuBarPlugin,
+            crate::ui::StylePlugin,
+            crate::ui::WeatherMenuPlugin,
+            crate::ui::PlaneMenuPlugin,
         ))
         // Cap the virtual-time step so a stutter frame never gives the physics
         // integrator a huge dt that over-compresses the spring-damper struts.

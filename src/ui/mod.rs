@@ -1,5 +1,7 @@
 pub mod menu_bar;
+pub mod plane_menu;
 pub mod style;
+pub mod weather_menu;
 
 use bevy::prelude::*;
 
@@ -9,4 +11,6 @@ use bevy::prelude::*;
 pub struct UiSet;
 
 pub use menu_bar::MenuBarPlugin;
+pub use plane_menu::PlaneMenuPlugin;
 pub use style::StylePlugin;
+pub use weather_menu::WeatherMenuPlugin;

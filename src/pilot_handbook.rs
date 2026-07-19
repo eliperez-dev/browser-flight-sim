@@ -60,7 +60,7 @@ fn draw_handbook(
 
     egui::Window::new("Pilot's Handbook")
         .open(&mut bar.handbook)
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Tooltip)
         .default_pos(egui::pos2(16.0, 48.0))
         .default_width(480.0)
         .resizable(true)

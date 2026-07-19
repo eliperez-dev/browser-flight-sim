@@ -348,7 +348,7 @@ fn draw_map(
 
     egui::Window::new("Map")
         .open(&mut bar.map)
-        .order(egui::Order::Foreground)
+        .order(egui::Order::Tooltip)
         .default_pos(egui::pos2(16.0, 48.0))
         .resizable(false)
         .show(ctx, |ui| {
@@ -479,7 +479,7 @@ fn draw_map(
                     let strip_count = a.strips.len();
                     let mut set_wp = false;
                     egui::Area::new(egui::Id::new("map_airport_info"))
-                        .order(egui::Order::Foreground)
+                        .order(egui::Order::Tooltip)
                         .fixed_pos(marker + egui::vec2(-40.0, 8.0))
                         .constrain_to(rect)
                         .show(ui.ctx(), |ui| {
