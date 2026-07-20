@@ -210,14 +210,14 @@ pub fn draw_airports(
     icons: &MapIconSettings,
     view: &View,
 ) {
-    let stroke = egui::Stroke::new(icons.runway_width, egui::Color32::WHITE);
-    // Cap the dot's *world-space* footprint so zooming way out (many airports
-    // per screen) shrinks it down instead of the fixed pixel size overlapping
-    // neighbours into a solid mass. Still floored to stay visible up close.
-    let dot_radius = icons
-        .airport_circle
-        .min(600.0 / view.world_per_px())
-        .max(10.0);
+    // 300 m world-space diameter so the dot scales with zoom exactly like the
+    // runway lines do, instead of a fixed pixel size that balloons/overlaps
+    // neighbouring airports when zoomed out. Capped at 3 km so a future bump to
+    // the base diameter (or a different scaling curve) can't make the dot's
+    // world-space footprint balloon at far zoom-out.
+    const DOT_WORLD_DIAMETER: f32 = 300.0;
+    const DOT_WORLD_DIAMETER_MAX: f32 = 3000.0;
+    let dot_radius = DOT_WORLD_DIAMETER.min(DOT_WORLD_DIAMETER_MAX) * 0.5 / view.world_per_px();
     for ap in airports {
         let (ax, az) = ap.pos();
         let center = view.to_screen(Vec2::new(ax, az));
@@ -231,6 +231,8 @@ pub fn draw_airports(
             let hdir = egui::vec2(s, c);
             let strip_screen_len = strip.length / view.world_per_px();
             let half = hdir * (strip_screen_len * 0.5);
+            let stroke_width = strip.width / view.world_per_px();
+            let stroke = egui::Stroke::new(stroke_width, egui::Color32::WHITE);
             painter.line_segment([sc - half, sc + half], stroke);
         }
 

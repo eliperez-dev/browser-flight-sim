@@ -1,6 +1,7 @@
 pub mod camera_menu;
 pub mod instrument_panel;
 pub mod menu_bar;
+pub mod multiplayer_menu;
 pub mod plane_menu;
 pub mod style;
 pub mod world_menu;
@@ -15,6 +16,7 @@ pub struct UiSet;
 pub use camera_menu::CameraMenuPlugin;
 pub use instrument_panel::InstrumentPanelPlugin;
 pub use menu_bar::MenuBarPlugin;
+pub use multiplayer_menu::MultiplayerMenuPlugin;
 pub use plane_menu::PlaneMenuPlugin;
 pub use style::StylePlugin;
 pub use world_menu::WorldMenuPlugin;

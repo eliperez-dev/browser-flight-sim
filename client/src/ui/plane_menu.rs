@@ -5,6 +5,7 @@ use avian3d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
+use crate::camera::CameraMode;
 use crate::physics::aircraft_physics::AircraftRoot;
 use crate::physics::flight_config::{CARGO_MAX_KG, FUEL_TANK_MAX_KG, FlightModelConfig};
 use crate::plane::{Airplane, PlaneState, reset_to_runway};
@@ -71,6 +72,7 @@ fn draw_plane_menu(
     mut cfg: ResMut<FlightModelConfig>,
     mut contexts: EguiContexts,
     world_gen: Res<WorldGenerator>,
+    mut camera_mode: ResMut<CameraMode>,
     mut plane_q: Query<(&mut Transform, &mut LinearVelocity, &mut AngularVelocity, &mut PlaneState, &mut AircraftRoot), With<Airplane>>,
 ) -> Result {
     if !bar.my_plane { return Ok(()); }
@@ -94,6 +96,7 @@ fn draw_plane_menu(
                 && let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut()
             {
                 reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, world_gen.as_ref());
+                *camera_mode = CameraMode::Orbit;
             }
 
             // ── Engine ──────────────────────────────────────────────────────

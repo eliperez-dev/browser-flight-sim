@@ -40,6 +40,8 @@ mod map;
 mod physics;
 mod debug_tools;
 mod network;
+mod network_directory;
+mod player_labels;
 mod pilot_handbook;
 mod plane;
 mod sky;
@@ -71,7 +73,9 @@ fn main() {
             crate::sky::SkyPlugin,
             AircraftLightsPlugin,
             crate::waypoints::WaypointsPlugin,
+            crate::player_labels::PlayerLabelsPlugin,
             crate::network::NetworkPlugin,
+            crate::network_directory::NetworkDirectoryPlugin,
         ))
         .add_plugins((
             crate::ui::MenuBarPlugin,
@@ -80,6 +84,7 @@ fn main() {
             crate::ui::PlaneMenuPlugin,
             crate::ui::InstrumentPanelPlugin,
             crate::ui::CameraMenuPlugin,
+            crate::ui::MultiplayerMenuPlugin,
         ))
         // Cap the virtual-time step so a stutter frame never gives the physics
         // integrator a huge dt that over-compresses the spring-damper struts.

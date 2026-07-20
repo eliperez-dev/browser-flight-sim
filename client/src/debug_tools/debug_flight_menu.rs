@@ -623,6 +623,8 @@ fn draw_menu(
                         .text("Nose strut length (m)"));
                     ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_grip, 0.0..=20_000.0)
                         .text("Lateral grip (N·s/m)"));
+                    ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_yaw_damping, 0.0..=15_000.0)
+                        .text("Yaw damping (touchdown swing)"));
                     ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_rolling_resistance, 0.0..=0.3)
                         .text("Rolling resistance (Crr)"));
                     ui.add(egui::Slider::new(&mut cfg.landing_gear.gear_brake_strength, 0.0..=2.0)

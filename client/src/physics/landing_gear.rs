@@ -194,7 +194,32 @@ pub fn apply_landing_gear(
 
         // Lateral grip: resists sliding sideways, capped at the normal load — a
         // tyre can't grip harder than the weight pressing it down (~1 g side).
-        let lateral_force = (-cfg.gear_grip * lateral_v).clamp_length_max(normal_force);
+        // The raw viscous term is clamped in *speed* first, not just in the
+        // resulting force magnitude: a hard touchdown with any lateral drift
+        // (crab angle, or sideways velocity picked up from angular velocity at
+        // the contact point) otherwise snaps this force to its full clamped
+        // magnitude in one step, and flips sign again the instant the slip
+        // velocity crosses zero — that step-function force is what was kicking
+        // the aircraft into a yaw/roll oscillation right at touchdown. Rolling
+        // off the last part of the slip range instead lets grip ramp in
+        // smoothly, like a real tyre's friction curve softening near its peak.
+        let grip_v_max = 2.0_f32; // m/s of slip beyond which grip is fully saturated
+        let lateral_speed = lateral_v.length();
+        let grip_ramp = (lateral_speed / grip_v_max).min(1.0);
+        let lateral_force = (-cfg.gear_grip * grip_ramp * lateral_v.normalize_or_zero())
+            .clamp_length_max(normal_force);
+
+        // Tyre yaw (scrub) damping: resists the aircraft's yaw rate directly,
+        // like the twisting resistance of a real tyre's contact patch. Without
+        // this, nothing at all opposes yaw rotation once it starts — the
+        // lateral-grip forces above only resist *linear* slip at each wheel,
+        // so a touchdown that loads the two main struts unevenly for even a
+        // couple of frames (normal on any real landing) produces an undamped
+        // yaw torque that can build into a violent swing. Scales with load so
+        // it fades as the wings take weight off the wheels, same as rolling
+        // resistance.
+        let yaw_rate = ang_vel.dot(up);
+        let yaw_damp_torque = -up * (cfg.gear_yaw_damping * yaw_rate * normal_force * 1.0e-3);
 
         // Rolling resistance: a small fraction (Crr) of the *normal load*
         // opposing the rolling direction, like a real tyre. Because it scales
@@ -207,6 +232,7 @@ pub fn apply_landing_gear(
             heading * (-rolling_crr * normal_force * (rolling_speed * 2.0).tanh());
 
         forces.apply_force_at_point(up * normal_force + lateral_force + rolling_force, contact);
+        forces.apply_torque(yaw_damp_torque);
     }
 
     state.on_ground = any_contact;

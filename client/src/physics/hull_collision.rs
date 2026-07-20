@@ -111,6 +111,7 @@ pub fn react_to_crash(
 pub fn reset_on_crash_key(
     keys: Res<ButtonInput<KeyCode>>,
     world_gen: Res<WorldGenerator>,
+    mut camera_mode: ResMut<CameraMode>,
     mut aircraft_q: Query<
         (&mut Transform, &mut LinearVelocity, &mut AngularVelocity, &mut PlaneState, &mut AircraftRoot),
         With<Airplane>,
@@ -126,4 +127,5 @@ pub fn reset_on_crash_key(
         return;
     }
     reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, world_gen.as_ref());
+    *camera_mode = CameraMode::Orbit;
 }

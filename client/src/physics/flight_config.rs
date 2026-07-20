@@ -276,6 +276,13 @@ pub struct LandingGearConfig {
     /// Lateral tyre grip (N·s/m): viscous resistance to sliding sideways, so the
     /// aircraft tracks straight on rollout. Capped by the strut's normal load.
     pub gear_grip: f32,
+    /// Tyre yaw (scrub) damping torque coefficient (N·m·s/rad per strut,
+    /// scaled by normal load): resists the aircraft's yaw rate at each contact
+    /// patch, like a real tyre's contact-patch scrub torque. Without this
+    /// there is nothing at all opposing yaw once a touchdown starts one main
+    /// wheel spinning up faster than the other, so a small bank/heading
+    /// mismatch at touchdown snowballs into a violent, undamped yaw swing.
+    pub gear_yaw_damping: f32,
     /// Rolling resistance coefficient (Crr, dimensionless): fore-and-aft tyre
     /// drag as a fraction of the strut's normal load. Real tyres are ~0.02–0.05,
     /// so the wheels roll nearly freely and the drag fades as lift unloads the
@@ -399,13 +406,16 @@ impl Default for LandingGearConfig {
     fn default() -> Self {
         Self {
             // Sized for a loaded light single over three wheels: firm enough to
-            // squat only a few cm under load, with damping near-critical
-            // (≈ 2·√(k · mass-per-wheel)) so it settles without bouncing.
+            // squat only a few cm under load, with damping somewhat above
+            // critical (critical ≈ 2·√(k · mass-per-wheel) ≈ 12 kN·s/m here)
+            // so it settles without bouncing even when a touchdown loads one
+            // strut much harder than its nominal one-third share of weight.
             gear_spring:             120_000.0,
-            gear_damping:            15_000.0,
+            gear_damping:            22_000.0,
             gear_rest_length:        1.1,
             gear_nose_rest_length:   1.1,
             gear_grip:               6_000.0,
+            gear_yaw_damping:        4_000.0,
             gear_rolling_resistance: 0.01,
             gear_brake_strength:     0.65,
             gear_nose_steer_deg:     12.0,

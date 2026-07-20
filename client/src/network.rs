@@ -12,10 +12,10 @@ use protocol::{ClientToServer, ControlSurfaces, LightSwitches, PlayerId, PlayerS
 
 use crate::physics::aircraft_physics::{AircraftRoot, EngineState};
 use crate::physics::flight_config::FlightModelConfig;
-use crate::plane::{Airplane, Propeller, spawn_aircraft};
+use crate::plane::{Airplane, PlaneState, Propeller, reset_to_runway, spawn_aircraft};
 use crate::lights::{Beacon, LandingLight, LightTimers, NavLightLeft, NavLightRight, NavLightTail,
     StrobeLeft, StrobeRight, StrobeTail, spawn_aircraft_lights};
-use crate::terrain::WorldGenConfig;
+use crate::terrain::{WorldGenConfig, WorldGenerator};
 
 /// The only aircraft model that currently exists. Sent in `Join` and stamped
 /// on every `PlayerState`; other clients don't act on it yet since there's
@@ -23,25 +23,94 @@ use crate::terrain::WorldGenConfig;
 /// picker exists.
 const LOCAL_MODEL_ID: &str = "low-poly-airplane";
 
-/// Local address for `cargo run -p server`. Only local play is wired up for
-/// now; the multiplayer-tab server list will replace this with a chosen
-/// address later.
-const SERVER_URL: &str = "ws://127.0.0.1:7777";
+/// The official master/directory server, baked into the client. It hosts the
+/// always-on default world (`/ws/default`) and the `/directory` + `/create`
+/// HTTP endpoints the Multiplayer tab uses to browse and host servers.
+/// Overridable at runtime via `MasterServer` for players who want to point
+/// at a self-hosted master instead (see the Multiplayer tab's advanced
+/// settings).
+pub const DEFAULT_MASTER_HTTP: &str = "http://127.0.0.1:7777";
+pub const DEFAULT_MASTER_WS: &str = "ws://127.0.0.1:7777";
+const DEFAULT_SERVER_ID: &str = "default";
+
+/// The master server the directory/create HTTP calls target. Changing this
+/// only affects the Multiplayer tab's browse/host requests, not an
+/// already-open game connection.
+#[derive(Resource)]
+pub struct MasterServer {
+    pub http_url: String,
+    pub ws_url: String,
+}
+
+impl Default for MasterServer {
+    fn default() -> Self {
+        Self {
+            http_url: DEFAULT_MASTER_HTTP.to_string(),
+            ws_url: DEFAULT_MASTER_WS.to_string(),
+        }
+    }
+}
+
+/// The name sent in `Join`. Owned by the Multiplayer tab's Settings pane;
+/// lives here since `send_local_state`/`connect` both need to read it.
+#[derive(Resource)]
+pub struct LocalPlayerName(pub String);
+
+impl Default for LocalPlayerName {
+    fn default() -> Self {
+        // A bare "Pilot" for every new player makes the Players list/labels
+        // useless until someone bothers to rename themselves — tack on a
+        // random 4-digit suffix so first-time joiners are distinguishable
+        // out of the box.
+        Self(format!("Pilot{:04}", rand::random_range(0..10_000)))
+    }
+}
+
+/// A pending connection-lifecycle action, set by the Multiplayer tab (or
+/// startup) and drained by `handle_connection_requests` next frame. A plain
+/// resource rather than bevy's observer/trigger `Event` system, since this
+/// is just a one-shot "do this next frame" request with no listener side —
+/// exactly one system ever acts on it.
+#[derive(Resource, Default)]
+pub struct PendingConnectionAction(pub Option<ConnectionAction>);
+
+pub enum ConnectionAction {
+    /// (Re)connect to a specific game-world WebSocket URL, e.g.
+    /// `ws://host:7777/ws/{server_id}`. Tears down any existing connection
+    /// and all remote-player ghosts first.
+    Connect(String),
+    /// Drop the current connection without opening a new one.
+    Disconnect,
+}
 
 /// How often (seconds) the local aircraft's state is broadcast to the server.
 const STATE_SEND_INTERVAL: f32 = 1.0 / 20.0;
 
 #[derive(Resource, Default)]
 pub struct NetworkStatus {
+    /// True once the socket is open and the Join handshake has been sent.
     pub connected: bool,
     pub your_id: Option<PlayerId>,
+    /// The `ws://.../ws/{id}` URL of the currently connected (or
+    /// connecting) world, if any. Cleared on disconnect.
+    pub server_url: Option<String>,
 }
+
+/// Set on `Welcome` to the newly-joined world's seed; cleared once
+/// `apply_pending_runway_reset` has snapped the local aircraft back to the
+/// runway using that seed's terrain. Deferred (rather than resetting
+/// immediately in `apply_incoming_messages`) because `WorldGenerator` — the
+/// terrain-height source `reset_to_runway` needs — only catches up to a new
+/// `WorldGenConfig.seed` after `regenerate_terrain`'s debounce, so resetting
+/// on the same frame as `Welcome` would place the plane using the *old*
+/// world's terrain height.
+#[derive(Resource, Default)]
+struct PendingRunwayReset(Option<u32>);
 
 /// A remote player's identity, on their ghost aircraft's root entity.
 #[derive(Component)]
 pub struct RemotePlayer {
     pub id: PlayerId,
-    #[allow(dead_code, reason = "not shown in UI yet; kept for a future player list/nameplate")]
     pub name: String,
 }
 
@@ -79,19 +148,26 @@ impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NetworkStatus>()
             .init_resource::<StateSendTimer>()
-            .add_systems(Startup, connect)
+            .init_resource::<MasterServer>()
+            .init_resource::<LocalPlayerName>()
+            .init_resource::<PendingConnectionAction>()
+            .init_resource::<PendingRunwayReset>()
+            .add_systems(Startup, connect_on_startup)
             .add_systems(
                 Update,
                 (
+                    handle_connection_requests,
                     apply_incoming_messages,
                     spawn_remote_players,
                     despawn_remote_aero_surfaces,
                     interpolate_remote_players,
                     animate_remote_propellers,
                     animate_remote_lights,
+                    apply_pending_runway_reset,
                     send_local_state,
                     despawn_stale_remote_players,
-                ),
+                )
+                    .chain(),
             );
     }
 }
@@ -161,6 +237,10 @@ mod wasm_ws {
         pub fn send(&self, bytes: &[u8]) {
             let _ = self.socket.send_with_u8_array(bytes);
         }
+
+        pub fn close(&self) {
+            let _ = self.socket.close();
+        }
     }
 
     thread_local! {
@@ -168,30 +248,66 @@ mod wasm_ws {
     }
 }
 
-fn connect(mut status: ResMut<NetworkStatus>) {
+/// Queues the initial connection to the default master's default world,
+/// once at startup; picked up by `handle_connection_requests` next frame.
+fn connect_on_startup(mut pending: ResMut<PendingConnectionAction>, master: Res<MasterServer>) {
+    pending.0 = Some(ConnectionAction::Connect(format!("{}/ws/{DEFAULT_SERVER_ID}", master.ws_url)));
+}
+
+/// Drains `PendingConnectionAction`: tears down any existing socket and
+/// remote-player ghosts, then (for `Connect`) opens the new one. Runs before
+/// `apply_incoming_messages` so a switch takes effect within the same frame
+/// it's requested.
+fn handle_connection_requests(
+    mut commands: Commands,
+    mut pending: ResMut<PendingConnectionAction>,
+    mut status: ResMut<NetworkStatus>,
+    remotes: Query<Entity, With<RemotePlayer>>,
+) {
+    let Some(action) = pending.0.take() else { return };
+
+    // Tear down the old connection and every remote ghost regardless of
+    // which action was requested — a switch is a disconnect-then-connect.
     #[cfg(target_arch = "wasm32")]
     {
-        match wasm_ws::Connection::open(SERVER_URL) {
+        wasm_ws::CONNECTION.with(|c| {
+            if let Some(conn) = c.borrow_mut().take() {
+                conn.close();
+            }
+        });
+    }
+    for entity in &remotes {
+        commands.entity(entity).despawn();
+    }
+    status.connected = false;
+    status.your_id = None;
+    status.server_url = None;
+
+    let ConnectionAction::Connect(url) = action else { return };
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        match wasm_ws::Connection::open(&url) {
             Ok(conn) => {
                 wasm_ws::CONNECTION.with(|c| *c.borrow_mut() = Some(conn));
-                info!("connecting to multiplayer server at {SERVER_URL}");
+                status.server_url = Some(url.clone());
+                info!("connecting to multiplayer server at {url}");
             }
             Err(err) => {
-                warn!("failed to open multiplayer connection: {err:?}");
+                warn!("failed to open multiplayer connection to {url}: {err:?}");
             }
         }
-        status.connected = false;
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = &mut status;
+        let _ = url;
         warn!("multiplayer is only available in the wasm/browser build");
     }
 }
 
 /// Sends the Join handshake once the socket has finished opening. Cheap to
 /// poll every frame until it succeeds; after that this is a no-op.
-fn ensure_joined(status: &mut NetworkStatus) {
+fn ensure_joined(status: &mut NetworkStatus, name: &str) {
     #[cfg(target_arch = "wasm32")]
     {
         if status.connected {
@@ -201,7 +317,7 @@ fn ensure_joined(status: &mut NetworkStatus) {
             if let Some(conn) = c.borrow().as_ref() {
                 if conn.is_open() {
                     let join = ClientToServer::Join {
-                        name: "Pilot".to_string(),
+                        name: name.to_string(),
                         model: LOCAL_MODEL_ID.to_string(),
                     };
                     conn.send(&join.encode());
@@ -210,14 +326,20 @@ fn ensure_joined(status: &mut NetworkStatus) {
             }
         });
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = name;
+    }
 }
 
 fn apply_incoming_messages(
     mut status: ResMut<NetworkStatus>,
+    name: Res<LocalPlayerName>,
     mut world_gen_cfg: ResMut<WorldGenConfig>,
+    mut pending_reset: ResMut<PendingRunwayReset>,
     mut remotes: Query<(&RemotePlayer, &mut RemoteTarget)>,
 ) {
-    ensure_joined(&mut status);
+    ensure_joined(&mut status, &name.0);
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -241,6 +363,7 @@ fn apply_incoming_messages(
                     if world_gen_cfg.seed != seed {
                         world_gen_cfg.seed = seed;
                     }
+                    pending_reset.0 = Some(seed);
                     for player in other_players {
                         spawn_or_queue_remote(player);
                     }
@@ -253,14 +376,15 @@ fn apply_incoming_messages(
                     id,
                     position,
                     rotation,
+                    velocity,
                     control_surfaces,
                     lights,
-                    ..
                 } => {
                     for (remote, mut target) in &mut remotes {
                         if remote.id == id {
                             target.position = Vec3::new(position.x, position.y, position.z);
                             target.rotation = Quat::from_xyzw(rotation.x, rotation.y, rotation.z, rotation.w);
+                            target.velocity = Vec3::new(velocity.x, velocity.y, velocity.z);
                             target.control_surfaces = control_surfaces;
                             target.lights = lights;
                         }
@@ -290,6 +414,10 @@ fn apply_incoming_messages(
 pub struct RemoteTarget {
     pub position: Vec3,
     pub rotation: Quat,
+    /// Not used for ghost interpolation (which only needs position/rotation)
+    /// — kept so the Multiplayer tab's teleport-to-player can hand the local
+    /// aircraft a sensible starting velocity instead of snapping to zero.
+    pub velocity: Vec3,
     pub control_surfaces: ControlSurfaces,
     pub lights: LightSwitches,
 }
@@ -322,6 +450,7 @@ fn spawn_remote_players(
             continue;
         }
         let position = Vec3::new(player.position.x, player.position.y, player.position.z);
+        let velocity = Vec3::new(player.velocity.x, player.velocity.y, player.velocity.z);
         let rotation = Quat::from_xyzw(
             player.rotation.x,
             player.rotation.y,
@@ -348,6 +477,7 @@ fn spawn_remote_players(
             .insert(RemoteTarget {
                 position,
                 rotation,
+                velocity,
                 control_surfaces: player.control_surfaces,
                 lights: player.lights,
             })
@@ -500,6 +630,29 @@ fn despawn_stale_remote_players(mut commands: Commands, remotes: Query<(Entity, 
             commands.entity(entity).despawn();
         }
     }
+}
+
+/// Snaps the local aircraft back to the runway once `WorldGenerator` has
+/// caught up to the seed of the world we just joined (see
+/// `PendingRunwayReset`'s doc comment for why this can't happen immediately
+/// on `Welcome`). Runs every frame but is a no-op until that seed match
+/// occurs, which is typically within one `regenerate_terrain` debounce cycle.
+fn apply_pending_runway_reset(
+    mut pending: ResMut<PendingRunwayReset>,
+    generator: Res<WorldGenerator>,
+    mut plane_q: Query<
+        (&mut Transform, &mut LinearVelocity, &mut avian3d::prelude::AngularVelocity, &mut PlaneState, &mut AircraftRoot),
+        With<Airplane>,
+    >,
+) {
+    let Some(seed) = pending.0 else { return };
+    if generator.seed() != seed {
+        return;
+    }
+    if let Ok((mut transform, mut lin_vel, mut ang_vel, mut state, mut root)) = plane_q.single_mut() {
+        reset_to_runway(&mut transform, &mut lin_vel, &mut ang_vel, &mut state, &mut root, &generator);
+    }
+    pending.0 = None;
 }
 
 /// Broadcasts the local aircraft's transform, velocity, engine speed, and

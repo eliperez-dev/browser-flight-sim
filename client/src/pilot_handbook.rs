@@ -25,10 +25,11 @@ enum Tab {
     Controls,
     Engine,
     FlightMechanics,
-    HudReference,
+    Instruments,
     Airports,
     DayNight,
     Terrain,
+    Multiplayer,
 }
 
 /// Stores only the active tab; open/closed state lives in [`MenuBar`].
@@ -82,10 +83,11 @@ fn draw_handbook(
                 ui.selectable_value(&mut state.tab, Tab::Controls,        "Controls");
                 ui.selectable_value(&mut state.tab, Tab::Engine,          "Engine");
                 ui.selectable_value(&mut state.tab, Tab::FlightMechanics, "Flight");
-                ui.selectable_value(&mut state.tab, Tab::HudReference,    "HUD");
+                ui.selectable_value(&mut state.tab, Tab::Instruments,     "Instruments");
                 ui.selectable_value(&mut state.tab, Tab::Airports,        "Airports");
                 ui.selectable_value(&mut state.tab, Tab::DayNight,        "Day / Night");
                 ui.selectable_value(&mut state.tab, Tab::Terrain,         "Terrain");
+                ui.selectable_value(&mut state.tab, Tab::Multiplayer,     "Multiplayer");
             });
             ui.separator();
 
@@ -95,10 +97,11 @@ fn draw_handbook(
                     Tab::Controls        => tab_controls(ui),
                     Tab::Engine          => tab_engine(ui),
                     Tab::FlightMechanics => tab_flight(ui),
-                    Tab::HudReference    => tab_hud(ui),
+                    Tab::Instruments     => tab_instruments(ui),
                     Tab::Airports        => tab_airports(ui),
                     Tab::DayNight        => tab_day_night(ui),
                     Tab::Terrain         => tab_terrain(ui),
+                    Tab::Multiplayer     => tab_multiplayer(ui),
                 }
             });
         });
@@ -114,23 +117,25 @@ fn tab_overview(ui: &mut egui::Ui) {
     ui.label("An infinite procedurally generated world to fly across. Every seed produces a different planet with its own terrain, biomes, coastlines, and hundreds of airports to find.");
 
     ui.add_space(10.0);
-    ui.strong("Essential controls");
-    ui.label("W / A / S / D   control surfaces (pitch and roll)");
-    ui.label("+  /  -                  throttle up / down");
-    ui.label("Arrow keys         camera look");
-    ui.label("F                           switch camera mode");
-    ui.label("G                           toggle physics gizmos");
-    ui.label("H                           this handbook");
-
-    ui.add_space(10.0);
     ui.strong("Quick start");
-    ui.label("Engine starts off. Press I to start it, then use + to add throttle and W / S to fly.");
-    ui.label("For the full keybind reference, go to the Controls tab.");
-    ui.label("To understand the engine and mixture, see the Engine tab.");
+    ui.label("Engine starts off — press I, then + for throttle and W / S to fly. Full keybinds are in the Controls tab.");
 
     ui.add_space(10.0);
-    ui.strong("What to do");
-    ui.label("Open the F4 map to find airports nearby. Click one to set a Direct To waypoint and navigate to it. Use F3 to tune the flight model, world, weather, and lighting.");
+    ui.strong("If you crash");
+    ui.label("Press R, or use the Reset Plane to Runway button in My Plane, to get back on the runway.");
+
+    ui.add_space(10.0);
+    ui.strong("Menu bar");
+    ctrl_section(ui, "", &[
+        ("Map",         "World map, airports, Direct To navigation  (F4)"),
+        ("Handbook",    "This window  (H)"),
+        ("World",       "Weather and terrain settings"),
+        ("My Plane",    "Engine, loadout, and flight-assist settings"),
+        ("Camera",      "Camera mode and fixed-mount settings"),
+        ("Multiplayer", "Server browser, hosting, and player list — see the Multiplayer tab"),
+        ("Gizmos",      "Physics debug overlays  (G)"),
+        ("Dev Tools",   "Flight model, world generation, and debug HUD  (F3)"),
+    ]);
 }
 
 // ── Tab: Controls ─────────────────────────────────────────────────────────────
@@ -142,6 +147,7 @@ fn tab_controls(ui: &mut egui::Ui) {
         ("E / Q",    "Rudder right / left  (yaw)"),
         ("B",        "Brakes  (hold)"),
         ("< / >",    "Flaps retract / extend"),
+        ("R",        "Reset to runway  (after a crash)"),
     ]);
 
     ui.add_space(10.0);
@@ -155,7 +161,7 @@ fn tab_controls(ui: &mut egui::Ui) {
 
     ui.add_space(10.0);
     ctrl_section(ui, "Lights", &[
-        ("N",    "Toggle landing light"),
+        ("N",    "Toggle landing light  (nav, strobe, and beacon have on-screen switches instead)"),
     ]);
 
     ui.add_space(10.0);
@@ -166,7 +172,7 @@ fn tab_controls(ui: &mut egui::Ui) {
         ("E / Q",        "Free/Chase cam up / down"),
         ("Shift",        "Free/Chase cam speed boost"),
         ("[ / ]",        "Orbit camera zoom in / out"),
-        ("1-9, 0",       "Jump to fixed camera mount 1-10"),
+        ("1-4",          "Jump to fixed camera mount  (nose, tail, left wing, right wing)"),
         ("F11",          "Toggle fullscreen"),
     ]);
 
@@ -174,10 +180,13 @@ fn tab_controls(ui: &mut egui::Ui) {
     ctrl_section(ui, "Tools", &[
         ("H",       "This handbook"),
         ("F4",      "World map"),
-        ("F3",      "Flight model debug panel"),
+        ("F3",      "Dev Tools  (flight model, world gen, debug HUD)"),
         ("G",       "Toggle physics gizmos"),
         ("P",       "Pause / unpause physics"),
     ]);
+
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new("Multiplayer has no dedicated hotkeys — open it from the menu bar.").italics());
 }
 
 fn ctrl_section(ui: &mut egui::Ui, title: &str, binds: &[(&str, &str)]) {
@@ -196,20 +205,15 @@ fn ctrl_section(ui: &mut egui::Ui, title: &str, binds: &[(&str, &str)]) {
 // ── Tab: Engine ───────────────────────────────────────────────────────────────
 
 fn tab_engine(ui: &mut egui::Ui) {
-    ui.label("This is a piston engine with a carburetor. Three things control it:");
+    ui.label("A piston engine with a carburetor. Throttle and mixture control it.");
     ui.add_space(6.0);
 
     ui.strong("Throttle  ( + / - )");
-    ui.label("Controls how much air and fuel enters the cylinders. Higher throttle means more RPM and more thrust. Reducing throttle reduces power and speed.");
+    ui.label("More throttle means more RPM and more thrust.");
 
     ui.add_space(6.0);
     ui.strong("Mixture  ( L / K )");
-    ui.label("Controls the fuel-to-air ratio fed to the carburetor.");
-    ui.add_space(2.0);
-    ui.label("Rich (L)   more fuel relative to air. Best for takeoff and low altitude where air is dense.");
-    ui.label("Lean (K)   less fuel relative to air. More efficient at cruise altitude where the air is thinner.");
-    ui.add_space(2.0);
-    ui.label("Around 70-80% is a good cruise setting. Too lean and the engine loses power or quits.");
+    ui.label("Rich (L): more fuel relative to air, best for takeoff and low altitude. Lean (K): less fuel, more efficient at altitude where the air is thinner. The ideal mixture leans out gradually as you climb — the correct setting scales with altitude, not a fixed number. Too lean or too rich and the engine loses power; far enough either way and it quits.");
 
     ui.add_space(6.0);
     ui.strong("Engine states");
@@ -217,10 +221,12 @@ fn tab_engine(ui: &mut egui::Ui) {
     ui.label("OFF         engine not running, no thrust");
     ui.label("CRANKING    starter engaged, spool-up in progress");
     ui.label("RUNNING     engine running, throttle and mixture active");
+    ui.add_space(2.0);
+    ui.label("The starter (I) won't catch if the mixture is leaned too far — rich it up first if it won't start.");
 
     ui.add_space(6.0);
     ui.strong("RPM");
-    ui.label("Engine revolutions per minute. Reflects throttle and mixture. The propeller spin speed matches RPM.");
+    ui.label("Reflects throttle and mixture. The propeller spin speed matches RPM.");
 }
 
 // ── Tab: Flight Mechanics ─────────────────────────────────────────────────────
@@ -230,49 +236,66 @@ fn tab_flight(ui: &mut egui::Ui) {
     ui.label("Lift (wings up), Weight (gravity down), Thrust (engine forward), Drag (air resistance back). Flying is balancing all four.");
 
     ui.add_space(6.0);
-    ui.strong("Lift");
-    ui.label("Generated by the wings as air flows over them. Lift increases with speed and angle of attack (nose-up pitch). The HUD shows lift as a percentage of weight — at 100% you are weightless, above 100% you climb.");
-
-    ui.add_space(6.0);
     ui.strong("Stall");
-    ui.label("If the angle of attack is too steep, airflow over the wings separates and lift drops suddenly. The nose pitches down. Recover by releasing back pressure (let go of W) and adding throttle.");
+    ui.label("Too steep an angle of attack and airflow over the wings separates — lift drops and the nose pitches down. Recover by releasing back pressure (let go of W) and adding throttle.");
 
     ui.add_space(6.0);
     ui.strong("Flaps");
-    ui.label("Extend the trailing edge of the wing with < / >, increasing lift and drag simultaneously. Useful for slow-speed flight and landing, inefficient at cruise. Retract after takeoff.");
+    ui.label("Extend with < / >: more lift and drag, useful for slow-speed flight and landing. Retract after takeoff.");
 
     ui.add_space(6.0);
     ui.strong("Bank to turn");
-    ui.label("Roll the wings with A or D to bank. The aircraft will turn in the banked direction. Use the rudder (E / Q) to keep the nose coordinated.");
+    ui.label("Roll with A / D to bank; use the rudder (E / Q) to keep the turn coordinated.");
 
     ui.add_space(6.0);
     ui.strong("Ground effect");
-    ui.label("Within about one wingspan of the ground the wing gets extra lift from the compressed air beneath it. Expect the plane to float further down the runway than you think.");
+    ui.label("Within about one wingspan of the ground the wing gets extra lift. Expect the plane to float further down the runway than you'd think.");
+
+    ui.add_space(6.0);
+    ui.strong("Crashing");
+    ui.label("A hard landing or ground strike outside the gear will crash the aircraft. Press R (or My Plane > Reset Plane to Runway) to recover.");
 
     ui.add_space(6.0);
     ui.strong("Flight assists");
-    ui.label("Gentle auto-leveling and pitch damping are applied to keep handling accessible. Tunable or disableable in F3 under Flight Assists.");
+    ui.label("Gentle auto-leveling and pitch damping keep handling accessible. Tune or disable them in Dev Tools (F3) under Flight Assists.");
 }
 
-// ── Tab: HUD Reference ────────────────────────────────────────────────────────
+// ── Tab: Instruments ──────────────────────────────────────────────────────────
 
-fn tab_hud(ui: &mut egui::Ui) {
-    ui.label("The top-left overlay shows live flight data every frame.");
+fn tab_instruments(ui: &mut egui::Ui) {
+    ui.label("The instrument panel is always on screen in Orbit camera mode (hidden in Chase and Free — press F to cycle modes).");
     ui.add_space(6.0);
+
+    ui.strong("Flight instruments");
     ctrl_section(ui, "", &[
-        ("SPD / KTS",  "Airspeed in m/s and knots  (1 kt = 1.85 km/h)"),
-        ("ALT",        "Altitude in metres above sea level"),
-        ("GND",        "ON GROUND or AIRBORNE"),
-        ("ENGINE",     "Off / Cranking / Running"),
-        ("THROTTLE",   "Power lever position, 0-100%"),
-        ("MIXTURE",    "Fuel-to-air ratio, 0-100%  (100 = fully rich)"),
-        ("FLAPS",      "Flap deflection in degrees"),
-        ("BRK",        "Brakes on / off"),
-        ("RPM",        "Engine revolutions per minute"),
-        ("LIFT",       "Lift as percent of weight needed to fly level"),
-        ("THRUST",     "Engine thrust in Newtons"),
-        ("DRAG",       "Total aerodynamic drag in Newtons"),
+        ("Artificial horizon", "Pitch ladder and bank angle, centre of the panel"),
+        ("Airspeed tape",      "Knots; green band is normal cruise, amber near stall/overspeed"),
+        ("Altitude tape",      "Feet above sea level"),
+        ("VSI",                "Vertical speed, feet per minute"),
+        ("Heading compass",    "Magnetic heading strip along the top"),
+        ("Barometric readout", "Local pressure in inHg, derived from altitude"),
     ]);
+
+    ui.add_space(8.0);
+    ui.strong("Engine and controls");
+    ctrl_section(ui, "", &[
+        ("RPM gauge",       "Arc gauge with redline"),
+        ("Throttle lever",  "Drag, or use + / -"),
+        ("Mixture lever",   "Drag, or use L / K"),
+        ("Flap lever",      "Drag, or use < / >"),
+        ("Trim lever",      "Elevator trim, drag only"),
+    ]);
+
+    ui.add_space(8.0);
+    ui.strong("Switches");
+    ctrl_section(ui, "", &[
+        ("NAV / STRB",  "Navigation and strobe light master switches"),
+        ("LANDING",     "Same as the N key"),
+        ("BRAKE / PARK","Brake status; PARK holds the brakes without holding B"),
+    ]);
+
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new("A separate, more detailed debug HUD (speed, lift, thrust, drag, and more as raw numbers) is available in Dev Tools (F3).").color(egui::Color32::from_rgb(139, 154, 181)).small());
 }
 
 // ── Tab: Airports ─────────────────────────────────────────────────────────────
@@ -284,11 +307,11 @@ fn tab_airports(ui: &mut egui::Ui) {
     ui.strong("Airport types");
     ui.add_space(2.0);
     for (name, desc) in &[
-        ("Dirt Strip",      "Unpaved single strip. Short and narrow. Bush flying only."),
+        ("Dirt Strip",      "Unpaved single strip, 400-900 m. Bush flying only."),
         ("Small GA",        "Paved general-aviation runway (~2000 m). Most common type and your spawn point."),
-        ("Large Commuter",  "Longer paved runway (~3000 m). Handles faster regional aircraft."),
-        ("Regional",        "Two parallel GA strips separated ~350 m. Higher traffic capacity."),
-        ("Hub",             "Large multi-runway airport. Long runways and a major landmark on the map."),
+        ("Large Commuter",  "Longer paved runway (~3200 m). Handles faster regional aircraft."),
+        ("Regional",        "Two parallel GA strips ~70 m apart. Higher traffic capacity."),
+        ("Hub",             "Two parallel strips ~180 m apart. Long runways and a major landmark on the map."),
     ] {
         ui.horizontal(|ui| {
             let label = egui::RichText::new(*name).monospace().strong();
@@ -309,38 +332,27 @@ fn tab_airports(ui: &mut egui::Ui) {
 // ── Tab: Day / Night ──────────────────────────────────────────────────────────
 
 fn tab_day_night(ui: &mut egui::Ui) {
-    ui.label("The world has a continuous day/night cycle driven by a simulated sun orbit. Time advances automatically and can be controlled in the F3 debug panel under Sky / Day-Night.");
+    ui.label("A continuous day/night cycle driven by a simulated sun orbit, controllable in Dev Tools (F3) under Sky / Day-Night.");
 
     ui.add_space(8.0);
     ui.strong("Time of day");
-    ui.label("The clock runs from 0.0 (midnight) to 1.0 (next midnight). Key points:");
-    ui.add_space(2.0);
-    ui.label("0.0     midnight");
-    ui.label("0.25    sunrise");
-    ui.label("0.5     noon");
-    ui.label("0.75    sunset");
-    ui.add_space(4.0);
-    ui.label("The default start time is late afternoon (~15:36). You can scrub the time or pause it in F3.");
+    ui.label("Runs from 0.0 (midnight) to 1.0 (next midnight): 0.25 sunrise, 0.5 noon, 0.75 sunset. Starts at noon (0.5) by default; scrub or pause it in F3.");
 
     ui.add_space(8.0);
-    ui.strong("Sun and sky colour");
-    ui.label("The sky transitions through night blue, dawn orange, midday white, sunset red, and back to night. The sun's light colour and intensity follow the same curve. At noon the lighting is bright and neutral; at sunrise and sunset it turns warm orange.");
-
-    ui.add_space(8.0);
-    ui.strong("Fog and haze");
-    ui.label("When sky tinting is enabled (F3 > Sky) the fog colour blends with the sky colour. This gives a realistic haze effect where distant terrain picks up the orange of a sunset or the blue of twilight.");
+    ui.strong("Sun, sky, and fog");
+    ui.label("The sky and sun light transition through night blue, dawn orange, midday white, and sunset red. When sky tinting is enabled (F3 > Sky) fog blends with the sky colour, so distant terrain picks up the same hue.");
 
     ui.add_space(8.0);
     ui.strong("Stars");
-    ui.label("Stars appear at night and fade as the sun rises. Each star twinkles independently at a random speed. Stars are not real constellations but are seeded consistently.");
+    ui.label("Appear at night and fade at sunrise, each twinkling independently. Seeded consistently, not real constellations.");
 
     ui.add_space(8.0);
     ui.strong("Aircraft lights");
-    ui.label("Navigation lights (red left wingtip, green right, white tail) are always on. Strobes flash automatically. The landing light is toggled with N and casts a forward spotlight useful for night approaches. All light positions and intensities are adjustable in F3 > Lights.");
+    ui.label("Nav (red left wingtip, green right, white tail) and strobe lights default on but can be switched off from the instrument panel. The beacon (red belly light) pulses automatically while the engine is running. Landing light toggles with N. All positions and intensities are adjustable in F3 > Lights.");
 
     ui.add_space(8.0);
     ui.strong("Sun orbit inclination");
-    ui.label("The sun's orbit can be tilted (F3 > Sky > Orbit inclination). At 0 the sun rises due east and sets due west. A positive inclination tilts the orbit so the sun arcs to one side, giving a sense of latitude.");
+    ui.label("Tiltable in F3 > Sky. At 0 the sun rises due east and sets due west; a positive inclination arcs the path to one side, giving a sense of latitude.");
 }
 
 // ── Tab: Terrain ──────────────────────────────────────────────────────────────
@@ -391,9 +403,35 @@ fn tab_terrain(ui: &mut egui::Ui) {
 
     ui.add_space(6.0);
     ui.strong("Airports in terrain");
-    ui.label("Airports sit on a sparse ~10 km grid. Each cell hashes its position against the seed to decide if an airport exists, what type, its runway heading, and its name. Terrain is flattened locally so the strip sits flush on the ground.");
+    ui.label("Airports sit on a sparse ~6 km grid. Each cell hashes its position against the seed to decide if an airport exists, what type, its runway heading, and its name. Terrain is flattened locally so the strip sits flush on the ground.");
 
     ui.add_space(6.0);
-    ui.strong("Colliders");
-    ui.label("Physics colliders are generated at a fixed resolution around the aircraft, independent of the visual LOD. Ground contact is always accurate even where the visual mesh is coarse.");
+    ui.strong("Ground contact");
+    ui.label("The terrain mesh itself is purely visual — there are no physics colliders on it. Landing gear and hull-strike detection both sample the same height function the terrain is drawn from directly, so ground contact is exact regardless of visual LOD.");
+}
+
+// ── Tab: Multiplayer ──────────────────────────────────────────────────────────
+
+fn tab_multiplayer(ui: &mut egui::Ui) {
+    ui.label("Open the Multiplayer window from the menu bar. You're connected to the default server automatically on launch — no setup needed to see other players.");
+
+    ui.add_space(8.0);
+    ui.strong("Browse");
+    ui.label("Set your display name here (a random one is picked for you at first). Below it, the server list refreshes automatically every few seconds and shows each server's player count and world seed. The official server is marked [Official]. Click Connect on any row to switch.");
+
+    ui.add_space(8.0);
+    ui.strong("Host");
+    ui.label("Create your own server with a custom seed and name, defaulting to \"{your name}'s Server\". Creating one connects you to it automatically.");
+
+    ui.add_space(8.0);
+    ui.strong("Players");
+    ui.label("Lists everyone else connected to your current server. Teleport to jumps your aircraft to just behind and above theirs, matching their speed and heading.");
+
+    ui.add_space(8.0);
+    ui.strong("Settings");
+    ui.label("Advanced: point the client at a different master server if you don't want to use the official one.");
+
+    ui.add_space(8.0);
+    ui.strong("Notes");
+    ui.label("Movement is client-authoritative — your own aircraft is simulated locally and just broadcasts its position. Switching or creating a server resets your aircraft to that world's runway.");
 }
