@@ -62,7 +62,7 @@ pub struct AircraftRoot {
 impl Default for AircraftRoot {
     fn default() -> Self {
         Self {
-            throttle_percent: 1.0,
+            throttle_percent: 0.0,
             engine_rps: 0.0,
             engine_state: EngineState::default(),
             crank_timer: 0.0,

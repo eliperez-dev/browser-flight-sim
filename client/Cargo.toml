@@ -19,7 +19,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 tracing-wasm = "0.2"
 console_error_panic_hook = "0.1"
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Document", "Element", "Window", "WebSocket", "MessageEvent", "BinaryType", "Blob", "ErrorEvent", "CloseEvent", "Request", "RequestInit", "RequestMode", "Response", "Headers"] }
+web-sys = { version = "0.3", features = ["Document", "Element", "Window", "WebSocket", "MessageEvent", "BinaryType", "Blob", "ErrorEvent", "CloseEvent", "Request", "RequestInit", "RequestMode", "Response", "Headers", "Performance"] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 

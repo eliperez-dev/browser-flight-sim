@@ -1,6 +1,6 @@
 use bevy::{diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, prelude::*};
 
-use crate::{FpsText, camera::{CameraMode, FreeCam}, fog::FogSettings, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
+use crate::{CamModeText, FpsText, camera::{CameraMode, FreeCam}, fog::FogSettings, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
 
 /// Shared debug overlay. Any system can push entries into `entries` each frame;
 /// the Dev Tools egui window renders the vec as a live readout.
@@ -21,6 +21,19 @@ pub fn update_fps(
         && let Some(value) = fps.smoothed() {
             **text = format!("FPS: {:.0}", value);
         }
+}
+
+pub fn update_cam_mode_text(
+    mode: Res<CameraMode>,
+    mut query: Query<&mut Text, With<CamModeText>>,
+) {
+    let Ok(mut text) = query.single_mut() else { return };
+    **text = format!("CAM: {}", match &*mode {
+        CameraMode::Free  => "FREE".into(),
+        CameraMode::Chase => "CHASE".into(),
+        CameraMode::Orbit => "ORBIT".into(),
+        CameraMode::Fixed(i) => format!("FIXED[{i}]"),
+    });
 }
 
 pub fn populate_debug_hud(

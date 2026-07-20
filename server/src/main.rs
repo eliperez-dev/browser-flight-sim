@@ -29,7 +29,11 @@ struct AppState {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let addr: SocketAddr = "0.0.0.0:7777".parse().unwrap();
+    // PaaS platforms (e.g. DigitalOcean App Platform) assign their own port
+    // and expect the app to read it from $PORT; 7777 is only the local-dev
+    // fallback.
+    let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7777);
+    let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let registry = Arc::new(Registry::default());
     registry.insert_default(DEFAULT_WORLD_SEED).await;
     tracing::info!("default world seed={DEFAULT_WORLD_SEED}");

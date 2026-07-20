@@ -16,7 +16,7 @@ use bevy::{
 
 use crate::{camera::{
     CameraMode, ChaseCam, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, chase_cam_control, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
-}, debug_tools::debug_hud::{populate_debug_hud, update_fps}, plane::spawn_aircraft};
+}, debug_tools::debug_hud::{populate_debug_hud, update_cam_mode_text, update_fps}, plane::spawn_aircraft};
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
@@ -54,6 +54,9 @@ use crate::terrain::{TerrainCamera, TerrainPlugin, WorldGenerator};
 
 #[derive(Component)]
 struct FpsText;
+
+#[derive(Component)]
+struct CamModeText;
 
 fn main() {
     // Without this, a wasm panic just prints an opaque "unreachable
@@ -135,6 +138,7 @@ fn main() {
             toggle_pause,
             free_cam_control,
             update_fps,
+            update_cam_mode_text,
             fit_canvas,
             apply_config_to_entities,
             spin_propeller,
@@ -335,6 +339,19 @@ fn setup(
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
+            right: Val::Px(8.0),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        Text::new("CAM: --"),
+        CamModeText,
+        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
+        TextFont { font_size: 16.0, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(28.0),
             right: Val::Px(8.0),
             ..default()
         },

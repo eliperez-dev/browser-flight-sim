@@ -192,13 +192,27 @@ mod wasm_ws {
     use wasm_bindgen::closure::Closure;
     use web_sys::{BinaryType, MessageEvent, WebSocket};
 
+    /// A decoded message paired with the real wall-clock time (browser
+    /// `performance.now()`, milliseconds) it actually arrived in the
+    /// `onmessage` callback — *not* whenever the Bevy system next happens to
+    /// drain the inbox. Multiple WS messages can arrive between two Bevy
+    /// frames (frame drops, tab-focus hitches, GC pauses), and draining them
+    /// all in one system call would otherwise stamp them all with the same
+    /// `Time::elapsed_secs()` — which is exactly what caused the interpolation
+    /// jitter: bursts of same-timestamp samples followed by large gaps,
+    /// instead of the real, much smaller network-level jitter.
+    pub struct TimestampedMessage {
+        pub arrival_perf_ms: f64,
+        pub message: ServerToClient,
+    }
+
     /// Shared inbox: the WS `onmessage` callback (JS-driven, fires outside
-    /// Bevy's schedule) pushes decoded messages here; a Bevy system drains it
-    /// every frame. `Mutex` is just for `Sync`, not real contention — wasm is
-    /// single-threaded.
+    /// Bevy's schedule) pushes timestamped messages here; a Bevy system
+    /// drains it every frame. `Mutex` is just for `Sync`, not real
+    /// contention — wasm is single-threaded.
     pub struct Connection {
         socket: WebSocket,
-        pub inbox: Arc<Mutex<Vec<ServerToClient>>>,
+        pub inbox: Arc<Mutex<Vec<TimestampedMessage>>>,
         pub open: Arc<Mutex<bool>>,
         /// Set by `onclose`/`onerror`. The browser still fires these for a
         /// backgrounded tab even though Bevy's own frame loop (and thus every
@@ -222,7 +236,7 @@ mod wasm_ws {
             let socket = WebSocket::new(url)?;
             socket.set_binary_type(BinaryType::Arraybuffer);
 
-            let inbox: Arc<Mutex<Vec<ServerToClient>>> = Arc::new(Mutex::new(Vec::new()));
+            let inbox: Arc<Mutex<Vec<TimestampedMessage>>> = Arc::new(Mutex::new(Vec::new()));
             let open = Arc::new(Mutex::new(false));
             let closed = Arc::new(Mutex::new(false));
 
@@ -231,8 +245,12 @@ mod wasm_ws {
                 if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                     let array = js_sys::Uint8Array::new(&buf);
                     let bytes = array.to_vec();
-                    if let Some(msg) = ServerToClient::decode(&bytes) {
-                        inbox_cb.lock().unwrap().push(msg);
+                    if let Some(message) = ServerToClient::decode(&bytes) {
+                        let arrival_perf_ms = web_sys::window()
+                            .and_then(|w| w.performance())
+                            .map(|p| p.now())
+                            .unwrap_or(0.0);
+                        inbox_cb.lock().unwrap().push(TimestampedMessage { arrival_perf_ms, message });
                     }
                 }
             }) as Box<dyn FnMut(MessageEvent)>);
@@ -417,14 +435,25 @@ fn apply_incoming_messages(
 
     #[cfg(target_arch = "wasm32")]
     {
-        let messages: Vec<ServerToClient> = wasm_ws::CONNECTION.with(|c| {
+        let messages: Vec<wasm_ws::TimestampedMessage> = wasm_ws::CONNECTION.with(|c| {
             c.borrow()
                 .as_ref()
                 .map(|conn| std::mem::take(&mut *conn.inbox.lock().unwrap()))
                 .unwrap_or_default()
         });
 
-        for msg in messages {
+        // Convert each message's real `performance.now()` arrival time into
+        // Bevy's clock domain. Both tick at the same real rate, so the
+        // offset between "Bevy time right now" and "performance.now() right
+        // now" is stable enough to apply to arrivals from earlier this same
+        // frame — this is what lets messages that arrived at different real
+        // moments (but got drained together) keep distinct, accurate
+        // timestamps instead of all collapsing onto `time.elapsed_secs()`.
+        let perf_now_ms = web_sys::window().and_then(|w| w.performance()).map(|p| p.now()).unwrap_or(0.0);
+        let bevy_to_perf_offset_secs = time.elapsed_secs() - (perf_now_ms as f32 / 1000.0);
+
+        for wasm_ws::TimestampedMessage { arrival_perf_ms, message: msg } in messages {
+            let arrival_bevy_secs = (arrival_perf_ms as f32 / 1000.0) + bevy_to_perf_offset_secs;
             match msg {
                 ServerToClient::Welcome {
                     your_id,
@@ -458,7 +487,7 @@ fn apply_incoming_messages(
                         if remote.id == id {
                             let new_position = Vec3::new(position.x, position.y, position.z);
                             let new_rotation = Quat::from_xyzw(rotation.x, rotation.y, rotation.z, rotation.w);
-                            target.push_sample(time.elapsed_secs(), new_position, new_rotation);
+                            target.push_sample(arrival_bevy_secs, new_position, new_rotation);
                             target.velocity = Vec3::new(velocity.x, velocity.y, velocity.z);
                             target.control_surfaces = control_surfaces;
                             target.lights = lights;
@@ -502,16 +531,15 @@ pub struct RemoteSample {
 /// perfectly still whenever an update arrived late, and snapped whenever one
 /// arrived early.
 ///
-/// At exactly 2 update-intervals of delay this still visibly stuttered:
-/// `render_t` (a smooth clock) would occasionally outrun the newest buffered
-/// sample whenever one update was even slightly late, hard-snapping onto
-/// that latest sample (see `sample_at`'s early-return branch) — then the
-/// *next* update would arrive and interpolation would resume from a
-/// different trajectory than where the snap left off, reading as a
-/// back-and-forth jitter rather than a clean pause. 4 intervals gives enough
-/// slack that ordinary jitter (a message a few tens of ms late) still finds
-/// two real samples to interpolate between instead of hitting that fallback.
-const RENDER_DELAY: f32 = STATE_SEND_INTERVAL * 4.0;
+/// Originally set to 4 intervals to paper over a since-fixed bug where
+/// arrival timestamps were captured at Bevy-frame-drain time instead of
+/// real WS `onmessage` time (see `wasm_ws::TimestampedMessage`), which made
+/// gaps between buffered samples look far jitterier than real network
+/// delivery (observed 0-476ms swings against a 50ms nominal cadence). With
+/// that fixed, real observed gaps cluster in the 25-90ms range, so 3
+/// intervals (150ms) still comfortably covers them with margin to spare,
+/// for less input lag on remote ghosts than the original 4-interval value.
+const RENDER_DELAY: f32 = STATE_SEND_INTERVAL * 3.0;
 
 /// Component holding recent server-reported state for a remote player;
 /// `spawn_remote_players`/interpolation systems read from this rather than
@@ -828,7 +856,14 @@ fn send_local_state(
     if timer.0 < STATE_SEND_INTERVAL {
         return;
     }
-    timer.0 = 0.0;
+    // Subtract rather than zero: a frame almost never lands exactly on the
+    // 50ms boundary, so it always overshoots by a few ms. Zeroing threw that
+    // overshoot away every single interval, which drifted the real send
+    // cadence away from STATE_SEND_INTERVAL over time — and the receiver's
+    // interpolation (network.rs's RENDER_DELAY/sample_at) assumes that
+    // constant is the actual cadence. Carrying the overshoot forward keeps
+    // the long-run average locked to exactly 50ms instead of drifting.
+    timer.0 -= STATE_SEND_INTERVAL;
 
     if !status.connected {
         return;

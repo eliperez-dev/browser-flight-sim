@@ -118,7 +118,7 @@ fn tab_overview(ui: &mut egui::Ui) {
 
     ui.add_space(10.0);
     ui.strong("Quick start");
-    ui.label("Engine starts off — press I, then + for throttle and W / S to fly. Full keybinds are in the Controls tab.");
+    ui.label("The engine starts running at idle on the runway — press + to add throttle, then W / S to fly. Full keybinds are in the Controls tab.");
 
     ui.add_space(10.0);
     ui.strong("If you crash");
