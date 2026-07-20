@@ -1,2 +1,7 @@
 [build]
-public_url = "/"
+# The built output is embedded on the portfolio site at /flight-sim/, not
+# served at the domain root — public_url = "/" made Trunk emit absolute
+# asset paths like "/browser-flight-sim-....js", which 404 once actually
+# served under /flight-sim/ (the browser resolves them against the site
+# root instead of the iframe's own path).
+public_url = "/flight-sim/"

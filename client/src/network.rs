@@ -30,16 +30,14 @@ const LOCAL_MODEL_ID: &str = "low-poly-airplane";
 /// at a self-hosted master instead (see the Multiplayer tab's advanced
 /// settings).
 ///
-/// **Before building for a real deployment**, point these at the actual
-/// backend host with `https://`/`wss://` schemes, not `http://`/`ws://` —
-/// a page served over https (as any real portfolio embed will be) cannot
-/// open a plain `ws://` connection to it; browsers block that as mixed
-/// content. That means the backend needs TLS termination in front of it
-/// (e.g. a reverse proxy), since `server/` itself only speaks plain
-/// HTTP/WS. Localhost is only valid for local dev, where the browser's
-/// mixed-content check doesn't apply.
-pub const DEFAULT_MASTER_HTTP: &str = "http://127.0.0.1:7777";
-pub const DEFAULT_MASTER_WS: &str = "ws://127.0.0.1:7777";
+/// Points at the DigitalOcean App Platform deployment (see
+/// `server/Dockerfile`, `.do/app.yaml`), which terminates TLS for us — the
+/// backend itself only speaks plain HTTP/WS. A page served over https (as
+/// any real portfolio embed is) cannot open a plain `ws://` connection to
+/// it; browsers block that as mixed content, hence `https://`/`wss://` here
+/// rather than the `http://127.0.0.1:7777` used for local dev.
+pub const DEFAULT_MASTER_HTTP: &str = "https://browser-flight-sim-server-6kxx5.ondigitalocean.app";
+pub const DEFAULT_MASTER_WS: &str = "wss://browser-flight-sim-server-6kxx5.ondigitalocean.app";
 const DEFAULT_SERVER_ID: &str = "default";
 
 /// The master server the directory/create HTTP calls target. Changing this

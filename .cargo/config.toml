@@ -1,0 +1,9 @@
+# Caps parallel rustc/codegen jobs. Each parallel compilation unit holds its
+# own memory, so on a memory-constrained machine (8GB) letting cargo default
+# to one job per core (8 here) during a release build of this Bevy-sized
+# dependency graph is what pushed the build past available RAM and crashed
+# it. Lower jobs = slower wall-clock build, but keeps peak memory well below
+# the ceiling instead of racing it. Raise this back toward `nproc` if
+# building on a machine with more headroom.
+[build]
+jobs = 3

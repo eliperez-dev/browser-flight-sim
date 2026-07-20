@@ -13,3 +13,24 @@ opt-level = 3
 
 [profile.release]
 panic = "abort"
+# Fat LTO (lto = true) + codegen-units = 1 optimizes hardest but merges the
+# entire dependency graph (Bevy, wgpu, Avian3D, ...) into one link unit —
+# that spiked past 8GB of RAM and crashed the build on a memory-constrained
+# machine. Thin LTO gets most of the same cross-crate optimization at a
+# fraction of the peak memory, and a higher codegen-units count lets rustc
+# parallelize rather than serialize the whole crate graph through one unit.
+lto = "thin"
+codegen-units = 16
+strip = true
+
+# The client ships as a wasm download to every portfolio visitor, so binary
+# size matters as much as runtime speed — "s" trims the .wasm meaningfully
+# versus the workspace default of 3, and the physics/rendering hot path is
+# dominated by Bevy/wgpu/Avian's own code either way, not codegen quality
+# in this crate's own (small) surface. The server is a long-running process
+# with no download cost, so it keeps full speed optimization.
+[profile.release.package.browser-flight-sim]
+opt-level = "s"
+
+[profile.release.package.server]
+opt-level = 3
