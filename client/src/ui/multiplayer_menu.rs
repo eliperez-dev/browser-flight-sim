@@ -91,7 +91,10 @@ struct HostServerSeed(u32);
 
 impl Default for HostServerSeed {
     fn default() -> Self {
-        Self(1)
+        // A fixed default (was 1) meant everyone's first hosted server used
+        // the same terrain unless they thought to change it — randomize so
+        // each new server starts out as a genuinely different world.
+        Self(rand::random_range(0..u32::MAX))
     }
 }
 
@@ -149,7 +152,7 @@ fn draw_multiplayer_menu(
             });
             ui.separator();
 
-            connection_status_line(ui, &status);
+            connection_status_line(ui, &status, &mut pending);
             ui.add_space(4.0);
 
             match *tab {
@@ -163,7 +166,7 @@ fn draw_multiplayer_menu(
     Ok(())
 }
 
-fn connection_status_line(ui: &mut egui::Ui, status: &NetworkStatus) {
+fn connection_status_line(ui: &mut egui::Ui, status: &NetworkStatus, pending: &mut PendingConnectionAction) {
     let (color, text) = if status.connected {
         (GOOD, "Connected")
     } else if status.server_url.is_some() {
@@ -179,6 +182,9 @@ fn connection_status_line(ui: &mut egui::Ui, status: &NetworkStatus) {
             if let Some(url) = &status.server_url {
                 ui.label(egui::RichText::new(url).color(TEXT_DIM).small());
             }
+        }
+        if status.server_url.is_some() && ui.button("Disconnect").clicked() {
+            pending.0 = Some(ConnectionAction::Disconnect);
         }
     });
 }

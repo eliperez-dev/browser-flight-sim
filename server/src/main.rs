@@ -38,11 +38,31 @@ async fn main() {
 
     let state = AppState { registry };
 
+    // Permissive by default so local dev (client served from a different
+    // port, or wasm-server-runner) just works. Set ALLOWED_ORIGIN to the
+    // real deployment's origin (e.g. "https://example.com") in production —
+    // /create in particular is a write endpoint that shouldn't be callable
+    // from an arbitrary origin once this is publicly reachable.
+    let cors = match std::env::var("ALLOWED_ORIGIN") {
+        Ok(origin) => {
+            let origin: axum::http::HeaderValue = origin.parse().expect("ALLOWED_ORIGIN must be a valid header value");
+            tracing::info!("CORS restricted to origin: {origin:?}");
+            CorsLayer::new()
+                .allow_origin(origin)
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([axum::http::header::CONTENT_TYPE])
+        }
+        Err(_) => {
+            tracing::warn!("ALLOWED_ORIGIN not set — CORS is permissive (any origin). Set it before deploying publicly.");
+            CorsLayer::permissive()
+        }
+    };
+
     let app = Router::new()
         .route("/directory", get(directory))
         .route("/create", post(create_server))
         .route("/ws/{server_id}", get(ws_upgrade))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await.expect("failed to bind");

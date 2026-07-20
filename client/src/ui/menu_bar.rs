@@ -57,7 +57,7 @@ pub fn draw_menu_bar(
     let ctx = contexts.ctx_mut()?;
 
     // Measure the screen width this frame so we can centre the area.
-    let screen_w = ctx.screen_rect().width();
+    let screen_w = ctx.content_rect().width();
 
     egui::Area::new(egui::Id::new("menu_bar"))
         .order(egui::Order::Tooltip)

@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::{OuterCamera, PIXEL_HEIGHT, PIXEL_WIDTH};
-use crate::network::{RemotePlayer, RemoteTarget};
+use crate::network::RemotePlayer;
 use crate::plane::Airplane;
 use crate::terrain::TerrainCamera;
 
@@ -29,7 +29,12 @@ impl Plugin for PlayerLabelsPlugin {
 
 pub fn draw_player_labels(
     mut contexts: EguiContexts,
-    remotes: Query<(&RemotePlayer, &RemoteTarget)>,
+    // Reads the ghost's actual rendered Transform, not RemoteTarget's raw
+    // latest sample — the ghost itself is drawn from an interpolated,
+    // intentionally-delayed position (see network.rs's RENDER_DELAY), and
+    // labeling the raw un-delayed sample instead made the name tag visibly
+    // run ahead of the plane it's supposed to label.
+    remotes: Query<(&RemotePlayer, &Transform), Without<Airplane>>,
     plane_q: Query<&Transform, With<Airplane>>,
     inner_cam_q: Query<(&Camera, &GlobalTransform), With<TerrainCamera>>,
     outer_proj_q: Query<&Projection, With<OuterCamera>>,
@@ -66,8 +71,8 @@ pub fn draw_player_labels(
         cp.y * canvas_scale + canvas_offset_y,
     );
 
-    for (player, target) in &remotes {
-        let pos = target.position;
+    for (player, transform) in &remotes {
+        let pos = transform.translation;
         let dist_km = Vec2::new(pos.x - plane_pos.x, pos.z - plane_pos.z).length() / 1000.0;
 
         let alpha = (1.0 - (dist_km - FADE_START_KM).max(0.0) / (FAR_DIST_KM - FADE_START_KM))

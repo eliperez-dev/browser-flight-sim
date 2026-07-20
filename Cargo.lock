@@ -1989,6 +1989,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "bevy_egui",
+ "console_error_panic_hook",
  "getrandom 0.4.3",
  "js-sys",
  "noise",

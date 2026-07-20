@@ -56,6 +56,13 @@ use crate::terrain::{TerrainCamera, TerrainPlugin, WorldGenerator};
 struct FpsText;
 
 fn main() {
+    // Without this, a wasm panic just prints an opaque "unreachable
+    // executed" to the browser console with no message or stack trace —
+    // undebuggable from a bug report once this is running on a live page
+    // instead of a dev machine.
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+
     App::new()
         .add_plugins((
             DefaultPlugins.set(AssetPlugin {

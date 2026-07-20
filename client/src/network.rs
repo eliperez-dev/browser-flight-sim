@@ -29,6 +29,15 @@ const LOCAL_MODEL_ID: &str = "low-poly-airplane";
 /// Overridable at runtime via `MasterServer` for players who want to point
 /// at a self-hosted master instead (see the Multiplayer tab's advanced
 /// settings).
+///
+/// **Before building for a real deployment**, point these at the actual
+/// backend host with `https://`/`wss://` schemes, not `http://`/`ws://` —
+/// a page served over https (as any real portfolio embed will be) cannot
+/// open a plain `ws://` connection to it; browsers block that as mixed
+/// content. That means the backend needs TLS termination in front of it
+/// (e.g. a reverse proxy), since `server/` itself only speaks plain
+/// HTTP/WS. Localhost is only valid for local dev, where the browser's
+/// mixed-content check doesn't apply.
 pub const DEFAULT_MASTER_HTTP: &str = "http://127.0.0.1:7777";
 pub const DEFAULT_MASTER_WS: &str = "ws://127.0.0.1:7777";
 const DEFAULT_SERVER_ID: &str = "default";
@@ -156,6 +165,7 @@ impl Plugin for NetworkPlugin {
             .add_systems(
                 Update,
                 (
+                    detect_dead_connection,
                     handle_connection_requests,
                     apply_incoming_messages,
                     spawn_remote_players,
@@ -190,9 +200,21 @@ mod wasm_ws {
         socket: WebSocket,
         pub inbox: Arc<Mutex<Vec<ServerToClient>>>,
         pub open: Arc<Mutex<bool>>,
+        /// Set by `onclose`/`onerror`. The browser still fires these for a
+        /// backgrounded tab even though Bevy's own frame loop (and thus every
+        /// Bevy-side system, including whatever would otherwise notice a
+        /// dead connection) is throttled/paused while hidden — so this is
+        /// the only signal that survives that throttling. Polled once a
+        /// frame resumes by `detect_dead_connection`, which requeues a
+        /// reconnect instead of leaving `NetworkStatus` stuck reporting
+        /// "connected" against a socket the server already dropped (see the
+        /// server's `HEARTBEAT_TIMEOUT`).
+        pub closed: Arc<Mutex<bool>>,
         // Keep the closures alive for the lifetime of the connection.
         _on_message: Closure<dyn FnMut(MessageEvent)>,
         _on_open: Closure<dyn FnMut()>,
+        _on_close: Closure<dyn FnMut()>,
+        _on_error: Closure<dyn FnMut()>,
     }
 
     impl Connection {
@@ -202,6 +224,7 @@ mod wasm_ws {
 
             let inbox: Arc<Mutex<Vec<ServerToClient>>> = Arc::new(Mutex::new(Vec::new()));
             let open = Arc::new(Mutex::new(false));
+            let closed = Arc::new(Mutex::new(false));
 
             let inbox_cb = inbox.clone();
             let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
@@ -221,17 +244,36 @@ mod wasm_ws {
             }) as Box<dyn FnMut()>);
             socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
+            let closed_cb = closed.clone();
+            let on_close = Closure::wrap(Box::new(move || {
+                *closed_cb.lock().unwrap() = true;
+            }) as Box<dyn FnMut()>);
+            socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
+
+            let closed_cb2 = closed.clone();
+            let on_error = Closure::wrap(Box::new(move || {
+                *closed_cb2.lock().unwrap() = true;
+            }) as Box<dyn FnMut()>);
+            socket.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
             Ok(Self {
                 socket,
                 inbox,
                 open,
+                closed,
                 _on_message: on_message,
                 _on_open: on_open,
+                _on_close: on_close,
+                _on_error: on_error,
             })
         }
 
         pub fn is_open(&self) -> bool {
             *self.open.lock().unwrap()
+        }
+
+        pub fn is_closed(&self) -> bool {
+            *self.closed.lock().unwrap()
         }
 
         pub fn send(&self, bytes: &[u8]) {
@@ -305,6 +347,37 @@ fn handle_connection_requests(
     }
 }
 
+/// Notices when the live socket has actually died (server-side heartbeat
+/// timeout, network drop, or — most commonly — the server dropping a
+/// connection that went silent while its tab was backgrounded and Bevy's
+/// own frame loop was throttled) and requeues a reconnect to the same URL.
+///
+/// Without this, `NetworkStatus.connected` stays stuck `true` forever once
+/// the underlying socket is gone: nothing else in this module ever flips it
+/// back, since every other system only reacts to messages that can no
+/// longer arrive. That's what made a backgrounded-then-restored tab appear
+/// "still connected" while showing no other players — the socket was dead,
+/// the client just never noticed.
+fn detect_dead_connection(status: Res<NetworkStatus>, mut pending: ResMut<PendingConnectionAction>) {
+    if pending.0.is_some() {
+        return;
+    }
+    let Some(url) = status.server_url.clone() else { return };
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let dead = wasm_ws::CONNECTION.with(|c| c.borrow().as_ref().is_none_or(|conn| conn.is_closed()));
+        if dead {
+            warn!("multiplayer connection to {url} was lost — reconnecting");
+            pending.0 = Some(ConnectionAction::Connect(url));
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = url;
+    }
+}
+
 /// Sends the Join handshake once the socket has finished opening. Cheap to
 /// poll every frame until it succeeds; after that this is a no-op.
 fn ensure_joined(status: &mut NetworkStatus, name: &str) {
@@ -333,6 +406,7 @@ fn ensure_joined(status: &mut NetworkStatus, name: &str) {
 }
 
 fn apply_incoming_messages(
+    time: Res<Time>,
     mut status: ResMut<NetworkStatus>,
     name: Res<LocalPlayerName>,
     mut world_gen_cfg: ResMut<WorldGenConfig>,
@@ -382,8 +456,9 @@ fn apply_incoming_messages(
                 } => {
                     for (remote, mut target) in &mut remotes {
                         if remote.id == id {
-                            target.position = Vec3::new(position.x, position.y, position.z);
-                            target.rotation = Quat::from_xyzw(rotation.x, rotation.y, rotation.z, rotation.w);
+                            let new_position = Vec3::new(position.x, position.y, position.z);
+                            let new_rotation = Quat::from_xyzw(rotation.x, rotation.y, rotation.z, rotation.w);
+                            target.push_sample(time.elapsed_secs(), new_position, new_rotation);
                             target.velocity = Vec3::new(velocity.x, velocity.y, velocity.z);
                             target.control_surfaces = control_surfaces;
                             target.lights = lights;
@@ -407,19 +482,98 @@ fn apply_incoming_messages(
     }
 }
 
-/// Component holding the latest server-reported state for a remote player;
-/// `spawn_remote_players`/interpolation systems read from this rather than
-/// snapping the Transform directly, so movement stays smooth between updates.
-#[derive(Component)]
-pub struct RemoteTarget {
+/// One timestamped position/rotation sample, as received in a
+/// `PlayerStateUpdate`. `t` is `Time::elapsed_secs()` at the moment the
+/// message was applied client-side (not a server timestamp — we only need
+/// relative spacing between local arrivals, not cross-client sync).
+#[derive(Clone, Copy)]
+pub struct RemoteSample {
+    pub t: f32,
     pub position: Vec3,
     pub rotation: Quat,
+}
+
+/// How far in the past `interpolate_remote_players` renders remote ghosts,
+/// relative to `Time::elapsed_secs()`. Rendering at `now - RENDER_DELAY`
+/// instead of assuming updates land exactly every `STATE_SEND_INTERVAL`
+/// means there are (almost) always two *real* buffered samples straddling
+/// the render timestamp to interpolate between, regardless of network
+/// jitter — a fixed-interval lerp (position it replaced) instead held
+/// perfectly still whenever an update arrived late, and snapped whenever one
+/// arrived early.
+///
+/// At exactly 2 update-intervals of delay this still visibly stuttered:
+/// `render_t` (a smooth clock) would occasionally outrun the newest buffered
+/// sample whenever one update was even slightly late, hard-snapping onto
+/// that latest sample (see `sample_at`'s early-return branch) — then the
+/// *next* update would arrive and interpolation would resume from a
+/// different trajectory than where the snap left off, reading as a
+/// back-and-forth jitter rather than a clean pause. 4 intervals gives enough
+/// slack that ordinary jitter (a message a few tens of ms late) still finds
+/// two real samples to interpolate between instead of hitting that fallback.
+const RENDER_DELAY: f32 = STATE_SEND_INTERVAL * 4.0;
+
+/// Component holding recent server-reported state for a remote player;
+/// `spawn_remote_players`/interpolation systems read from this rather than
+/// snapping the Transform directly, so movement stays smooth between
+/// updates. `samples` is a small ring buffer of timestamped positions (see
+/// `RENDER_DELAY`), oldest first; capped at `MAX_SAMPLES` so a long-lived
+/// ghost doesn't grow the buffer forever.
+#[derive(Component)]
+pub struct RemoteTarget {
+    /// Latest known position/rotation — used by teleport-to-player and as
+    /// the interpolation target when the render timestamp runs past the
+    /// newest sample (e.g. after a network stall).
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub samples: Vec<RemoteSample>,
     /// Not used for ghost interpolation (which only needs position/rotation)
     /// — kept so the Multiplayer tab's teleport-to-player can hand the local
     /// aircraft a sensible starting velocity instead of snapping to zero.
     pub velocity: Vec3,
     pub control_surfaces: ControlSurfaces,
     pub lights: LightSwitches,
+}
+
+// Needs to comfortably outlast RENDER_DELAY (4 update-intervals) so the
+// buffer doesn't evict samples the render timestamp still needs; extra
+// margin absorbs jitter without constantly brushing the fallback path.
+const MAX_SAMPLES: usize = 10;
+
+impl RemoteTarget {
+    fn push_sample(&mut self, t: f32, position: Vec3, rotation: Quat) {
+        self.position = position;
+        self.rotation = rotation;
+        self.samples.push(RemoteSample { t, position, rotation });
+        if self.samples.len() > MAX_SAMPLES {
+            self.samples.remove(0);
+        }
+    }
+
+    /// Interpolated position/rotation at `render_t`, found by locating the
+    /// two buffered samples that straddle it. Falls back to the newest
+    /// sample if `render_t` runs past everything buffered (e.g. after a
+    /// stall with no updates for a while) rather than extrapolating.
+    fn sample_at(&self, render_t: f32) -> (Vec3, Quat) {
+        let Some(newest) = self.samples.last() else {
+            return (self.position, self.rotation);
+        };
+        if render_t >= newest.t {
+            return (newest.position, newest.rotation);
+        }
+        for pair in self.samples.windows(2) {
+            let [a, b] = pair else { unreachable!() };
+            if render_t >= a.t && render_t <= b.t {
+                let span = (b.t - a.t).max(1e-6);
+                let frac = ((render_t - a.t) / span).clamp(0.0, 1.0);
+                return (a.position.lerp(b.position, frac), a.rotation.slerp(b.rotation, frac));
+            }
+        }
+        // render_t is older than every buffered sample (large stall or a
+        // very fresh ghost) — hold at the oldest known sample.
+        let oldest = self.samples[0];
+        (oldest.position, oldest.rotation)
+    }
 }
 
 thread_local! {
@@ -439,6 +593,7 @@ fn spawn_or_queue_remote(player: PlayerState) {
 /// remote player, reusing the same builders the local player uses so a
 /// remote pilot looks identical to a local one.
 fn spawn_remote_players(
+    time: Res<Time>,
     mut commands: Commands,
     existing: Query<&RemotePlayer>,
     asset_server: Res<AssetServer>,
@@ -477,6 +632,7 @@ fn spawn_remote_players(
             .insert(RemoteTarget {
                 position,
                 rotation,
+                samples: vec![RemoteSample { t: time.elapsed_secs(), position, rotation }],
                 velocity,
                 control_surfaces: player.control_surfaces,
                 lights: player.lights,
@@ -534,17 +690,21 @@ fn despawn_remote_aero_surfaces(
     }
 }
 
-/// Smoothly moves each ghost aircraft's `Transform` toward its latest
-/// `RemoteTarget`, since state updates only arrive at `STATE_SEND_INTERVAL`
-/// rather than every frame.
+/// Smoothly moves each ghost aircraft's `Transform` by rendering
+/// `RENDER_DELAY` seconds in the past, interpolated between whichever two
+/// buffered `RemoteTarget` samples straddle that timestamp. See
+/// `RENDER_DELAY`'s doc comment for why this — rather than a fixed-interval
+/// lerp assuming updates land exactly every `STATE_SEND_INTERVAL` — is what
+/// actually stays smooth under real network jitter.
 fn interpolate_remote_players(
     time: Res<Time>,
     mut remotes: Query<(&mut Transform, &RemoteTarget), With<RemotePlayerVisual>>,
 ) {
-    let t = (time.delta_secs() / STATE_SEND_INTERVAL).clamp(0.0, 1.0);
+    let render_t = time.elapsed_secs() - RENDER_DELAY;
     for (mut transform, target) in &mut remotes {
-        transform.translation = transform.translation.lerp(target.position, t);
-        transform.rotation = transform.rotation.slerp(target.rotation, t);
+        let (position, rotation) = target.sample_at(render_t);
+        transform.translation = position;
+        transform.rotation = rotation;
     }
 }
 

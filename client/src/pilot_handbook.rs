@@ -63,7 +63,7 @@ fn draw_handbook(
     // `anchor` — `anchor` would make it immovable, which breaks dragging on
     // this resizable window). Estimated against a typical ~480x520 window
     // size since egui doesn't know the real size until after the first show.
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let default_pos = egui::pos2(
         (screen.width() / 2.0 - 240.0).max(8.0),
         (screen.height() / 2.0 - 260.0).max(8.0),
