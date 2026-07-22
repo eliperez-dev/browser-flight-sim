@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{OuterCamera, PIXEL_HEIGHT, PIXEL_WIDTH};
+use crate::camera::{OuterCamera, RenderScale};
 use crate::plane::Airplane;
 use crate::terrain::{WaypointStalk, WorldGenerator, airport_name, runway_ident};
 use crate::terrain::TerrainCamera;
@@ -19,8 +19,8 @@ const STALK_BASE_OFFSET: f32 = 2.0;
 /// Hide everything (stalk + label) closer than this.
 const MIN_DIST_KM: f32 = 3.0;
 /// Begin fading at this distance; invisible by FAR_DIST_KM.
-const FADE_START_KM: f32 = 30.0;
-const FAR_DIST_KM: f32 = 120.0;
+const FADE_START_KM: f32 = 20.0;
+const FAR_DIST_KM: f32 = 30.0;
 
 pub struct WaypointsPlugin;
 
@@ -54,6 +54,7 @@ pub fn update_stalk_visibility(
 pub fn draw_waypoint_labels(
     mut contexts: EguiContexts,
     generator: Res<WorldGenerator>,
+    render_scale: Res<RenderScale>,
     stalks: Query<(&WaypointStalk, &Transform)>,
     plane_q: Query<&Transform, With<Airplane>>,
     inner_cam_q: Query<(&Camera, &GlobalTransform), With<TerrainCamera>>,
@@ -71,8 +72,8 @@ pub fn draw_waypoint_labels(
     let window = windows.single().ok();
     let win_w = window.map(|w| w.width()).unwrap_or(640.0);
     let win_h = window.map(|w| w.height()).unwrap_or(360.0);
-    let canvas_w = PIXEL_WIDTH as f32 * canvas_scale;
-    let canvas_h = PIXEL_HEIGHT as f32 * canvas_scale;
+    let canvas_w = render_scale.width() as f32 * canvas_scale;
+    let canvas_h = render_scale.height() as f32 * canvas_scale;
     let canvas_offset_x = (win_w - canvas_w) * 0.5;
     let canvas_offset_y = (win_h - canvas_h) * 0.5;
 

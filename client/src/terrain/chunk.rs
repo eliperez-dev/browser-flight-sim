@@ -52,7 +52,7 @@ impl Default for ChunkManager {
             last_camera_chunk: None,
             to_spawn: Vec::new(),
             lod_to_update: Vec::new(),
-            render_distance: 28, // ~6 km at CHUNK_SIZE = 500 m
+            render_distance: 30, // ~6 km at CHUNK_SIZE = 500 m
             lod_levels: [
                 (2.0, 12),
                 (6.0, 8),

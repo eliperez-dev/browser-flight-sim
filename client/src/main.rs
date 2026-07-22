@@ -9,14 +9,14 @@ use bevy::{
     image::ImageSampler,
     prelude::*,
     render::render_resource::{
-        Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
     },
     transform::TransformSystems,
 };
 
 use crate::{camera::{
-    CameraMode, ChaseCam, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_HEIGHT, PIXEL_LAYER, PIXEL_WIDTH, SCREEN_LAYER, TrackCam, chase_cam_control, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
-}, debug_tools::debug_hud::{populate_debug_hud, update_cam_mode_text, update_fps}, plane::spawn_aircraft};
+    CameraMode, ChaseCam, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_LAYER, PixelCanvas, RenderScale, SCREEN_LAYER, TrackCam, UiScale, apply_render_scale, apply_ui_scale, chase_cam_control, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
+}, debug_tools::debug_hud::{populate_debug_hud, update_cam_controls_hint, update_cam_mode_text, update_fps, update_fullscreen_hint}, plane::spawn_aircraft};
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
 use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
@@ -58,6 +58,12 @@ struct FpsText;
 #[derive(Component)]
 struct CamModeText;
 
+#[derive(Component)]
+struct FullscreenHintText;
+
+#[derive(Component)]
+struct CamControlsHintText;
+
 fn main() {
     // Without this, a wasm panic just prints an opaque "unreachable
     // executed" to the browser console with no message or stack trace —
@@ -94,6 +100,7 @@ fn main() {
             crate::ui::PlaneMenuPlugin,
             crate::ui::InstrumentPanelPlugin,
             crate::ui::CameraMenuPlugin,
+            crate::ui::GraphicsMenuPlugin,
             crate::ui::MultiplayerMenuPlugin,
         ))
         // Cap the virtual-time step so a stutter frame never gives the physics
@@ -112,6 +119,8 @@ fn main() {
         .init_resource::<FlightModelConfig>()
         .init_resource::<CameraMode>()
         .init_resource::<FixedCameraMounts>()
+        .init_resource::<UiScale>()
+        .init_resource::<RenderScale>()
         .init_resource::<DebugHud>()
         .init_resource::<GizmosVisible>()
         .add_systems(Startup, (setup, setup_gizmo_config))
@@ -139,7 +148,11 @@ fn main() {
             free_cam_control,
             update_fps,
             update_cam_mode_text,
+            update_fullscreen_hint,
+            update_cam_controls_hint,
+            apply_render_scale,
             fit_canvas,
+            apply_ui_scale,
             apply_config_to_entities,
             spin_propeller,
             populate_debug_hud,
@@ -248,8 +261,9 @@ fn setup(
     windows: Query<&Window>,
     cfg: Res<FlightModelConfig>,
     world_gen: Res<WorldGenerator>,
+    render_scale: Res<RenderScale>,
 ) {
-    let canvas_size = Extent3d { width: PIXEL_WIDTH, height: PIXEL_HEIGHT, ..default() };
+    let canvas_size = render_scale.extent();
     let mut canvas = Image {
         texture_descriptor: TextureDescriptor {
             label: None,
@@ -268,6 +282,7 @@ fn setup(
     canvas.resize(canvas_size);
     canvas.sampler = ImageSampler::nearest();
     let pixel_target = images.add(canvas);
+    commands.insert_resource(PixelCanvas(pixel_target.clone()));
 
     // Spawn the aircraft on the origin runway, which now sits at the natural
     // terrain height. `get_terrain_height` returns the runway surface here (the
@@ -312,8 +327,8 @@ fn setup(
     commands.spawn((Sprite::from_image(pixel_target), SCREEN_LAYER));
 
     let initial_scale = windows.single().ok().map(|w| {
-        let h = w.width() / PIXEL_WIDTH as f32;
-        let v = w.height() / PIXEL_HEIGHT as f32;
+        let h = w.width() / render_scale.width() as f32;
+        let v = w.height() / render_scale.height() as f32;
         1.0 / h.min(v).round()
     }).unwrap_or(0.25);
 
@@ -353,6 +368,44 @@ fn setup(
             position_type: PositionType::Absolute,
             top: Val::Px(28.0),
             right: Val::Px(8.0),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        Text::new("Press F to Cycle Camera Mode"),
+        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
+        TextFont { font_size: 16.0, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(48.0),
+            right: Val::Px(8.0),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        Text::new("Press J for Fullscreen"),
+        FullscreenHintText,
+        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
+        TextFont { font_size: 16.0, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(68.0),
+            right: Val::Px(8.0),
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        Text::new(""),
+        CamControlsHintText,
+        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
+        TextFont { font_size: 16.0, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(8.0),
+            left: Val::Px(8.0),
             ..default()
         },
     ));

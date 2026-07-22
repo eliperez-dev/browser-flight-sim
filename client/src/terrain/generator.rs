@@ -155,7 +155,7 @@ impl Default for WorldGenConfig {
             seed: 3, //rand::random(),
             horizontal_scale: DEFAULT_HORIZONTAL_SCALE,
             height_scale: DEFAULT_HEIGHT_SCALE,
-            render_distance: 28,
+            render_distance: 30,
             max_chunks_per_frame: 4,
             lod_levels: [
                 (2.0, 14),

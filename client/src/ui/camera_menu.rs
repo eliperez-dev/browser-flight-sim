@@ -1,11 +1,12 @@
 //! Camera window — toggled from the menu bar. A single Camera Mode section
 //! for switching between Free, Orbit, and the fixed rigid-mount cameras
-//! (nose, tail, wingtips, ...), plus fullscreen.
+//! (nose, tail, wingtips, ...). Fullscreen and UI Scale live in the Graphics
+//! menu instead (see `graphics_menu.rs`).
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{CameraMode, ChaseCam, FixedCameraMounts, FreeCam, TrackCam, is_fullscreen, request_toggle_fullscreen};
+use crate::camera::{CameraMode, ChaseCam, FixedCameraMounts, FreeCam, TrackCam};
 use crate::plane::Airplane;
 use crate::ui::menu_bar::MenuBar;
 
@@ -38,11 +39,6 @@ fn draw_camera_menu(
         .show(ctx, |ui| {
             ui.heading("Camera Mode");
             ui.separator();
-
-            let mut fullscreen = is_fullscreen();
-            if ui.checkbox(&mut fullscreen, "Fullscreen (F11)").clicked() {
-                request_toggle_fullscreen();
-            }
 
             if ui.selectable_label(matches!(*mode, CameraMode::Orbit), "Orbit").clicked() {
                 *mode = CameraMode::Orbit;

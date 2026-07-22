@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{OuterCamera, PIXEL_HEIGHT, PIXEL_WIDTH};
+use crate::camera::{OuterCamera, RenderScale};
 use crate::network::RemotePlayer;
 use crate::plane::Airplane;
 use crate::terrain::TerrainCamera;
@@ -34,6 +34,7 @@ pub fn draw_player_labels(
     // intentionally-delayed position (see network.rs's RENDER_DELAY), and
     // labeling the raw un-delayed sample instead made the name tag visibly
     // run ahead of the plane it's supposed to label.
+    render_scale: Res<RenderScale>,
     remotes: Query<(&RemotePlayer, &Transform), Without<Airplane>>,
     plane_q: Query<&Transform, With<Airplane>>,
     inner_cam_q: Query<(&Camera, &GlobalTransform), With<TerrainCamera>>,
@@ -55,8 +56,8 @@ pub fn draw_player_labels(
     let window = windows.single().ok();
     let win_w = window.map(|w| w.width()).unwrap_or(640.0);
     let win_h = window.map(|w| w.height()).unwrap_or(360.0);
-    let canvas_w = PIXEL_WIDTH as f32 * canvas_scale;
-    let canvas_h = PIXEL_HEIGHT as f32 * canvas_scale;
+    let canvas_w = render_scale.width() as f32 * canvas_scale;
+    let canvas_h = render_scale.height() as f32 * canvas_scale;
     let canvas_offset_x = (win_w - canvas_w) * 0.5;
     let canvas_offset_y = (win_h - canvas_h) * 0.5;
 

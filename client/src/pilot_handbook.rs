@@ -213,16 +213,10 @@ fn tab_engine(ui: &mut egui::Ui) {
 
     ui.add_space(6.0);
     ui.strong("Mixture  ( L / K )");
-    ui.label("Rich (L): more fuel relative to air, best for takeoff and low altitude. Lean (K): less fuel, more efficient at altitude where the air is thinner. The ideal mixture leans out gradually as you climb — the correct setting scales with altitude, not a fixed number. Too lean or too rich and the engine loses power; far enough either way and it quits.");
+    ui.label("Rich (L): more fuel, best for takeoff and low altitude. Lean (K): less fuel, more efficient at altitude where the air is thinner. Lean gradually as you climb. Too lean or too rich and the engine loses power or quits.");
 
     ui.add_space(6.0);
-    ui.strong("Engine states");
-    ui.add_space(2.0);
-    ui.label("OFF         engine not running, no thrust");
-    ui.label("CRANKING    starter engaged, spool-up in progress");
-    ui.label("RUNNING     engine running, throttle and mixture active");
-    ui.add_space(2.0);
-    ui.label("The starter (I) won't catch if the mixture is leaned too far — rich it up first if it won't start.");
+    ui.label("If the engine (I) won't start, richen the mixture first — it won't catch if leaned too far.");
 
     ui.add_space(6.0);
     ui.strong("RPM");
@@ -232,10 +226,6 @@ fn tab_engine(ui: &mut egui::Ui) {
 // ── Tab: Flight Mechanics ─────────────────────────────────────────────────────
 
 fn tab_flight(ui: &mut egui::Ui) {
-    ui.strong("Four forces");
-    ui.label("Lift (wings up), Weight (gravity down), Thrust (engine forward), Drag (air resistance back). Flying is balancing all four.");
-
-    ui.add_space(6.0);
     ui.strong("Stall");
     ui.label("Too steep an angle of attack and airflow over the wings separates — lift drops and the nose pitches down. Recover by releasing back pressure (let go of W) and adding throttle.");
 
@@ -332,82 +322,43 @@ fn tab_airports(ui: &mut egui::Ui) {
 // ── Tab: Day / Night ──────────────────────────────────────────────────────────
 
 fn tab_day_night(ui: &mut egui::Ui) {
-    ui.label("A continuous day/night cycle driven by a simulated sun orbit, controllable in Dev Tools (F3) under Sky / Day-Night.");
-
-    ui.add_space(8.0);
-    ui.strong("Time of day");
-    ui.label("Runs from 0.0 (midnight) to 1.0 (next midnight): 0.25 sunrise, 0.5 noon, 0.75 sunset. Starts at noon (0.5) by default; scrub or pause it in F3.");
-
-    ui.add_space(8.0);
-    ui.strong("Sun, sky, and fog");
-    ui.label("The sky and sun light transition through night blue, dawn orange, midday white, and sunset red. When sky tinting is enabled (F3 > Sky) fog blends with the sky colour, so distant terrain picks up the same hue.");
+    ui.label("A continuous day/night cycle. Starts at noon by default; tune or scrub it in Dev Tools (F3) under Sky / Day-Night.");
 
     ui.add_space(8.0);
     ui.strong("Stars");
-    ui.label("Appear at night and fade at sunrise, each twinkling independently. Seeded consistently, not real constellations.");
+    ui.label("Appear at night and fade at sunrise, each twinkling independently.");
 
     ui.add_space(8.0);
     ui.strong("Aircraft lights");
-    ui.label("Nav (red left wingtip, green right, white tail) and strobe lights default on but can be switched off from the instrument panel. The beacon (red belly light) pulses automatically while the engine is running. Landing light toggles with N. All positions and intensities are adjustable in F3 > Lights.");
-
-    ui.add_space(8.0);
-    ui.strong("Sun orbit inclination");
-    ui.label("Tiltable in F3 > Sky. At 0 the sun rises due east and sets due west; a positive inclination arcs the path to one side, giving a sense of latitude.");
+    ui.label("Nav (red left wingtip, green right, white tail) and strobe lights default on but can be switched off from the instrument panel. The beacon (red belly light) pulses automatically while the engine is running. Landing light toggles with N.");
 }
 
 // ── Tab: Terrain ──────────────────────────────────────────────────────────────
 
 fn tab_terrain(ui: &mut egui::Ui) {
-    ui.label("The world is infinite and generated on the fly. No two seeds produce the same world.");
+    ui.label("The world is infinite and procedurally generated. No two seeds produce the same world.");
 
-    ui.add_space(6.0);
-    ui.strong("Chunks");
-    ui.label("The terrain is divided into 500 m x 500 m tiles called chunks. As you fly, nearby chunks are built and distant ones are discarded. Each chunk is a mesh whose vertex heights come from a noise function.");
-
-    ui.add_space(6.0);
-    ui.strong("LOD (Level of Detail)");
-    ui.label("Chunks close to the aircraft get more mesh subdivisions. Farther chunks use fewer triangles. This keeps the framerate stable while distant terrain silhouettes remain visible. LOD bands are configurable in F3 > World Generation > Streaming & LOD.");
-
-    ui.add_space(6.0);
-    ui.strong("Noise and height");
-    ui.label("Heights come from layered Perlin noise (fractal brownian motion). A base frequency sets the large-scale hills; octaves add finer detail. The result is scaled by the height_scale setting and shaped per biome.");
-
-    ui.add_space(6.0);
-    ui.strong("Climate and biomes");
-    ui.label("Two noise fields (Temperature and Humidity) define a 2D climate map. Every point falls somewhere in that space. The four corners of the climate square are the four land biomes:");
-    ui.add_space(4.0);
-    for (biome, climate, desc) in &[
-        ("Grasslands", "cold + dry",  "Gentle rolling hills, low relief"),
-        ("Taiga",      "cold + wet",  "Tall mountains, dramatic peaks"),
-        ("Desert",     "hot + dry",   "Near-flat, sandy, minimal relief"),
-        ("Forest",     "hot + wet",   "Medium hills, dense green cover"),
+    ui.add_space(8.0);
+    ui.strong("Biomes");
+    ui.add_space(2.0);
+    for (biome, desc) in &[
+        ("Grasslands", "Gentle rolling hills, low relief"),
+        ("Taiga",      "Tall mountains, dramatic peaks"),
+        ("Desert",     "Near-flat, sandy, minimal relief"),
+        ("Forest",     "Medium hills, dense green cover"),
     ] {
         ui.horizontal(|ui| {
             let b = egui::RichText::new(*biome).monospace().strong();
             ui.add_sized([90.0, 0.0], egui::Label::new(b));
-            let c = egui::RichText::new(*climate).italics();
-            ui.add_sized([100.0, 0.0], egui::Label::new(c));
             ui.label(*desc);
         });
     }
     ui.add_space(2.0);
-    ui.label("Biomes blend smoothly at their boundaries.");
+    ui.label("Biomes blend smoothly at their boundaries, alongside oceans and coastlines.");
 
-    ui.add_space(6.0);
-    ui.strong("Oceans");
-    ui.label("A continent-noise field decides where land exists. Points below the sea-level threshold become ocean. Coastlines blend gradually from water to beach terrain. Sea level is adjustable in F3 > Water.");
-
-    ui.add_space(6.0);
+    ui.add_space(8.0);
     ui.strong("Seed");
-    ui.label("A single 32-bit integer seeds everything: terrain, biomes, and airports. Change it in F3 > World Generation > Base to get a completely different world.");
-
-    ui.add_space(6.0);
-    ui.strong("Airports in terrain");
-    ui.label("Airports sit on a sparse ~6 km grid. Each cell hashes its position against the seed to decide if an airport exists, what type, its runway heading, and its name. Terrain is flattened locally so the strip sits flush on the ground.");
-
-    ui.add_space(6.0);
-    ui.strong("Ground contact");
-    ui.label("The terrain mesh itself is purely visual — there are no physics colliders on it. Landing gear and hull-strike detection both sample the same height function the terrain is drawn from directly, so ground contact is exact regardless of visual LOD.");
+    ui.label("A single number seeds the whole world — terrain, biomes, and airports. Change it in Dev Tools (F3) under World Generation to get a completely different planet.");
 }
 
 // ── Tab: Multiplayer ──────────────────────────────────────────────────────────

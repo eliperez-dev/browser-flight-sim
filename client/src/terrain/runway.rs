@@ -115,6 +115,10 @@ const RUNWAY_SURFACE_LIFT: f32 = 0.3;
 /// own thickness must cover this drop (see `THICKNESS`) so its skirt hides the gap.
 const RUNWAY_TERRAIN_DROP: f32 = 2.0;
 
+/// Hard cap on how far runway pavement/lights stream in, independent of the
+/// terrain render-distance setting.
+const RUNWAY_MAX_VIEW_M: f32 = 30_000.0;
+
 /// Grid spacing between runways (one per cell).
 const RUNWAY_SPACING: f32 = 6000.0;
 /// Fraction of a cell a runway may wander from its grid point — keeps them off a
@@ -553,8 +557,10 @@ pub fn stream_runways(
 
     // Cull by actual distance (not cell count) so strips disappear right around
     // the terrain edge. Spawn within the view radius, despawn a little past it —
-    // the gap is hysteresis so a strip at the boundary doesn't flicker.
-    let view_m = manager.render_distance as f32 * CHUNK_SIZE;
+    // the gap is hysteresis so a strip at the boundary doesn't flicker. Also capped
+    // at RUNWAY_MAX_VIEW_M regardless of terrain render distance, so pavement/lights
+    // don't stream in absurdly far when the player cranks up terrain draw distance.
+    let view_m = (manager.render_distance as f32 * CHUNK_SIZE).min(RUNWAY_MAX_VIEW_M);
     let keep_sq = view_m * view_m;
     let drop_sq = (view_m * 1.15).powi(2);
     let cell_radius = (view_m * 1.15 / RUNWAY_SPACING).ceil() as i32 + 1;

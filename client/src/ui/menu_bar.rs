@@ -19,6 +19,7 @@ pub struct MenuBar {
     pub gizmos: bool,
     pub camera: bool,
     pub multiplayer: bool,
+    pub graphics: bool,
 }
 
 impl Default for MenuBar {
@@ -33,6 +34,7 @@ impl Default for MenuBar {
             gizmos: false,
             camera: false,
             multiplayer: false,
+            graphics: false,
         }
     }
 }
@@ -76,9 +78,10 @@ pub fn draw_menu_bar(
                     ui.horizontal(|ui| {
                         menu_button(ui, "Map", &mut bar.map);
                         menu_button(ui, "Handbook", &mut bar.handbook);
-                        menu_button(ui, "World", &mut bar.world);
+                        menu_button(ui, "Weather", &mut bar.world);
                         menu_button(ui, "My Plane", &mut bar.my_plane);
                         menu_button(ui, "Camera", &mut bar.camera);
+                        menu_button(ui, "Graphics", &mut bar.graphics);
                         menu_button(ui, "Multiplayer", &mut bar.multiplayer);
                         ui.separator();
                         menu_button(ui, "Gizmos", &mut bar.gizmos);

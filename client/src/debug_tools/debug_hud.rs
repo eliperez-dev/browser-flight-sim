@@ -1,6 +1,6 @@
 use bevy::{diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}, prelude::*};
 
-use crate::{CamModeText, FpsText, camera::{CameraMode, FreeCam}, fog::FogSettings, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
+use crate::{CamControlsHintText, CamModeText, FpsText, FullscreenHintText, camera::{CameraMode, FreeCam, is_fullscreen}, fog::FogSettings, physics::aircraft_physics::{AircraftRoot, EngineState}, plane::{Airplane, PlaneState}};
 
 /// Shared debug overlay. Any system can push entries into `entries` each frame;
 /// the Dev Tools egui window renders the vec as a live readout.
@@ -34,6 +34,40 @@ pub fn update_cam_mode_text(
         CameraMode::Orbit => "ORBIT".into(),
         CameraMode::Fixed(i) => format!("FIXED[{i}]"),
     });
+}
+
+/// Hides the "Press J for Fullscreen" hint once already fullscreen — no
+/// point telling the player to do something they've already done.
+pub fn update_fullscreen_hint(
+    mut query: Query<&mut Visibility, With<FullscreenHintText>>,
+) {
+    let Ok(mut visibility) = query.single_mut() else { return };
+    *visibility = if is_fullscreen() { Visibility::Hidden } else { Visibility::Inherited };
+}
+
+/// Top-left reminder of the current camera mode's controls — Orbit's
+/// controls are the default/expected ones (covered by the handbook and not
+/// otherwise easy to forget), so this only shows for the other modes, where
+/// a player who just switched is most likely to be unsure what moved.
+pub fn update_cam_controls_hint(
+    mode: Res<CameraMode>,
+    mut query: Query<(&mut Text, &mut Visibility), With<CamControlsHintText>>,
+) {
+    let Ok((mut text, mut visibility)) = query.single_mut() else { return };
+    let hint = match &*mode {
+        CameraMode::Orbit => None,
+        CameraMode::Free | CameraMode::Chase => {
+            Some("Arrows: look\nWASD: move\nE/Q: up/down\nShift: speed boost\nCaps Lock: max speed boost")
+        }
+        CameraMode::Fixed(_) => Some("Camera locked to mount"),
+    };
+    match hint {
+        Some(hint) => {
+            **text = hint.to_string();
+            *visibility = Visibility::Inherited;
+        }
+        None => *visibility = Visibility::Hidden,
+    }
 }
 
 pub fn populate_debug_hud(

@@ -1,4 +1,5 @@
 pub mod camera_menu;
+pub mod graphics_menu;
 pub mod instrument_panel;
 pub mod menu_bar;
 pub mod multiplayer_menu;
@@ -14,6 +15,7 @@ use bevy::prelude::*;
 pub struct UiSet;
 
 pub use camera_menu::CameraMenuPlugin;
+pub use graphics_menu::GraphicsMenuPlugin;
 pub use instrument_panel::InstrumentPanelPlugin;
 pub use menu_bar::MenuBarPlugin;
 pub use multiplayer_menu::MultiplayerMenuPlugin;
