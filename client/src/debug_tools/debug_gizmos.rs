@@ -6,18 +6,164 @@ use crate::physics::aero_surface::AeroSurface;
 use crate::physics::aircraft_physics::{AircraftRoot, ground_effect_factor};
 use crate::physics::flight_config::FlightModelConfig;
 use crate::physics::landing_gear::{GROUND_Y, gear_legs};
-use crate::plane::Airplane;
-use crate::ui::menu_bar::MenuBar;
+use crate::plane::{Airplane, PlaneVisual};
+use crate::ui::menu_bar::{GizmosMode, MenuBar};
 
+/// Mirrors `MenuBar::gizmos` into its own resource so gizmo/mesh systems
+/// don't need to depend on the whole menu bar (and by extension egui) just
+/// to read the current mode.
 #[derive(Resource, Default)]
-pub struct GizmosVisible(pub bool);
+pub struct GizmosVisible(pub GizmosMode);
 
-/// G key mirrors the menu bar gizmos toggle; also syncs GizmosVisible from the bar.
+/// G key cycles the menu bar's gizmos mode (Off -> Outline -> Filled -> Off);
+/// also syncs `GizmosVisible` from the bar every frame so clicking the menu
+/// button has the same effect as pressing G.
 pub fn toggle_gizmos(keys: Res<ButtonInput<KeyCode>>, mut bar: ResMut<MenuBar>, mut visible: ResMut<GizmosVisible>) {
     if keys.just_pressed(KeyCode::KeyG) {
-        bar.gizmos = !bar.gizmos;
+        bar.gizmos = bar.gizmos.next();
     }
     visible.0 = bar.gizmos;
+}
+
+/// Hides the aircraft's visual mesh while in Filled gizmo mode (so the solid
+/// aero-surface panels read clearly without the model occluding them), and
+/// restores it otherwise.
+pub fn apply_gizmos_mesh_visibility(
+    visible: Res<GizmosVisible>,
+    mut visual_q: Query<&mut Visibility, With<PlaneVisual>>,
+) {
+    if !visible.is_changed() {
+        return;
+    }
+    let show_mesh = visible.0 != GizmosMode::Filled;
+    for mut vis in &mut visual_q {
+        *vis = if show_mesh { Visibility::Inherited } else { Visibility::Hidden };
+    }
+}
+
+/// Marker on the thin box mesh spawned as a child of each `AeroSurface`
+/// entity for Filled gizmo mode — a solid stand-in for the surface's
+/// span/chord rectangle (the flap portion, when present, gets its own child
+/// so it can be tilted independently to show deflection).
+#[derive(Component)]
+pub struct FilledSurfaceMesh;
+
+/// Marker on the flap portion of a filled surface (the trailing
+/// `flap_fraction` of the chord), which is re-parented under a hinge pivot
+/// so it can rotate by `flap_angle` independently of the fixed leading part.
+#[derive(Component)]
+pub struct FilledFlapPivot;
+
+/// Marks an `AeroSurface` entity as already having its filled-mesh children
+/// spawned, so `ensure_filled_surface_meshes` doesn't duplicate them on
+/// every frame Filled mode is active.
+#[derive(Component)]
+pub struct FilledMeshBuilt;
+
+/// Visual thickness of a filled surface panel (local units — metres × 10),
+/// just enough to read as a solid plate rather than a zero-thickness sheet.
+const FILLED_THICKNESS: f32 = 0.6;
+
+/// Ensures every `AeroSurface` entity has a filled-mesh representation
+/// (a fixed leading-edge box, plus — for control surfaces with a flap — a
+/// hinge pivot carrying the trailing flap box), spawned lazily the first
+/// time Filled mode is used rather than unconditionally at aircraft spawn.
+#[allow(clippy::type_complexity)]
+pub fn ensure_filled_surface_meshes(
+    mut commands: Commands,
+    visible: Res<GizmosVisible>,
+    surface_q: Query<(Entity, &AeroSurface), Without<FilledMeshBuilt>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if visible.0 != GizmosMode::Filled {
+        return;
+    }
+
+    for (entity, surface) in &surface_q {
+        commands.entity(entity).insert(FilledMeshBuilt);
+        let base_color = if surface.is_control_surface {
+            Color::srgba(0.3, 0.9, 1.0, 0.9)
+        } else {
+            Color::srgba(0.2, 1.0, 0.4, 0.9)
+        };
+        let material = materials.add(StandardMaterial {
+            base_color,
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        });
+        let flap_material = materials.add(StandardMaterial {
+            base_color: Color::srgba(1.0, 0.55, 0.05, 0.9),
+            unlit: true,
+            cull_mode: None,
+            ..default()
+        });
+
+        let has_flap = surface.is_control_surface && surface.config.flap_fraction > 0.0;
+        let hc = surface.config.chord * 10.0 * 0.5; // half-chord, local units
+        let fixed_chord = if has_flap {
+            surface.config.chord * 10.0 * (1.0 - surface.config.flap_fraction)
+        } else {
+            surface.config.chord * 10.0
+        };
+        // Fixed part is centered between the leading edge and the hinge line.
+        let fixed_center_x = hc - fixed_chord * 0.5;
+
+        commands.entity(entity).with_children(|p| {
+            p.spawn((
+                Mesh3d(meshes.add(Cuboid::new(fixed_chord, FILLED_THICKNESS, surface.config.span * 10.0))),
+                MeshMaterial3d(material),
+                Transform::from_xyz(fixed_center_x, 0.0, 0.0),
+                FilledSurfaceMesh,
+                crate::camera::PIXEL_LAYER,
+            ));
+
+            if has_flap {
+                let flap_chord = surface.config.chord * 10.0 * surface.config.flap_fraction;
+                let hinge_x = hc - fixed_chord; // hinge line, local X relative to surface origin
+                // Pivot sits ON the hinge line; the flap box is offset back
+                // (-X) from the pivot by half its own chord so rotating the
+                // pivot swings the flap about the hinge instead of its center.
+                p.spawn((
+                    Transform::from_xyz(hinge_x, 0.0, 0.0),
+                    Visibility::Inherited,
+                    FilledFlapPivot,
+                )).with_children(|pivot| {
+                    pivot.spawn((
+                        Mesh3d(meshes.add(Cuboid::new(flap_chord, FILLED_THICKNESS, surface.config.span * 10.0))),
+                        MeshMaterial3d(flap_material),
+                        Transform::from_xyz(-flap_chord * 0.5, 0.0, 0.0),
+                        FilledSurfaceMesh,
+                        crate::camera::PIXEL_LAYER,
+                    ));
+                });
+            }
+        });
+    }
+}
+
+/// Keeps filled-surface meshes visible only in Filled mode, and rotates each
+/// flap pivot to `flap_angle` every frame so control deflection reads on the
+/// solid geometry itself — same sign convention as `calculate_forces`:
+/// positive `flap_angle` deflects the trailing edge down.
+pub fn update_filled_surface_meshes(
+    visible: Res<GizmosVisible>,
+    surface_q: Query<&AeroSurface>,
+    mut mesh_vis_q: Query<&mut Visibility, With<FilledSurfaceMesh>>,
+    mut pivot_q: Query<(&ChildOf, &mut Transform), With<FilledFlapPivot>>,
+) {
+    let show = visible.0 == GizmosMode::Filled;
+    for mut vis in &mut mesh_vis_q {
+        *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    if !show {
+        return;
+    }
+    for (parent, mut tf) in &mut pivot_q {
+        let Ok(surface) = surface_q.get(parent.parent()) else { continue };
+        tf.rotation = Quat::from_rotation_z(surface.flap_angle);
+    }
 }
 
 /// Draw the aero gizmos on top of the aircraft mesh instead of letting it
@@ -40,7 +186,7 @@ pub fn draw_aero_gizmos(
     surface_q: Query<(&AeroSurface, &Transform), Without<Airplane>>,
     mut gizmos: Gizmos,
 ) {
-    if !visible.0 {
+    if visible.0 == GizmosMode::Off {
         return;
     }
 
@@ -165,20 +311,57 @@ pub fn draw_aero_gizmos(
         } else {
             Color::srgba(0.2, 1.0, 0.4, 0.8)
         };
-        // Four corners of the panel
-        let corners = [
+        // Panel outline. Leading edge is +chord_dir (nose-ward), trailing edge
+        // is -chord_dir. For control surfaces with a flap, the trailing
+        // `flap_fraction` of the chord is drawn as its own hinged quad that
+        // rotates about the hinge line by `flap_angle`, so the deflection is
+        // shown directly on the panel geometry instead of a separate pointer
+        // that can visually disagree with the panel's own orientation.
+        let panel_up = rot * Vec3::Y;
+        let has_flap = surface.is_control_surface && c.flap_fraction > 0.0;
+        // Hinge line sits `flap_fraction` of the chord back from the leading
+        // edge — i.e. the FIXED part is `(1 - flap_fraction)` of the chord,
+        // matching `ensure_filled_surface_meshes`'s `fixed_chord` (this had
+        // been using `flap_fraction` directly, giving the fixed part only
+        // `flap_fraction` of the chord instead of the rest of it).
+        let hinge_x = if has_flap { hc - c.chord * (1.0 - c.flap_fraction) } else { -hc };
+
+        // Fixed part: leading edge to the hinge line (the whole panel if no flap).
+        let fixed_corners = [
             pos + span_dir * hs + chord_dir * hc,
             pos - span_dir * hs + chord_dir * hc,
-            pos - span_dir * hs - chord_dir * hc,
-            pos + span_dir * hs - chord_dir * hc,
+            pos - span_dir * hs + chord_dir * hinge_x,
+            pos + span_dir * hs + chord_dir * hinge_x,
         ];
-        gizmos.line(corners[0], corners[1], surface_color);
-        gizmos.line(corners[1], corners[2], surface_color);
-        gizmos.line(corners[2], corners[3], surface_color);
-        gizmos.line(corners[3], corners[0], surface_color);
-        // Diagonals so the panel is visible from afar
-        gizmos.line(corners[0], corners[2], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
-        gizmos.line(corners[1], corners[3], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
+        for i in 0..4 {
+            gizmos.line(fixed_corners[i], fixed_corners[(i + 1) % 4], surface_color);
+        }
+        gizmos.line(fixed_corners[0], fixed_corners[2], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
+        gizmos.line(fixed_corners[1], fixed_corners[3], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
+
+        // Hinged flap part: hinge line back to the trailing edge, rotated
+        // about the hinge by `flap_angle`. Positive flap_angle = more lift =
+        // trailing edge deflects down (toward -panel_up), matching the sign
+        // convention `calculate_forces` uses for zero-lift AoA.
+        if has_flap {
+            let flap_color = if surface.flap_angle.abs() > 0.005 {
+                Color::srgb(1.0, 0.55, 0.05)
+            } else {
+                surface_color
+            };
+            let flap_chord = c.chord * c.flap_fraction;
+            let deflect_dir = -chord_dir * surface.flap_angle.cos() - panel_up * surface.flap_angle.sin();
+            let hinge_l = pos + span_dir * hs + chord_dir * hinge_x;
+            let hinge_r = pos - span_dir * hs + chord_dir * hinge_x;
+            let trail_l = hinge_l + deflect_dir * flap_chord;
+            let trail_r = hinge_r + deflect_dir * flap_chord;
+            gizmos.line(hinge_l, hinge_r, flap_color);
+            gizmos.line(hinge_l, trail_l, flap_color);
+            gizmos.line(trail_l, trail_r, flap_color);
+            gizmos.line(trail_r, hinge_r, flap_color);
+            gizmos.line(hinge_l, trail_r, Color::srgba(flap_color.to_srgba().red, flap_color.to_srgba().green, flap_color.to_srgba().blue, 0.3));
+            gizmos.line(hinge_r, trail_l, Color::srgba(flap_color.to_srgba().red, flap_color.to_srgba().green, flap_color.to_srgba().blue, 0.3));
+        }
 
         // Actual aerodynamic force this surface produces right now.
         let rel_pos = pos - com_world;
@@ -210,16 +393,6 @@ pub fn draw_aero_gizmos(
             let airflow_dir = world_air_vel.normalize_or_zero();
             let chord_len = hc.min(1.2) * 2.2;
             gizmos.arrow(pos, pos + airflow_dir * chord_len * 1.3, Color::srgba(1.0, 1.0, 1.0, 0.7));
-        }
-
-        // Control deflection: draw a rotated chord line in orange showing the
-        // trailing-edge flap angle relative to the panel's chord direction.
-        if surface.is_control_surface && surface.flap_angle.abs() > 0.005 {
-            let panel_up = rot * Vec3::Y;
-            let deflect_dir = chord_dir * surface.flap_angle.cos()
-                + panel_up * surface.flap_angle.sin();
-            let hinge = pos + chord_dir * hc * 0.25; // approximate hinge at 75% chord
-            gizmos.line(hinge, hinge + deflect_dir * hc * 0.7, Color::srgb(1.0, 0.35, 0.05));
         }
 
         gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.15));
@@ -257,7 +430,7 @@ pub fn draw_light_gizmos(
     landing_q:  Query<&Transform, (With<LandingLight>,  Without<Airplane>)>,
     mut gizmos: Gizmos,
 ) {
-    if !visible.0 { return; }
+    if visible.0 == GizmosMode::Off { return; }
     let Ok(root_tf) = aircraft_q.single() else { return };
 
     // Convert a child's local Transform to world position using the aircraft

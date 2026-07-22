@@ -102,14 +102,126 @@ pub const WING_DIHEDRAL_DEG: f32 = 1.5;
 /// giving the left and right panels slightly different incidence axes and
 /// producing asymmetric lift when pitching.
 ///
-/// `dihedral_sign`: +1.0 for left panels, -1.0 for right panels.
+/// `dihedral_sign`: +1.0 for left panels, -1.0 for right panels — the tip
+/// (the end away from the fuselage) always rises for either sign.
 pub fn wing_panel_rotation(incidence_deg: f32, dihedral_sign: f32) -> Quat {
     // Ry(-90°) maps span (local Z) to world -X. Apply incidence about that
     // span axis before any dihedral so both panels share the same rotation axis.
     let wing_rot = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
     let incidence_rot = wing_rot * Quat::from_rotation_z(incidence_deg.to_radians());
     // Dihedral tilts the already-incidenced panel tip up/down about world Z.
-    Quat::from_rotation_z(dihedral_sign * WING_DIHEDRAL_DEG.to_radians()) * incidence_rot
+    // The left panel's span axis points toward world -X (see Ry(-90°) above),
+    // and Rz(+angle) rotates -X toward -Y (standard right-hand rotation about
+    // +Z) — so a *positive* Rz angle on the left panel would push its tip
+    // DOWN, not up. Negating `dihedral_sign` here keeps the sign flip local
+    // to this function so every call site can keep the intuitive "+1.0 =
+    // left, -1.0 = right" convention while both tips actually rise.
+    Quat::from_rotation_z(-dihedral_sign * WING_DIHEDRAL_DEG.to_radians()) * incidence_rot
+}
+
+/// Identifies which of the seven mounted `AeroSurface`s a translation/rotation
+/// is being computed for — lets `surface_rigging` be the single source of
+/// truth for placement, shared by the initial spawn in `spawn_aircraft` and
+/// the live resync in `apply_config_to_entities`, so the two can't drift
+/// apart the way the old hardcoded `WING_Y`/`WING_Z` constants did.
+pub enum SurfaceSlot {
+    WingLeft,
+    WingRight,
+    AileronLeft,
+    AileronRight,
+    BodyLiftLeft,
+    BodyLiftRight,
+    Elevator,
+    Rudder,
+    VerticalFin,
+}
+
+/// Local translation + rotation for a mounted surface, root-chained off its
+/// physical neighbour instead of computed as an independent formula per
+/// surface.
+///
+/// The previous version placed each panel's *center* from its own formula
+/// (mount X station, a flat `X * tan(dihedral)` rise, `WING_Z`/hardcoded tail
+/// Z). That put the wing tip and aileron root ~0.13 m apart instead of
+/// touching: rotating a panel about its own center by the dihedral angle
+/// displaces its span-edge by `half_span * sin(dihedral)` beyond the
+/// translation term, and the old formula only accounted for the translation.
+/// Two independently-"close" numbers is not the same as two edges that
+/// actually meet.
+///
+/// Building outward from a fixed root — `tip = root + span_dir * span` —
+/// makes edge-matching exact by construction: the next panel's root **is**
+/// the previous panel's tip, not a separately-computed number that has to
+/// coincidentally agree.
+pub fn surface_rigging(cfg: &FlightModelConfig, slot: SurfaceSlot) -> (Vec3, Quat) {
+    use SurfaceSlot::*;
+
+    // Horizontal surfaces (wing, aileron, body-lift, elevator) need local Z =
+    // world X so the span axis is perpendicular to the flight direction.
+    let wing_rot = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+    // Rudder/fin need local Z = world Y (vertical span).
+    let rudder_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
+        * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+
+    // Vertical rise (2 m) from the mesh origin to the wing-root mount, matching
+    // the original geometry when the mesh offset was (0, -10, 0).
+    const WING_ABOVE_MESH: f32 = 20.0;
+    let wing_y = cfg.model_offset.y + WING_ABOVE_MESH;
+    // Chordwise station of the wing lift point (local units, ×0.1 → metres).
+    const WING_Z: f32 = 5.0;
+    // Wing-root mount: just outboard of the fuselage, at wing height, no
+    // dihedral rise (dihedral only rises panels outboard of this point).
+    // Local units (metres × 10) — see `WING_ABOVE_MESH` above for the convention.
+    let wing_root_x = 4.75;
+
+    // Spans in local units (config is metres; ×10 → local, matching the
+    // aircraft root's 0.1 scale).
+    let wing_span = cfg.wing.span * 10.0;
+    let aileron_span = cfg.aileron.span * 10.0;
+
+    let rot_l = wing_panel_rotation(cfg.wing_incidence, 1.0);
+    let rot_r = wing_panel_rotation(cfg.wing_incidence, -1.0);
+    // `Ry(-90°)` (baked into every `wing_panel_rotation` result) always maps
+    // local +Z to world -X, for *both* sides — dihedral_sign only tilts the
+    // rise by a small angle, it doesn't flip which world direction the span
+    // axis points. So `rot * Vec3::Z` points toward -X for both panels:
+    // that's already outboard for the left side, but needs negating to read
+    // as outboard (+X) for the right side.
+    let outboard_l = rot_l * Vec3::Z;
+    let outboard_r = -(rot_r * Vec3::Z);
+
+    let root_l = Vec3::new(-wing_root_x, wing_y, WING_Z);
+    let root_r = Vec3::new(wing_root_x, wing_y, WING_Z);
+    let wing_center_l = root_l + outboard_l * (wing_span * 0.5);
+    let wing_tip_l = root_l + outboard_l * wing_span;
+    let wing_center_r = root_r + outboard_r * (wing_span * 0.5);
+    let wing_tip_r = root_r + outboard_r * wing_span;
+    let aileron_center_l = wing_tip_l + outboard_l * (aileron_span * 0.5);
+    let aileron_center_r = wing_tip_r + outboard_r * (aileron_span * 0.5);
+
+    // Tail cone: elevator roots on the fuselage centerline; the vertical fin
+    // roots directly on top of the elevator's mount (not at `wing_y`, which
+    // is the *main* wing's height and unrelated to the tail) and rises by its
+    // own half-span so its root edge — not its center — lands on the tailplane.
+    let tail_root = Vec3::new(0.0, wing_y - 3.0, -58.0);
+    let fin_root = Vec3::new(0.0, wing_y - 3.0, -50.0);
+    let fin_span = cfg.vertical_fin.span * 10.0;
+    let rudder_span = cfg.rudder.span * 10.0;
+    let fin_up = rudder_rot * Vec3::Z;
+    let fin_center = fin_root + fin_up * (fin_span * 0.5);
+    let rudder_center = tail_root + fin_up * (rudder_span * 0.5);
+
+    match slot {
+        WingLeft       => (wing_center_l, rot_l),
+        WingRight      => (wing_center_r, rot_r),
+        AileronLeft    => (aileron_center_l, rot_l),
+        AileronRight   => (aileron_center_r, rot_r),
+        BodyLiftLeft   => (Vec3::new(-10.0, wing_y, WING_Z), wing_rot),
+        BodyLiftRight  => (Vec3::new(10.0, wing_y, WING_Z), wing_rot),
+        Elevator       => (tail_root, wing_rot),
+        Rudder         => (rudder_center, rudder_rot),
+        VerticalFin    => (fin_center, rudder_rot),
+    }
 }
 
 /// Cessna 172 approximate surface layout.
@@ -129,93 +241,72 @@ pub fn spawn_aircraft(
     let stab_v = cfg.rudder.clone();
     let fin_config = cfg.vertical_fin.clone();
 
-    // Children spawned separately so we can get their entity IDs
-    // Horizontal surfaces (wings, elevator) need local Z = world X so the span axis
-    // is perpendicular to the flight direction (+Z).  Without this rotation the
-    // aero code zeroes out the entire forward-flight velocity component as "span",
-    // leaving q = 0 and generating no lift.
-    let wing_rot = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-
-    // Rudder needs local Z = world Y (vertical span).
-    // Compose: first Ry(-90°) then Rz(-90°) gives the correct orientation.
-    let rudder_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
-        * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-
-    // C172 dihedral: 1.5° per side. Both wingtips sit above the root.
-    // Rz(+dihedral) tilts the surface so sideslip in a bank creates asymmetric AoA
-    // on the two wings, generating a natural restoring roll moment.
-    let dihedral = WING_DIHEDRAL_DEG.to_radians();
-    // Wing panel centre sits at X=25 local (2.5 m) so the root falls at 0.475 m
-    // from the centreline (just outboard of the fuselage) and the tip at 4.525 m.
-    // The aileron root is flush against that tip (no gap, no overlap).
-    // Combined: wing (4.05 m) + aileron (0.95 m) = 5.0 m per side → 11.0 m span.
-    const WING_X: f32 = 25.0;
-    let dihedral_h = WING_X * dihedral.tan();
-    // Left panels: Rz(+dihedral) raises their -X tip (outboard).
-    // Right panels: Rz(-dihedral) raises their +X tip (outboard).
-    let rot_l = wing_panel_rotation(cfg.wing_incidence,  1.0);
-    let rot_r = wing_panel_rotation(cfg.wing_incidence, -1.0);
-
-    // Visual wings sit ~1 m (10 local units) above the entity origin after the mesh offset.
-    const WING_Y: f32 = 10.0;
-
-    // Chordwise station of the wing lift point (local units, ×0.1 → metres).
-    const WING_Z: f32 = 5.0;
-
-    let left_wing = commands.spawn((
-        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
-        Transform::from_xyz(-WING_X, WING_Y + dihedral_h, WING_Z).with_rotation(rot_l),
-    )).id();
-
-    let right_wing = commands.spawn((
-        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
-        Transform::from_xyz(WING_X, WING_Y + dihedral_h, WING_Z).with_rotation(rot_r),
-    )).id();
-
-    // Aileron centre at X=50 local (5.0 m): root at 4.525 m (flush with wing tip),
-    // tip at 5.475 m. Full semispan ≈ 5.475 m → wingspan ≈ 10.95 m ≈ 11 m.
+    // Children spawned separately so we can get their entity IDs. Every
+    // surface's position + rotation comes from `surface_rigging`, which
+    // chains each panel off its physical neighbour (wing root → wing tip →
+    // aileron root → aileron tip, elevator root → fin root → fin tip) so
+    // edges touch exactly instead of being independently-computed numbers
+    // that only approximately agree.
     let aileron_config = cfg.aileron.clone();
 
-    let aileron_dihedral_h = 50.0 * dihedral.tan();
-    let aileron_l = commands.spawn((
-        AeroSurface::control(aileron_config.clone(), ControlInputType::Roll, -1.0),
-        Transform::from_xyz(-50.0, WING_Y + aileron_dihedral_h, WING_Z).with_rotation(rot_l),
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::WingLeft);
+    let left_wing = commands.spawn((
+        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::WingRight);
+    let right_wing = commands.spawn((
+        AeroSurface::control(wing_config.clone(), ControlInputType::Flap, 1.0),
+        Transform::from_translation(pos).with_rotation(rot),
+    )).id();
+
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::AileronLeft);
+    let aileron_l = commands.spawn((
+        AeroSurface::control(aileron_config.clone(), ControlInputType::Roll, -1.0),
+        Transform::from_translation(pos).with_rotation(rot),
+    )).id();
+
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::AileronRight);
     let aileron_r = commands.spawn((
         AeroSurface::control(aileron_config, ControlInputType::Roll, 1.0),
-        Transform::from_xyz(50.0, WING_Y + aileron_dihedral_h, WING_Z).with_rotation(rot_r),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
     // Body lift surfaces (non-control)
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::BodyLiftLeft);
     let body_left = commands.spawn((
         AeroSurface::wing(cfg.body_lift.clone()),
-        Transform::from_xyz(-10.0, WING_Y, 5.0).with_rotation(wing_rot),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::BodyLiftRight);
     let body_right = commands.spawn((
         AeroSurface::wing(cfg.body_lift.clone()),
-        Transform::from_xyz(10.0, WING_Y, 5.0).with_rotation(wing_rot),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::Elevator);
     let elevator = commands.spawn((
         AeroSurface::control(stab_h, ControlInputType::Pitch, 1.0),
-        Transform::from_xyz(0.0, WING_Y - 3.0, -58.0).with_rotation(wing_rot),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::Rudder);
     let rudder = commands.spawn((
         AeroSurface::control(stab_v, ControlInputType::Yaw, 1.0),
-        Transform::from_xyz(0.0, 10.0, -58.0).with_rotation(rudder_rot),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
     // Fixed vertical fin, just forward of the rudder — the non-control tail
     // fin the rudder hinges to. Provides yaw weathervaning and sideslip drag
     // even with no rudder input, matching the real C172's fixed-fin +
     // hinged-rudder split (the rudder alone has no fixed portion).
+    let (pos, rot) = surface_rigging(cfg, SurfaceSlot::VerticalFin);
     let vertical_fin = commands.spawn((
         AeroSurface::wing(fin_config),
         VerticalFin,
-        Transform::from_xyz(0.0, 10.0, -50.0).with_rotation(rudder_rot),
+        Transform::from_translation(pos).with_rotation(rot),
     )).id();
 
     // Visual mesh is a separate child so it can be offset independently of the physics origin.
@@ -298,5 +389,88 @@ pub fn spin_propeller(
     let delta = Quat::from_axis_angle(axis, angle);
     for mut transform in &mut prop_q {
         transform.rotation *= delta;
+    }
+}
+
+#[cfg(test)]
+mod rigging_tests {
+    use super::*;
+
+    // Half-extent of a panel along its own span axis, in local units
+    // (config span is metres; ×10 → local, ×0.5 → half).
+    fn half_span_local(span_m: f32) -> f32 {
+        span_m * 10.0 * 0.5
+    }
+
+    /// The wing tip and the aileron root are meant to be the same physical
+    /// edge (see the spawn-time comment: "root sits flush against the wing
+    /// tip, no gap, no overlap"). Verify that's actually true to sub-mm
+    /// precision instead of trusting two independently-computed numbers to
+    /// coincidentally agree.
+    #[test]
+    fn wing_tip_touches_aileron_root() {
+        let cfg = FlightModelConfig::default();
+        for (wing_slot, aileron_slot) in [
+            (SurfaceSlot::WingLeft, SurfaceSlot::AileronLeft),
+            (SurfaceSlot::WingRight, SurfaceSlot::AileronRight),
+        ] {
+            let (wing_pos, wing_rot) = surface_rigging(&cfg, wing_slot);
+            let (aileron_pos, _) = surface_rigging(&cfg, aileron_slot);
+
+            // Wing tip = wing center + half the wing's own span, walked along
+            // the same outboard direction the chain used to place the aileron.
+            let outboard = wing_rot * Vec3::Z; // sign varies by side; only used relatively below
+            let wing_tip_candidate_a = wing_pos + outboard * half_span_local(cfg.wing.span);
+            let wing_tip_candidate_b = wing_pos - outboard * half_span_local(cfg.wing.span);
+            // The aileron root is the aileron center minus half its own span,
+            // walked back toward the wing (i.e. toward whichever candidate is closer).
+            let aileron_root_candidate_a = aileron_pos - outboard * half_span_local(cfg.aileron.span);
+            let aileron_root_candidate_b = aileron_pos + outboard * half_span_local(cfg.aileron.span);
+
+            let d_aa = wing_tip_candidate_a.distance(aileron_root_candidate_a);
+            let d_ab = wing_tip_candidate_a.distance(aileron_root_candidate_b);
+            let d_ba = wing_tip_candidate_b.distance(aileron_root_candidate_a);
+            let d_bb = wing_tip_candidate_b.distance(aileron_root_candidate_b);
+            let min_gap = d_aa.min(d_ab).min(d_ba).min(d_bb);
+
+            assert!(
+                min_gap < 0.01,
+                "wing tip and aileron root should coincide (gap {min_gap} local units)"
+            );
+        }
+    }
+
+    /// Dihedral means both wingtips rise above their root — not just "away
+    /// from centerline" but strictly higher in Y. A sign error in the
+    /// dihedral rotation (rotating the wrong way) makes the tip sink instead,
+    /// which reads visually as the wing "yawing into the ground" outboard.
+    #[test]
+    fn wingtips_rise_above_root() {
+        let cfg = FlightModelConfig::default();
+        for slot in [SurfaceSlot::WingLeft, SurfaceSlot::WingRight] {
+            let (center_pos, _) = surface_rigging(&cfg, slot);
+            // Root Y is always `wing_y` (no dihedral rise); center is
+            // `wing_root + outboard*(span/2)` which must have risen above that.
+            let wing_y = cfg.model_offset.y + 20.0;
+            assert!(
+                center_pos.y > wing_y,
+                "wing panel center ({}) should sit above the root height ({wing_y})",
+                center_pos.y,
+            );
+        }
+    }
+
+    /// Left and right sides must be mirror images: same rise, same span
+    /// reach, opposite X sign. A one-sided sign bug (fixed on the left,
+    /// still wrong on the right, or vice versa) would break this while each
+    /// side individually might look plausible in isolation.
+    #[test]
+    fn left_and_right_wings_are_mirrored() {
+        let cfg = FlightModelConfig::default();
+        let (left, _) = surface_rigging(&cfg, SurfaceSlot::WingLeft);
+        let (right, _) = surface_rigging(&cfg, SurfaceSlot::WingRight);
+        assert!((left.y - right.y).abs() < 1e-3, "left/right wing height should match: {} vs {}", left.y, right.y);
+        assert!((left.x + right.x).abs() < 1e-3, "left/right wing X should be mirrored: {} vs {}", left.x, right.x);
+        assert!((left.z - right.z).abs() < 1e-3, "left/right wing Z should match: {} vs {}", left.z, right.z);
     }
 }

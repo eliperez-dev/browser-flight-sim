@@ -360,7 +360,7 @@ pub fn toggle_camera_mode(
 fn free_chase_move_speed(keys: &ButtonInput<KeyCode>) -> f32 {
     const BOTH_SHIFTS_SPEED: f32 = 2000.0;
     if keys.pressed(KeyCode::CapsLock) {
-        return BOTH_SHIFTS_SPEED * 1.5;
+        return BOTH_SHIFTS_SPEED * 2.5;
     }
     match keys.pressed(KeyCode::ShiftLeft) {
         false => 5.0,
@@ -585,7 +585,7 @@ pub fn track_cam_control(
             if mouse_buttons.pressed(MouseButton::Left) && !wants_pointer {
                 for ev in mouse_motion.read() {
                     track.yaw -= ev.delta.x * MOUSE_DRAG_SPEED;
-                    track.pitch = (track.pitch - ev.delta.y * MOUSE_DRAG_SPEED).clamp(-1.4, 1.4);
+                    track.pitch = (track.pitch + ev.delta.y * MOUSE_DRAG_SPEED).clamp(-1.4, 1.4);
                 }
             } else {
                 mouse_motion.clear();

@@ -152,7 +152,7 @@ pub struct WorldGenConfig {
 impl Default for WorldGenConfig {
     fn default() -> Self {
         Self {
-            seed: 3, //rand::random(),
+            seed: 301, //rand::random(),
             horizontal_scale: DEFAULT_HORIZONTAL_SCALE,
             height_scale: DEFAULT_HEIGHT_SCALE,
             render_distance: 30,
@@ -262,8 +262,8 @@ impl WorldGenerator {
                 PerlinLayer::new(seed,       0.08 * hs, 4.5),
                 PerlinLayer::new(seed,       0.21 * hs, 3.5),
                 PerlinLayer::new(seed + 100, 0.47 * hs, 1.75),
-                PerlinLayer::new(seed + 200, 0.93 * hs, 0.50),
-                PerlinLayer::new(seed + 300, 2.13 * hs, 0.40),
+                PerlinLayer::new(seed + 200, 2.93 * hs, 0.50),
+                PerlinLayer::new(seed + 300, 4.13 * hs, 0.40),
             ],
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),

@@ -7,6 +7,36 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
+/// The three states the Gizmos button cycles through on each click (or `G`
+/// press): fully off, wireframe outlines (the original behaviour), and
+/// filled surfaces — which additionally hides the aircraft mesh so the solid
+/// aero-surface panels are readable without the model occluding/cluttering them.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum GizmosMode {
+    #[default]
+    Off,
+    Outline,
+    Filled,
+}
+
+impl GizmosMode {
+    pub fn next(self) -> Self {
+        match self {
+            GizmosMode::Off => GizmosMode::Outline,
+            GizmosMode::Outline => GizmosMode::Filled,
+            GizmosMode::Filled => GizmosMode::Off,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            GizmosMode::Off => "Gizmos",
+            GizmosMode::Outline => "Gizmos: Outline",
+            GizmosMode::Filled => "Gizmos: Filled",
+        }
+    }
+}
+
 /// Tracks which in-game windows are currently open. All systems that draw a
 /// toggleable window read and write their own field here.
 #[derive(Resource)]
@@ -16,7 +46,7 @@ pub struct MenuBar {
     pub handbook: bool,
     pub world: bool,
     pub my_plane: bool,
-    pub gizmos: bool,
+    pub gizmos: GizmosMode,
     pub camera: bool,
     pub multiplayer: bool,
     pub graphics: bool,
@@ -31,7 +61,7 @@ impl Default for MenuBar {
             handbook: true,
             world: false,
             my_plane: false,
-            gizmos: false,
+            gizmos: GizmosMode::Off,
             camera: false,
             multiplayer: false,
             graphics: false,
@@ -84,7 +114,7 @@ pub fn draw_menu_bar(
                         menu_button(ui, "Graphics", &mut bar.graphics);
                         menu_button(ui, "Multiplayer", &mut bar.multiplayer);
                         ui.separator();
-                        menu_button(ui, "Gizmos", &mut bar.gizmos);
+                        gizmos_button(ui, &mut bar.gizmos);
                         ui.separator();
                         menu_button(ui, "Dev Tools", &mut bar.flight_model);
                     });
@@ -116,5 +146,28 @@ fn menu_button(ui: &mut egui::Ui, label: &str, open: &mut bool) {
 
     if ui.add(btn).clicked() {
         *open = !*open;
+    }
+}
+
+/// The Gizmos button: cycles Off -> Outline -> Filled -> Off on click, same
+/// blue-lit/muted styling as `menu_button` but lit for either non-Off state
+/// and labelled with the current mode instead of a static caption.
+fn gizmos_button(ui: &mut egui::Ui, mode: &mut GizmosMode) {
+    let active = *mode != GizmosMode::Off;
+    let rich = egui::RichText::new(mode.label())
+        .size(13.0)
+        .color(if active { ACCENT } else { TEXT_MUTED });
+
+    let btn = egui::Button::new(rich)
+        .fill(if active { ACCENT_BG } else { egui::Color32::TRANSPARENT })
+        .stroke(if active {
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 90, 160))
+        } else {
+            egui::Stroke::NONE
+        })
+        .corner_radius(egui::CornerRadius::from(3u8));
+
+    if ui.add(btn).clicked() {
+        *mode = mode.next();
     }
 }

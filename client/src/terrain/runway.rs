@@ -48,10 +48,10 @@ pub enum AirportKind {
 impl AirportKind {
     fn from_hash(h: u32) -> Self {
         match h % 100 {
-            0..15  => AirportKind::DirtStrip,
-            15..50 => AirportKind::SmallGA,
-            50..60 => AirportKind::LargeCommuter,
-            60..85 => AirportKind::Regional,
+            0..25  => AirportKind::DirtStrip,
+            25..60 => AirportKind::SmallGA,
+            60..75 => AirportKind::LargeCommuter,
+            75..85 => AirportKind::Regional,
             _       => AirportKind::Hub,
         }
     }

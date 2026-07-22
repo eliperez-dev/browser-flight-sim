@@ -4,7 +4,7 @@ use avian3d::prelude::{
 };
 use bevy::{
     asset::AssetMetaCheck,
-    camera::RenderTarget,
+    camera::{CameraUpdateSystems, RenderTarget},
     diagnostic::FrameTimeDiagnosticsPlugin,
     image::ImageSampler,
     prelude::*,
@@ -23,8 +23,11 @@ use crate::debug_tools::debug_flight_menu::DebugFlightMenuPlugin;
 use crate::debug_tools::debug_hud::DebugHud;
 use crate::fog::FogPlugin;
 use crate::water::WaterPlugin;
-use crate::plane::{Airplane, PlaneVisual, Propeller, spin_propeller, wing_panel_rotation};
-use crate::debug_tools::debug_gizmos::{GizmosVisible, draw_aero_gizmos, draw_light_gizmos, setup_gizmo_config, toggle_gizmos};
+use crate::plane::{Airplane, PlaneVisual, Propeller, spin_propeller};
+use crate::debug_tools::debug_gizmos::{
+    GizmosVisible, apply_gizmos_mesh_visibility, draw_aero_gizmos, draw_light_gizmos,
+    ensure_filled_surface_meshes, setup_gizmo_config, toggle_gizmos, update_filled_surface_meshes,
+};
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
 use crate::physics::aircraft_physics::apply_aero_forces;
 use crate::physics::airplane_controller::{airplane_controller, flight_assist};
@@ -138,12 +141,17 @@ fn main() {
                 .run_if(|t: Res<Time<Physics>>| !t.is_paused()),
         )
         .add_systems(Update, (
+            toggle_gizmos,
+            apply_gizmos_mesh_visibility.after(toggle_gizmos),
+            ensure_filled_surface_meshes.after(toggle_gizmos),
+            update_filled_surface_meshes.after(ensure_filled_surface_meshes),
+        ))
+        .add_systems(Update, (
             toggle_camera_mode,
             toggle_fullscreen_hotkey,
             fixed_cam_hotkeys,
             react_to_crash,
             reset_on_crash_key,
-            toggle_gizmos,
             toggle_pause,
             free_cam_control,
             update_fps,
@@ -160,11 +168,14 @@ fn main() {
         // Camera runs before TransformPropagate so its GlobalTransform is current
         // by the time EguiPrimaryContextPass projects world positions to screen.
         // EguiPostUpdateSet::EndPass (which runs EguiPrimaryContextPass) is also
-        // ordered after TransformPropagate to guarantee the label projection matches
-        // the same-frame GlobalTransform that the 3D stalk uses.
+        // ordered after TransformPropagate and CameraUpdateSystems (Bevy's own
+        // camera_system, which recomputes the projection/viewport matrices) to
+        // guarantee the label projection matches the same-frame camera state —
+        // otherwise world_to_viewport uses last frame's rotation, producing an
+        // angular error that's invisible up close but grows with distance.
         .add_systems(PostUpdate, (track_cam_control, chase_cam_control, fixed_cam_control).before(TransformSystems::Propagate))
         .add_systems(PostUpdate, (draw_aero_gizmos, draw_light_gizmos).after(TransformSystems::Propagate))
-        .configure_sets(PostUpdate, EguiPostUpdateSet::EndPass.after(TransformSystems::Propagate))
+        .configure_sets(PostUpdate, EguiPostUpdateSet::EndPass.after(TransformSystems::Propagate).after(CameraUpdateSystems))
         .run();
 }
 
@@ -234,6 +245,7 @@ fn apply_config_to_entities(
         damping.0 = cfg.angular_damping;
     }
     for (mut surface, mut tf, is_vertical_fin) in &mut surface_q {
+        let is_right = tf.translation.x > 0.0;
         let new_config = match (surface.is_control_surface, surface.input_type) {
             (true, ControlInputType::Flap)  => &cfg.wing,
             (true, ControlInputType::Roll)  => &cfg.aileron,
@@ -243,13 +255,23 @@ fn apply_config_to_entities(
             (false, _)                      => &cfg.body_lift,
         };
         surface.config = new_config.clone();
-        // Re-apply the wing rigging incidence live to the main-wing (Flap) and
-        // aileron (Roll) panels. Right-side panels (X > 0) use a negative dihedral
-        // sign so their outboard (+X) tip rises, matching the left-side geometry.
-        if matches!(surface.input_type, ControlInputType::Flap | ControlInputType::Roll) {
-            let dihedral_sign = if tf.translation.x >= 0.0 { -1.0 } else { 1.0 };
-            tf.rotation = wing_panel_rotation(cfg.wing_incidence, dihedral_sign);
-        }
+
+        // Resync position + rotation from `surface_rigging` every time the
+        // config changes (not just at spawn), so retuning `model_offset`,
+        // span, or incidence in the debug menu keeps every surface chained
+        // to its neighbour instead of freezing at spawn-time position.
+        use crate::plane::SurfaceSlot;
+        let slot = match (surface.is_control_surface, surface.input_type, is_vertical_fin) {
+            (true, ControlInputType::Flap, _)  => if is_right { SurfaceSlot::WingRight } else { SurfaceSlot::WingLeft },
+            (true, ControlInputType::Roll, _)  => if is_right { SurfaceSlot::AileronRight } else { SurfaceSlot::AileronLeft },
+            (true, ControlInputType::Pitch, _) => SurfaceSlot::Elevator,
+            (true, ControlInputType::Yaw, _)   => SurfaceSlot::Rudder,
+            (false, _, true)                   => SurfaceSlot::VerticalFin,
+            (false, _, false)                  => if is_right { SurfaceSlot::BodyLiftRight } else { SurfaceSlot::BodyLiftLeft },
+        };
+        let (pos, rot) = crate::plane::surface_rigging(&cfg, slot);
+        tf.translation = pos;
+        tf.rotation = rot;
     }
 }
 
