@@ -18,7 +18,7 @@ use world::Registry;
 /// same terrain locally from this, so it's the only "world data" that ever
 /// needs to cross the wire for that world; player-created worlds get their
 /// own seed from the `/create` request instead.
-const DEFAULT_WORLD_SEED: u32 = 301;
+const DEFAULT_WORLD_SEED: u32 = 3;
 
 #[derive(Clone)]
 struct AppState {

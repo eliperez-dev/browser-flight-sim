@@ -38,6 +38,12 @@ const LOCAL_MODEL_ID: &str = "low-poly-airplane";
 /// rather than the `http://127.0.0.1:7777` used for local dev.
 pub const DEFAULT_MASTER_HTTP: &str = "https://browser-flight-sim-server-6kxx5.ondigitalocean.app";
 pub const DEFAULT_MASTER_WS: &str = "wss://browser-flight-sim-server-6kxx5.ondigitalocean.app";
+/// Local dev target — a `cargo run -p server` instance on its default port.
+/// Debug builds default here instead of prod so the Multiplayer tab's
+/// `/directory` fetch isn't rejected by the deployed server's `ALLOWED_ORIGIN`
+/// CORS policy, which only allows the real portfolio origin.
+const DEV_MASTER_HTTP: &str = "http://127.0.0.1:7777";
+const DEV_MASTER_WS: &str = "ws://127.0.0.1:7777";
 const DEFAULT_SERVER_ID: &str = "default";
 
 /// The master server the directory/create HTTP calls target. Changing this
@@ -51,9 +57,16 @@ pub struct MasterServer {
 
 impl Default for MasterServer {
     fn default() -> Self {
-        Self {
-            http_url: DEFAULT_MASTER_HTTP.to_string(),
-            ws_url: DEFAULT_MASTER_WS.to_string(),
+        if cfg!(debug_assertions) {
+            Self {
+                http_url: DEV_MASTER_HTTP.to_string(),
+                ws_url: DEV_MASTER_WS.to_string(),
+            }
+        } else {
+            Self {
+                http_url: DEFAULT_MASTER_HTTP.to_string(),
+                ws_url: DEFAULT_MASTER_WS.to_string(),
+            }
         }
     }
 }

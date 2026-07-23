@@ -217,6 +217,36 @@ fn draw_menu(
                             biome_controls(ui, "Forest (hot, wet)", &mut w.forest);
                         });
 
+                    // --- Terrain noise octaves (height field) -------------------
+                    egui::CollapsingHeader::new("Terrain noise")
+                        .id_salt("worldgen_octaves")
+                        .show(ui, |ui| {
+                            ui.label("Each octave's frequency = Horizontal scale × mult (above)");
+                            for (i, o) in w.terrain_octaves.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("L{i}"));
+                                    ui.add(egui::Slider::new(&mut o.horizontal_scale_mult, 0.02..=4.0)
+                                        .text("freq mult")
+                                        .logarithmic(true));
+                                    ui.add(egui::Slider::new(&mut o.vertical_scale, 0.0..=10.0)
+                                        .text("amplitude"));
+                                });
+                            }
+                        });
+
+                    // --- Domain warp (bends contours into organic curves) -------
+                    egui::CollapsingHeader::new("Domain warp")
+                        .id_salt("worldgen_warp")
+                        .show(ui, |ui| {
+                            ui.label("World-metre displacement applied before sampling each field");
+                            ui.add(egui::Slider::new(&mut w.warp_strength.terrain, 0.0..=1000.0)
+                                .text("Terrain (broad octaves)"));
+                            ui.add(egui::Slider::new(&mut w.warp_strength.climate, 0.0..=3000.0)
+                                .text("Climate (biome borders)"));
+                            ui.add(egui::Slider::new(&mut w.warp_strength.continent, 0.0..=10000.0)
+                                .text("Continent (coastlines)"));
+                        });
+
                     // --- Oceans (geography-driven, independent of climate) ------
                     egui::CollapsingHeader::new("Oceans")
                         .id_salt("worldgen_oceans")

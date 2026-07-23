@@ -7,14 +7,17 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-/// The three states the Gizmos button cycles through on each click (or `G`
-/// press): fully off, wireframe outlines (the original behaviour), and
-/// filled surfaces — which additionally hides the aircraft mesh so the solid
+/// The four states the Gizmos button cycles through on each click (or `G`
+/// press): fully off; whole-aircraft vectors only (velocity, thrust, gravity,
+/// CoM, aerodynamic center — no per-surface panels); wireframe outlines (the
+/// original behaviour, vectors + per-surface panels/force/AoA); and filled
+/// surfaces — which additionally hides the aircraft mesh so the solid
 /// aero-surface panels are readable without the model occluding/cluttering them.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum GizmosMode {
     #[default]
     Off,
+    Vectors,
     Outline,
     Filled,
 }
@@ -22,7 +25,8 @@ pub enum GizmosMode {
 impl GizmosMode {
     pub fn next(self) -> Self {
         match self {
-            GizmosMode::Off => GizmosMode::Outline,
+            GizmosMode::Off => GizmosMode::Vectors,
+            GizmosMode::Vectors => GizmosMode::Outline,
             GizmosMode::Outline => GizmosMode::Filled,
             GizmosMode::Filled => GizmosMode::Off,
         }
@@ -31,6 +35,7 @@ impl GizmosMode {
     fn label(self) -> &'static str {
         match self {
             GizmosMode::Off => "Gizmos",
+            GizmosMode::Vectors => "Gizmos: Vectors",
             GizmosMode::Outline => "Gizmos: Outline",
             GizmosMode::Filled => "Gizmos: Filled",
         }

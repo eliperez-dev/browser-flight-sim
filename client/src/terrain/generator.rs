@@ -92,6 +92,32 @@ pub struct BiomeShape {
     pub abundance: f32,
 }
 
+/// One octave of the terrain height noise: `horizontal_scale_mult` multiplies
+/// the global `WorldGenConfig::horizontal_scale` to get this layer's frequency
+/// (matching the `N * hs` pattern the layers were hardcoded with), and
+/// `vertical_scale` is its raw amplitude (pre-`height_scale`). Ratios between
+/// octaves are deliberately non-round so they don't phase-lock into a
+/// repeating lattice — keep that in mind when tuning.
+#[derive(Clone, Copy, PartialEq)]
+pub struct TerrainOctave {
+    pub horizontal_scale_mult: f32,
+    pub vertical_scale: f32,
+}
+
+/// Domain-warp strengths (world metres), one per field the warp is applied
+/// to. Larger = more visible bending of that field's contours; should be a
+/// good fraction of the feature wavelength being warped or the effect is
+/// invisible. See [`WorldGenerator::warp`].
+#[derive(Clone, Copy, PartialEq)]
+pub struct WarpStrengths {
+    /// Applied to climate (temperature/humidity) sampling.
+    pub climate: f32,
+    /// Applied to the continentalness (land/sea) mask.
+    pub continent: f32,
+    /// Applied to the two broadest terrain-height octaves.
+    pub terrain: f32,
+}
+
 /// Editable world-generation settings, surfaced as debug sliders (F3 panel).
 /// Mutating this resource triggers a debounced world rebuild — see
 /// [`super::streaming::regenerate_terrain`]. `PartialEq` lets that system detect
@@ -147,6 +173,12 @@ pub struct WorldGenConfig {
     pub latitude_strength: f32,
     /// Latitude band wavelength (m); see [`DEFAULT_LATITUDE_BAND`].
     pub latitude_band: f32,
+    /// The 5 terrain-height noise octaves; see [`TerrainOctave`]. Always the
+    /// same length as the generator's `terrain_layers` (enforced by
+    /// [`WorldGenerator::from_config`], which zips them together).
+    pub terrain_octaves: [TerrainOctave; 5],
+    /// Domain-warp strengths; see [`WarpStrengths`].
+    pub warp_strength: WarpStrengths,
 }
 
 impl Default for WorldGenConfig {
@@ -182,6 +214,14 @@ impl Default for WorldGenConfig {
             temp_lapse: DEFAULT_TEMP_LAPSE,
             latitude_strength: DEFAULT_LATITUDE_STRENGTH,
             latitude_band: DEFAULT_LATITUDE_BAND,
+            terrain_octaves: [
+                TerrainOctave { horizontal_scale_mult: 0.08, vertical_scale: 4.5 },
+                TerrainOctave { horizontal_scale_mult: 0.21, vertical_scale: 3.5 },
+                TerrainOctave { horizontal_scale_mult: 0.47, vertical_scale: 1.75 },
+                TerrainOctave { horizontal_scale_mult: 0.93, vertical_scale: 0.50 },
+                TerrainOctave { horizontal_scale_mult: 2.13, vertical_scale: 0.40 },
+            ],
+            warp_strength: WarpStrengths { climate: 800.0, continent: 3000.0, terrain: 200.0 },
         }
     }
 }
@@ -213,6 +253,7 @@ pub struct WorldGenerator {
     temp_lapse: f32,
     latitude_strength: f32,
     latitude_band: f32,
+    warp_strength: WarpStrengths,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
@@ -255,16 +296,17 @@ impl WorldGenerator {
             temp_lapse: cfg.temp_lapse,
             latitude_strength: cfg.latitude_strength,
             latitude_band: cfg.latitude_band.max(1.0),
+            warp_strength: cfg.warp_strength,
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             // Ratios between octaves are deliberately non-round (not clean
             // doublings) so they don't phase-lock into a repeating lattice.
-            terrain_layers: vec![
-                PerlinLayer::new(seed,       0.08 * hs, 4.5),
-                PerlinLayer::new(seed,       0.21 * hs, 3.5),
-                PerlinLayer::new(seed + 100, 0.47 * hs, 1.75),
-                PerlinLayer::new(seed + 200, 2.93 * hs, 0.50),
-                PerlinLayer::new(seed + 300, 4.13 * hs, 0.40),
-            ],
+            // Seed offsets mirror the original hardcoded layers (the first
+            // two share the base seed; the rest step by 100) so existing
+            // worlds don't reshuffle just from this becoming configurable.
+            terrain_layers: cfg.terrain_octaves.iter().enumerate().map(|(i, o)| {
+                let layer_seed = seed + i.saturating_sub(1) as u32 * 100;
+                PerlinLayer::new(layer_seed, o.horizontal_scale_mult * hs, o.vertical_scale)
+            }).collect(),
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
@@ -313,7 +355,7 @@ impl WorldGenerator {
     fn climate_and_continent(&self, x: f32, z: f32) -> (f32, f32, f32) {
         // Warp the sample point before reading climate so biome borders bend
         // into organic curves instead of following the underlying Perlin grid.
-        let (wx, wz) = self.warp(x, z, 800.0);
+        let (wx, wz) = self.warp(x, z, self.warp_strength.climate);
         let raw_temp = self.temperature_layer.get(wx, wz);
         let raw_hum = self.humidity_layer.get(wx, wz);
         let temp = ((raw_temp / self.temperature_layer.vertical_scale) + 1.0) * 0.5;
@@ -341,7 +383,7 @@ impl WorldGenerator {
     fn continentalness(&self, x: f32, z: f32) -> f32 {
         // Continents have a much longer wavelength than climate, so they need a
         // proportionally larger warp to visibly bend their coastlines.
-        let (wx, wz) = self.warp(x, z, 3000.0);
+        let (wx, wz) = self.warp(x, z, self.warp_strength.continent);
         let raw = self.continent_layer.get(wx, wz);
         (((raw / self.continent_layer.vertical_scale) + 1.0) * 0.5).clamp(0.0, 1.0)
     }
@@ -396,7 +438,7 @@ impl WorldGenerator {
         // Warp only the two broadest octaves: their long wavelength is what
         // reads as a "grid" of ridges/valleys at a glance, and warping them
         // bends that into organic curves without smearing fine detail.
-        let (wx, wz) = self.warp(x, z, 200.0);
+        let (wx, wz) = self.warp(x, z, self.warp_strength.terrain);
         let mut base = 0.0;
         for (i, layer) in self.terrain_layers.iter().enumerate() {
             base += if i < 2 { layer.get(wx, wz) } else { layer.get(x, z) };

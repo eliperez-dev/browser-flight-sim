@@ -289,6 +289,13 @@ pub fn draw_aero_gizmos(
     let mut f_pert = Vec3::ZERO;
     let mut m_pert = Vec3::ZERO;
 
+    // Vectors mode shows only whole-aircraft arrows/markers (already drawn
+    // above) plus the aerodynamic center below — no per-surface panels, force
+    // arrows, or AoA indicators. The per-surface force/moment sampling below
+    // still needs to run in every non-Off mode, though, since the AC marker
+    // depends on it.
+    let show_surfaces = visible.0 != GizmosMode::Vectors;
+
     for child in children {
         let Ok((surface, local_tf)) = surface_q.get(*child) else {
             continue;
@@ -302,76 +309,77 @@ pub fn draw_aero_gizmos(
         // Surface geometry rectangle: span along local Z, chord along local X.
         // Half-extents in world space.
         let c = &surface.config;
-        let hs = c.span * 0.5; // half-span
         let hc = c.chord * 0.5; // half-chord
-        let span_dir = rot * Vec3::Z;  // local Z = span
-        let chord_dir = rot * Vec3::X; // local X = chord
-        let surface_color = if surface.is_control_surface {
-            Color::srgba(0.3, 0.9, 1.0, 0.8)
-        } else {
-            Color::srgba(0.2, 1.0, 0.4, 0.8)
-        };
-        // Panel outline. Leading edge is +chord_dir (nose-ward), trailing edge
-        // is -chord_dir. For control surfaces with a flap, the trailing
-        // `flap_fraction` of the chord is drawn as its own hinged quad that
-        // rotates about the hinge line by `flap_angle`, so the deflection is
-        // shown directly on the panel geometry instead of a separate pointer
-        // that can visually disagree with the panel's own orientation.
-        let panel_up = rot * Vec3::Y;
-        let has_flap = surface.is_control_surface && c.flap_fraction > 0.0;
-        // Hinge line sits `flap_fraction` of the chord back from the leading
-        // edge — i.e. the FIXED part is `(1 - flap_fraction)` of the chord,
-        // matching `ensure_filled_surface_meshes`'s `fixed_chord` (this had
-        // been using `flap_fraction` directly, giving the fixed part only
-        // `flap_fraction` of the chord instead of the rest of it).
-        let hinge_x = if has_flap { hc - c.chord * (1.0 - c.flap_fraction) } else { -hc };
 
-        // Fixed part: leading edge to the hinge line (the whole panel if no flap).
-        let fixed_corners = [
-            pos + span_dir * hs + chord_dir * hc,
-            pos - span_dir * hs + chord_dir * hc,
-            pos - span_dir * hs + chord_dir * hinge_x,
-            pos + span_dir * hs + chord_dir * hinge_x,
-        ];
-        for i in 0..4 {
-            gizmos.line(fixed_corners[i], fixed_corners[(i + 1) % 4], surface_color);
-        }
-        gizmos.line(fixed_corners[0], fixed_corners[2], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
-        gizmos.line(fixed_corners[1], fixed_corners[3], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
-
-        // Hinged flap part: hinge line back to the trailing edge, rotated
-        // about the hinge by `flap_angle`. Positive flap_angle = more lift =
-        // trailing edge deflects down (toward -panel_up), matching the sign
-        // convention `calculate_forces` uses for zero-lift AoA.
-        if has_flap {
-            let flap_color = if surface.flap_angle.abs() > 0.005 {
-                Color::srgb(1.0, 0.55, 0.05)
+        if show_surfaces {
+            let hs = c.span * 0.5; // half-span
+            let span_dir = rot * Vec3::Z;  // local Z = span
+            let chord_dir = rot * Vec3::X; // local X = chord
+            let surface_color = if surface.is_control_surface {
+                Color::srgba(0.3, 0.9, 1.0, 0.8)
             } else {
-                surface_color
+                Color::srgba(0.2, 1.0, 0.4, 0.8)
             };
-            let flap_chord = c.chord * c.flap_fraction;
-            let deflect_dir = -chord_dir * surface.flap_angle.cos() - panel_up * surface.flap_angle.sin();
-            let hinge_l = pos + span_dir * hs + chord_dir * hinge_x;
-            let hinge_r = pos - span_dir * hs + chord_dir * hinge_x;
-            let trail_l = hinge_l + deflect_dir * flap_chord;
-            let trail_r = hinge_r + deflect_dir * flap_chord;
-            gizmos.line(hinge_l, hinge_r, flap_color);
-            gizmos.line(hinge_l, trail_l, flap_color);
-            gizmos.line(trail_l, trail_r, flap_color);
-            gizmos.line(trail_r, hinge_r, flap_color);
-            gizmos.line(hinge_l, trail_r, Color::srgba(flap_color.to_srgba().red, flap_color.to_srgba().green, flap_color.to_srgba().blue, 0.3));
-            gizmos.line(hinge_r, trail_l, Color::srgba(flap_color.to_srgba().red, flap_color.to_srgba().green, flap_color.to_srgba().blue, 0.3));
+            // Panel outline. Leading edge is +chord_dir (nose-ward), trailing edge
+            // is -chord_dir. For control surfaces with a flap, the trailing
+            // `flap_fraction` of the chord is drawn as its own hinged quad that
+            // rotates about the hinge line by `flap_angle`, so the deflection is
+            // shown directly on the panel geometry instead of a separate pointer
+            // that can visually disagree with the panel's own orientation.
+            let panel_up = rot * Vec3::Y;
+            let has_flap = surface.is_control_surface && c.flap_fraction > 0.0;
+            // Hinge line sits `flap_fraction` of the chord back from the leading
+            // edge — i.e. the FIXED part is `(1 - flap_fraction)` of the chord,
+            // matching `ensure_filled_surface_meshes`'s `fixed_chord` (this had
+            // been using `flap_fraction` directly, giving the fixed part only
+            // `flap_fraction` of the chord instead of the rest of it).
+            let hinge_x = if has_flap { hc - c.chord * (1.0 - c.flap_fraction) } else { -hc };
+
+            // Fixed part: leading edge to the hinge line (the whole panel if no flap).
+            let fixed_corners = [
+                pos + span_dir * hs + chord_dir * hc,
+                pos - span_dir * hs + chord_dir * hc,
+                pos - span_dir * hs + chord_dir * hinge_x,
+                pos + span_dir * hs + chord_dir * hinge_x,
+            ];
+            for i in 0..4 {
+                gizmos.line(fixed_corners[i], fixed_corners[(i + 1) % 4], surface_color);
+            }
+            gizmos.line(fixed_corners[0], fixed_corners[2], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
+            gizmos.line(fixed_corners[1], fixed_corners[3], Color::srgba(surface_color.to_srgba().red, surface_color.to_srgba().green, surface_color.to_srgba().blue, 0.3));
+
+            // Hinged flap part: hinge line back to the trailing edge, rotated
+            // about the hinge by `flap_angle`. Positive flap_angle = more lift =
+            // trailing edge deflects down (toward -panel_up), matching the sign
+            // convention `calculate_forces` uses for zero-lift AoA.
+            if has_flap {
+                let flap_color = if surface.flap_angle.abs() > 0.005 {
+                    Color::srgb(1.0, 0.55, 0.05)
+                } else {
+                    surface_color
+                };
+                let flap_chord = c.chord * c.flap_fraction;
+                let deflect_dir = -chord_dir * surface.flap_angle.cos() - panel_up * surface.flap_angle.sin();
+                let hinge_l = pos + span_dir * hs + chord_dir * hinge_x;
+                let hinge_r = pos - span_dir * hs + chord_dir * hinge_x;
+                let trail_l = hinge_l + deflect_dir * flap_chord;
+                let trail_r = hinge_r + deflect_dir * flap_chord;
+                gizmos.line(hinge_l, hinge_r, flap_color);
+                gizmos.line(hinge_l, trail_l, flap_color);
+                gizmos.line(trail_l, trail_r, flap_color);
+                gizmos.line(trail_r, hinge_r, flap_color);
+                gizmos.line(hinge_l, trail_r, Color::srgba(flap_color.to_srgba().red, flap_color.to_srgba().green, flap_color.to_srgba().blue, 0.3));
+                gizmos.line(hinge_r, trail_l, Color::srgba(flap_color.to_srgba().red, flap_color.to_srgba().green, flap_color.to_srgba().blue, 0.3));
+            }
         }
 
         // Actual aerodynamic force this surface produces right now.
         let rel_pos = pos - com_world;
         let world_air_vel = -vel - ang_vel.0.cross(rel_pos);
         let ge = ground_effect_factor(pos.y - GROUND_Y, cfg.ground_effect_span, cfg.ground_effect_strength);
-        let force = surface
-            .calculate_forces(world_air_vel, cfg.air_density, rel_pos, rot, ge)
-            .force;
 
-        // AC sampling
+        // AC sampling — needed in every non-Off mode, since Vectors mode
+        // still shows the aerodynamic center marker.
         let fb = surface.calculate_forces(base_wind, cfg.air_density, rel_pos, rot, ge).force;
         let fp = surface.calculate_forces(pert_wind, cfg.air_density, rel_pos, rot, ge).force;
         f_base += fb;
@@ -379,23 +387,29 @@ pub fn draw_aero_gizmos(
         f_pert += fp;
         m_pert += rel_pos.cross(fp);
 
-        // Force arrow (lift+drag resultant)
-        let arrow_len = (force.length() * FORCE_TO_M).min(6.0);
-        let lift_color = if surface.is_control_surface {
-            Color::srgb(0.4, 1.0, 0.4)
-        } else {
-            Color::srgb(0.0, 0.8, 0.0)
-        };
-        gizmos.arrow(pos, pos + force.normalize_or_zero() * arrow_len, lift_color);
+        if show_surfaces {
+            let force = surface
+                .calculate_forces(world_air_vel, cfg.air_density, rel_pos, rot, ge)
+                .force;
 
-        // AoA indicator: only shown when actually flying.
-        if vel.length() > 5.0 {
-            let airflow_dir = world_air_vel.normalize_or_zero();
-            let chord_len = hc.min(1.2) * 2.2;
-            gizmos.arrow(pos, pos + airflow_dir * chord_len * 1.3, Color::srgba(1.0, 1.0, 1.0, 0.7));
+            // Force arrow (lift+drag resultant)
+            let arrow_len = (force.length() * FORCE_TO_M).min(6.0);
+            let lift_color = if surface.is_control_surface {
+                Color::srgb(0.4, 1.0, 0.4)
+            } else {
+                Color::srgb(0.0, 0.8, 0.0)
+            };
+            gizmos.arrow(pos, pos + force.normalize_or_zero() * arrow_len, lift_color);
+
+            // AoA indicator: only shown when actually flying.
+            if vel.length() > 5.0 {
+                let airflow_dir = world_air_vel.normalize_or_zero();
+                let chord_len = hc.min(1.2) * 2.2;
+                gizmos.arrow(pos, pos + airflow_dir * chord_len * 1.3, Color::srgba(1.0, 1.0, 1.0, 0.7));
+            }
+
+            gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.15));
         }
-
-        gizmos.line(com_world, pos, Color::srgba(1.0, 1.0, 1.0, 0.15));
     }
 
     // Draw the aerodynamic center once there's a meaningful lift-curve response
