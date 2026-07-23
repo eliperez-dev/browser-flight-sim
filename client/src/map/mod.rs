@@ -361,7 +361,9 @@ fn draw_map(
         .open(&mut bar.map)
         .order(egui::Order::Tooltip)
         .default_pos(egui::pos2(16.0, 48.0))
-        .resizable(false)
+        .default_size(egui::vec2(340.0, 380.0))
+        .min_size(egui::vec2(220.0, 260.0))
+        .resizable(true)
         .show(ctx, |ui| {
             // Layer tabs + the track-plane toggle. Tabs write the active layer (a
             // change triggers the deferred rebake via `view_changed`). The toggle
@@ -382,8 +384,9 @@ fn draw_map(
             });
             ui.small("F4 close · drag pan · scroll zoom · click airport");
 
+            let side = ui.available_width().min(ui.available_height());
             let (response, painter) =
-                ui.allocate_painter(egui::vec2(340.0, 340.0), egui::Sense::click_and_drag());
+                ui.allocate_painter(egui::vec2(side, side), egui::Sense::click_and_drag());
             let rect = response.rect;
             let view = View { rect, center: state.center, half: half_span(state.world_per_texel) };
 

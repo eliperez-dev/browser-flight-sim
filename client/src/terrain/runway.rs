@@ -131,6 +131,14 @@ const RUNWAY_JITTER: f32 = 0.65;
 const WATER_LEVEL: f32 = 0.0;
 const RUNWAY_MIN_ABOVE_WATER: f32 = 3.0;
 
+/// Max natural-terrain elevation swing (metres) allowed across a runway's own
+/// footprint before the site is rejected as too rugged. Grading always makes the
+/// strip dead flat regardless of what's underneath, so without this check a
+/// runway can land across a ridge or cliff face and carve an ugly gouge into the
+/// mountainside. Comparable to a real siting requirement (max grade over the
+/// touchdown zone); tuned loose enough to still allow gentle hills.
+const RUNWAY_MAX_RELIEF: f32 = 100.0;
+
 /// One placed runway strip. `elevation` is the world-Y its surface sits at.
 #[derive(Clone, Copy)]
 pub struct RunwayInstance {
@@ -307,6 +315,49 @@ const LARGE_LENGTH: f32 = 3200.0;
 const TWIN_OFFSET: f32 = 70.0;
 const HUB_OFFSET: f32 = 180.0;
 
+/// Samples natural (unflattened) terrain height at the corners and edge
+/// midpoints of a runway's own footprint (in its heading-aligned frame) and
+/// rejects the site if the spread exceeds [`RUNWAY_MAX_RELIEF`]. Cheap: a
+/// handful of closed-form noise evaluations, same cost class as the existing
+/// water-level check.
+fn site_is_flat_enough(
+    generator: &WorldGenerator,
+    x: f32,
+    z: f32,
+    heading: f32,
+    length: f32,
+    width: f32,
+    center_elevation: f32,
+) -> bool {
+    let (s, c) = heading.sin_cos();
+    let half_l = length * 0.5;
+    let half_w = width * 0.5;
+
+    // Local-frame sample offsets: both ends, both side edges at both ends, and
+    // the midpoint of each long edge — enough to catch a cross-slope, a
+    // lengthwise grade, or a diagonal ridge cutting through the strip.
+    let offsets: [(f32, f32); 6] = [
+        (-half_l, -half_w),
+        (-half_l, half_w),
+        (half_l, -half_w),
+        (half_l, half_w),
+        (0.0, -half_w),
+        (0.0, half_w),
+    ];
+
+    let mut min_h = center_elevation;
+    let mut max_h = center_elevation;
+    for (lx, lz) in offsets {
+        let wx = x + lx * c + lz * s;
+        let wz = z - lx * s + lz * c;
+        let h = generator.natural_height(wx, wz);
+        min_h = min_h.min(h);
+        max_h = max_h.max(h);
+    }
+
+    (max_h - min_h) <= RUNWAY_MAX_RELIEF
+}
+
 /// Returns all runway strips for grid cell `(gx, gz)`. Water cells return empty.
 /// Cell (0,0) is always a small-GA strip at heading 0 (the aircraft spawn point).
 fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayInstance> {
@@ -340,6 +391,22 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
 
     let heading = hash01(h ^ 0x2545_f491) * std::f32::consts::PI;
     let kind = AirportKind::from_hash(hash_u32(h ^ 0x1a2b_3c4d) % 100);
+
+    // Reject sites where the ground under the strip's own footprint is too
+    // uneven — the strip's *length* determines the footprint tested, so a long
+    // commuter runway is held to the same absolute grade as a short dirt strip
+    // scaled to its own extent (a short strip on a steep local slope covers
+    // less rise than a long one at the same grade).
+    let (test_len, test_width) = match kind {
+        AirportKind::DirtStrip     => (DIRT_MAX_LEN, DIRT_WIDTH),
+        AirportKind::SmallGA       => (RUNWAY_LENGTH, RUNWAY_WIDTH),
+        AirportKind::LargeCommuter => (LARGE_LENGTH, LARGE_WIDTH),
+        AirportKind::Regional      => (RUNWAY_LENGTH, RUNWAY_WIDTH + TWIN_OFFSET),
+        AirportKind::Hub           => (LARGE_LENGTH, LARGE_WIDTH + HUB_OFFSET),
+    };
+    if !site_is_flat_enough(generator, x, z, heading, test_len, test_width, elevation) {
+        return vec![];
+    }
 
     match kind {
         AirportKind::DirtStrip => {

@@ -85,10 +85,25 @@ pub const DEFAULT_LATITUDE_BAND: f32 = 60_000.0;
 /// single biome instead of a uniform band of hills. See [`WorldGenerator::shape_raw`].
 pub const DEFAULT_OROGENY_STRENGTH: f32 = 1.5;
 
-/// Default orogeny wavelength (m): world distance from one uplift peak to the
-/// next. Should be much larger than terrain-octave wavelengths so it reads as
-/// "this whole region is mountainous" rather than adding more small bumps.
-pub const DEFAULT_OROGENY_SCALE: f32 = 40_000.0;
+/// Default plateau strength: how strongly high-uplift terrain (see
+/// [`DEFAULT_OROGENY_STRENGTH`]) gets terraced into flat-topped mesa shelves
+/// instead of smoothly sloped peaks. 0 disables (pure smooth terrain, the old
+/// behaviour). Reuses the orogeny mask rather than adding another field —
+/// real mesas/plateaus are an uplift phenomenon (flat-lying rock pushed up
+/// wholesale), so tying them to the same mask that drives mountain-building
+/// is both cheaper and more geologically sound than an independent noise.
+pub const DEFAULT_PLATEAU_STRENGTH: f32 = 0.4;
+
+/// Default plateau step height (raw units, pre-`height_scale`): vertical
+/// distance between terraces. Smaller = more, closer-spaced shelves.
+pub const DEFAULT_PLATEAU_STEP: f32 = 0.6;
+
+/// Default orogeny frequency multiplier on the continent field (see
+/// [`WorldGenerator::from_config`]): 1.0 makes uplift regions track the
+/// coastline 1:1, higher values carve finer/more numerous ranges within
+/// continents. Kept above 1 so mountain ranges read as smaller-scale
+/// structure nested inside the (slower) continent shape, not a copy of it.
+pub const DEFAULT_OROGENY_SCALE: f32 = 3.0;
 
 /// Per-biome terrain shaping: `elevation` is the base offset (raw units, pre-
 /// `height_scale`) the biome sits at, `relief` the amplitude multiplier on the
@@ -180,8 +195,9 @@ pub struct WorldGenConfig {
     /// map along the axis (temperature: colder↔hotter; humidity: drier↔wetter),
     /// `contrast` scales spread around the 0.5 midpoint (>1 = sharper, more
     /// distinct biomes; <1 = everything blends toward the middle). Defaults
-    /// (bias 0, contrast 1) leave the raw Perlin climate untouched. Humidity also
-    /// gates ocean coverage, so a wetter bias adds sea.
+    /// (bias 0, contrast 1) leave the raw Perlin climate untouched. Ocean
+    /// coverage is separate — see `sea_level_threshold` — and does not depend
+    /// on humidity.
     pub temp_bias: f32,
     pub temp_contrast: f32,
     pub humidity_bias: f32,
@@ -201,8 +217,13 @@ pub struct WorldGenConfig {
     pub warp_strength: WarpStrengths,
     /// Mountain-building strength; see [`DEFAULT_OROGENY_STRENGTH`]. 0 disables.
     pub orogeny_strength: f32,
-    /// Mountain-building wavelength (m); see [`DEFAULT_OROGENY_SCALE`].
+    /// Mountain-building frequency multiplier on the continent field; see
+    /// [`DEFAULT_OROGENY_SCALE`].
     pub orogeny_scale: f32,
+    /// Plateau/mesa terracing strength; see [`DEFAULT_PLATEAU_STRENGTH`]. 0 disables.
+    pub plateau_strength: f32,
+    /// Plateau step height (raw units); see [`DEFAULT_PLATEAU_STEP`].
+    pub plateau_step: f32,
 }
 
 impl Default for WorldGenConfig {
@@ -248,6 +269,8 @@ impl Default for WorldGenConfig {
             warp_strength: WarpStrengths { climate: 800.0, continent: 3000.0, terrain: 200.0 },
             orogeny_strength: DEFAULT_OROGENY_STRENGTH,
             orogeny_scale: DEFAULT_OROGENY_SCALE,
+            plateau_strength: DEFAULT_PLATEAU_STRENGTH,
+            plateau_step: DEFAULT_PLATEAU_STEP,
         }
     }
 }
@@ -281,17 +304,22 @@ pub struct WorldGenerator {
     latitude_band: f32,
     warp_strength: WarpStrengths,
     orogeny_strength: f32,
+    plateau_strength: f32,
+    plateau_step: f32,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
     /// Low-frequency land/sea mask: high = continental interior, low = ocean.
     /// Independent of the climate field — geography decides where water is.
     continent_layer: PerlinLayer,
-    /// Low-frequency mountain-building mask, 0..1: locally boosts relief and
-    /// elevation on top of a biome's baseline so the same biome can carve out
-    /// real mountain ranges in one area and stay rolling hills in another,
-    /// instead of a uniform band of relief everywhere it appears. Independent
-    /// of climate/continent — geology, not weather, decides where peaks rise.
+    /// Mountain-building mask, 0..1: the *same* seeded field as
+    /// `continent_layer` (mountains genuinely correlate with continental
+    /// structure — interior uplift vs. coastal plains) resampled at a higher
+    /// frequency, so uplift regions are large-scale-correlated with geography
+    /// but still vary independently of the coastline at a finer grain. Locally
+    /// boosts relief/elevation on top of a biome's baseline so the same biome
+    /// can carve out real mountain ranges in one area and stay rolling hills
+    /// in another, instead of uniform relief everywhere it appears.
     orogeny_layer: PerlinLayer,
     /// Domain-warp fields: displace (x, z) before every other sample so biome
     /// borders and terrain features follow wobbly, organic curves instead of
@@ -311,6 +339,17 @@ impl WorldGenerator {
         // independent of horizontal_scale (terrain tightness). Bigger size = lower
         // frequency = broader landmasses/oceans (~33 km wavelength at size 1).
         let continent_freq = 0.03 / cfg.continent_size.max(0.05);
+        let continent_layer = PerlinLayer::new(seed + 600, continent_freq, 1.0);
+        // Resample the continent field at a higher frequency (via
+        // `orogeny_scale`, a multiplier on continent_freq) so uplift regions
+        // correlate with continental structure at a glance but still carve
+        // out finer, independent-looking ranges. `offset_salt` shifts the
+        // domain so this doesn't just look like a zoomed copy of the coastline.
+        let orogeny_layer = continent_layer.resampled(
+            continent_freq * cfg.orogeny_scale.max(0.1),
+            1.0,
+            54_321.0,
+        );
         Self {
             seed,
             height_scale: cfg.height_scale,
@@ -331,6 +370,8 @@ impl WorldGenerator {
             latitude_band: cfg.latitude_band.max(1.0),
             warp_strength: cfg.warp_strength,
             orogeny_strength: cfg.orogeny_strength,
+            plateau_strength: cfg.plateau_strength,
+            plateau_step: cfg.plateau_step.max(0.01),
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             // Ratios between octaves are deliberately non-round (not clean
             // doublings) so they don't phase-lock into a repeating lattice.
@@ -345,11 +386,8 @@ impl WorldGenerator {
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
-            continent_layer: PerlinLayer::new(seed + 600, continent_freq, 1.0),
-            // Independent low-frequency field — geology, not climate, decides
-            // where mountain ranges rise within a biome. `horizontal_scale`
-            // here is `1000 / wavelength_m` (see `PerlinLayer::get`).
-            orogeny_layer: PerlinLayer::new(seed + 900, 1000.0 / cfg.orogeny_scale.max(1000.0), 1.0),
+            continent_layer,
+            orogeny_layer,
             // Low-frequency, high-amplitude relative to what they displace so the
             // warp is clearly visible in the climate/continent borders and coarse
             // height features. Frequencies are offset from climate_freq/continent_freq
@@ -535,7 +573,20 @@ impl WorldGenerator {
         let land_relief = land_relief * uplift;
         let elevation = land_elev + (-self.ocean_depth - land_elev) * ocean;
         let relief = land_relief + (OCEAN_RELIEF - land_relief) * ocean;
-        base * relief + elevation
+        let height = base * relief + elevation;
+
+        // Plateau/mesa terracing: blend the smooth height toward a stepped
+        // (quantized) version of itself. Only kicks in on strongly-uplifted
+        // land — mesas are flat-lying rock pushed up wholesale, so gating on
+        // `orogeny` keeps lowlands and oceans smooth and ties plateaus to the
+        // same uplift that makes mountains, rather than terracing everywhere.
+        if self.plateau_strength > 0.0 && ocean < 0.5 {
+            let terraced = (height / self.plateau_step).round() * self.plateau_step;
+            let gate = (orogeny - 0.5).max(0.0) * 2.0 * self.plateau_strength;
+            height + (terraced - height) * gate.min(1.0)
+        } else {
+            height
+        }
     }
 
     /// Normalised per-biome blend weights at the given (already-remapped) climate,
@@ -619,6 +670,21 @@ impl PerlinLayer {
     fn with_ridged(mut self, ridged: bool) -> Self {
         self.ridged = ridged;
         self
+    }
+
+    /// A second view of the same seeded field at a different frequency (and,
+    /// via `offset_salt`, a shifted domain so it doesn't just look like a
+    /// scaled copy of `self`). Used to derive `orogeny_layer` from
+    /// `continent_layer` — genuinely correlated large-scale structure without
+    /// paying for (or reasoning about) an independent noise source.
+    fn resampled(&self, horizontal_scale: f32, vertical_scale: f32, offset_salt: f64) -> Self {
+        Self {
+            perlin: self.perlin,
+            horizontal_scale,
+            vertical_scale,
+            offset: self.offset + offset_salt,
+            ridged: self.ridged,
+        }
     }
 
     fn get(&self, x: f32, z: f32) -> f32 {

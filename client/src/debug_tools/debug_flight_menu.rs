@@ -186,7 +186,7 @@ fn draw_menu(
                             ui.add(egui::Slider::new(&mut w.temp_contrast, 0.0..=4.0)
                                 .text("Temp contrast"));
                             ui.separator();
-                            ui.label("Humidity (dry ↔ wet) — also drives ocean amount");
+                            ui.label("Humidity (dry ↔ wet)");
                             ui.add(egui::Slider::new(&mut w.humidity_bias, -0.5..=0.5)
                                 .text("Humidity bias"));
                             ui.add(egui::Slider::new(&mut w.humidity_contrast, 0.0..=4.0)
@@ -253,12 +253,18 @@ fn draw_menu(
                     egui::CollapsingHeader::new("Mountain building")
                         .id_salt("worldgen_orogeny")
                         .show(ui, |ui| {
-                            ui.label("Locally varies relief within a biome (0 = uniform, old behaviour)");
+                            ui.label("Locally varies relief within a biome (0 = uniform, old behaviour).\nDerived from the continent shape, so ranges follow geography.");
                             ui.add(egui::Slider::new(&mut w.orogeny_strength, 0.0..=3.0)
                                 .text("Strength"));
-                            ui.add(egui::Slider::new(&mut w.orogeny_scale, 5_000.0..=150_000.0)
-                                .text("Range size (m)")
+                            ui.add(egui::Slider::new(&mut w.orogeny_scale, 1.0..=15.0)
+                                .text("Range detail (freq × continent)")
                                 .logarithmic(true));
+                            ui.separator();
+                            ui.label("Plateaus/mesas: terraces the most-uplifted terrain into flat shelves");
+                            ui.add(egui::Slider::new(&mut w.plateau_strength, 0.0..=1.0)
+                                .text("Plateau strength"));
+                            ui.add(egui::Slider::new(&mut w.plateau_step, 0.05..=2.0)
+                                .text("Step height (raw units)"));
                         });
 
                     // --- Oceans (geography-driven, independent of climate) ------
