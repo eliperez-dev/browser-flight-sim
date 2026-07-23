@@ -230,6 +230,8 @@ fn draw_menu(
                                         .logarithmic(true));
                                     ui.add(egui::Slider::new(&mut o.vertical_scale, 0.0..=10.0)
                                         .text("amplitude"));
+                                    ui.checkbox(&mut o.ridged, "ridged")
+                                        .on_hover_text("Sharp ridgelines instead of rounded hills — best on broad, low-frequency octaves");
                                 });
                             }
                         });
@@ -245,6 +247,18 @@ fn draw_menu(
                                 .text("Climate (biome borders)"));
                             ui.add(egui::Slider::new(&mut w.warp_strength.continent, 0.0..=10000.0)
                                 .text("Continent (coastlines)"));
+                        });
+
+                    // --- Orogeny (local mountain-building within a biome) -------
+                    egui::CollapsingHeader::new("Mountain building")
+                        .id_salt("worldgen_orogeny")
+                        .show(ui, |ui| {
+                            ui.label("Locally varies relief within a biome (0 = uniform, old behaviour)");
+                            ui.add(egui::Slider::new(&mut w.orogeny_strength, 0.0..=3.0)
+                                .text("Strength"));
+                            ui.add(egui::Slider::new(&mut w.orogeny_scale, 5_000.0..=150_000.0)
+                                .text("Range size (m)")
+                                .logarithmic(true));
                         });
 
                     // --- Oceans (geography-driven, independent of climate) ------

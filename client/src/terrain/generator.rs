@@ -78,6 +78,18 @@ pub const DEFAULT_LATITUDE_STRENGTH: f32 = 0.3;
 /// through climate zones.
 pub const DEFAULT_LATITUDE_BAND: f32 = 60_000.0;
 
+/// Default orogeny (mountain-building) strength: how strongly the low-frequency
+/// `orogeny_layer` locally boosts relief/elevation on top of a biome's baseline.
+/// 0 disables it (every point in a biome gets identical relief, the old
+/// behaviour); higher values carve real mountain ranges and lowlands within a
+/// single biome instead of a uniform band of hills. See [`WorldGenerator::shape_raw`].
+pub const DEFAULT_OROGENY_STRENGTH: f32 = 1.5;
+
+/// Default orogeny wavelength (m): world distance from one uplift peak to the
+/// next. Should be much larger than terrain-octave wavelengths so it reads as
+/// "this whole region is mountainous" rather than adding more small bumps.
+pub const DEFAULT_OROGENY_SCALE: f32 = 40_000.0;
+
 /// Per-biome terrain shaping: `elevation` is the base offset (raw units, pre-
 /// `height_scale`) the biome sits at, `relief` the amplitude multiplier on the
 /// noise sum (taiga is mountainous, desert near-flat), and `abundance` a weight
@@ -102,6 +114,14 @@ pub struct BiomeShape {
 pub struct TerrainOctave {
     pub horizontal_scale_mult: f32,
     pub vertical_scale: f32,
+    /// Ridged-noise transform: `1 - 2|n|` folds Perlin's smooth bumps into
+    /// sharp ridges with V-shaped valleys between them — real mountain
+    /// ranges have a dominant ridgeline, not a uniform lattice of hills, and
+    /// this is the standard cheap way to get that silhouette. Same output
+    /// range as plain Perlin ([-1, 1]) so it composes with `vertical_scale`
+    /// unchanged. Best on the broad, low-frequency octaves (index 0-1) where
+    /// it reads as a mountain skyline; on fine octaves it just looks spiky.
+    pub ridged: bool,
 }
 
 /// Domain-warp strengths (world metres), one per field the warp is applied
@@ -179,6 +199,10 @@ pub struct WorldGenConfig {
     pub terrain_octaves: [TerrainOctave; 5],
     /// Domain-warp strengths; see [`WarpStrengths`].
     pub warp_strength: WarpStrengths,
+    /// Mountain-building strength; see [`DEFAULT_OROGENY_STRENGTH`]. 0 disables.
+    pub orogeny_strength: f32,
+    /// Mountain-building wavelength (m); see [`DEFAULT_OROGENY_SCALE`].
+    pub orogeny_scale: f32,
 }
 
 impl Default for WorldGenConfig {
@@ -215,13 +239,15 @@ impl Default for WorldGenConfig {
             latitude_strength: DEFAULT_LATITUDE_STRENGTH,
             latitude_band: DEFAULT_LATITUDE_BAND,
             terrain_octaves: [
-                TerrainOctave { horizontal_scale_mult: 0.08, vertical_scale: 4.5 },
-                TerrainOctave { horizontal_scale_mult: 0.21, vertical_scale: 3.5 },
-                TerrainOctave { horizontal_scale_mult: 0.47, vertical_scale: 1.75 },
-                TerrainOctave { horizontal_scale_mult: 0.93, vertical_scale: 0.50 },
-                TerrainOctave { horizontal_scale_mult: 2.13, vertical_scale: 0.40 },
+                TerrainOctave { horizontal_scale_mult: 0.08, vertical_scale: 4.5,  ridged: true },
+                TerrainOctave { horizontal_scale_mult: 0.21, vertical_scale: 3.5,  ridged: true },
+                TerrainOctave { horizontal_scale_mult: 0.47, vertical_scale: 1.75, ridged: false },
+                TerrainOctave { horizontal_scale_mult: 0.93, vertical_scale: 0.50, ridged: false },
+                TerrainOctave { horizontal_scale_mult: 2.13, vertical_scale: 0.40, ridged: false },
             ],
             warp_strength: WarpStrengths { climate: 800.0, continent: 3000.0, terrain: 200.0 },
+            orogeny_strength: DEFAULT_OROGENY_STRENGTH,
+            orogeny_scale: DEFAULT_OROGENY_SCALE,
         }
     }
 }
@@ -254,12 +280,19 @@ pub struct WorldGenerator {
     latitude_strength: f32,
     latitude_band: f32,
     warp_strength: WarpStrengths,
+    orogeny_strength: f32,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
     /// Low-frequency land/sea mask: high = continental interior, low = ocean.
     /// Independent of the climate field — geography decides where water is.
     continent_layer: PerlinLayer,
+    /// Low-frequency mountain-building mask, 0..1: locally boosts relief and
+    /// elevation on top of a biome's baseline so the same biome can carve out
+    /// real mountain ranges in one area and stay rolling hills in another,
+    /// instead of a uniform band of relief everywhere it appears. Independent
+    /// of climate/continent — geology, not weather, decides where peaks rise.
+    orogeny_layer: PerlinLayer,
     /// Domain-warp fields: displace (x, z) before every other sample so biome
     /// borders and terrain features follow wobbly, organic curves instead of
     /// the straight/grid-aligned contours raw Perlin produces on its own.
@@ -297,6 +330,7 @@ impl WorldGenerator {
             latitude_strength: cfg.latitude_strength,
             latitude_band: cfg.latitude_band.max(1.0),
             warp_strength: cfg.warp_strength,
+            orogeny_strength: cfg.orogeny_strength,
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             // Ratios between octaves are deliberately non-round (not clean
             // doublings) so they don't phase-lock into a repeating lattice.
@@ -306,11 +340,16 @@ impl WorldGenerator {
             terrain_layers: cfg.terrain_octaves.iter().enumerate().map(|(i, o)| {
                 let layer_seed = seed + i.saturating_sub(1) as u32 * 100;
                 PerlinLayer::new(layer_seed, o.horizontal_scale_mult * hs, o.vertical_scale)
+                    .with_ridged(o.ridged)
             }).collect(),
             // Temperature/humidity must vary slowly across the map — keep scales low.
             temperature_layer: PerlinLayer::new(seed + 400, climate_freq, 1.0),
             humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
             continent_layer: PerlinLayer::new(seed + 600, continent_freq, 1.0),
+            // Independent low-frequency field — geology, not climate, decides
+            // where mountain ranges rise within a biome. `horizontal_scale`
+            // here is `1000 / wavelength_m` (see `PerlinLayer::get`).
+            orogeny_layer: PerlinLayer::new(seed + 900, 1000.0 / cfg.orogeny_scale.max(1000.0), 1.0),
             // Low-frequency, high-amplitude relative to what they displace so the
             // warp is clearly visible in the climate/continent borders and coarse
             // height features. Frequencies are offset from climate_freq/continent_freq
@@ -444,18 +483,23 @@ impl WorldGenerator {
             base += if i < 2 { layer.get(wx, wz) } else { layer.get(x, z) };
         }
 
+        // Mountain-building mask, 0..1: sampled at the same warped/broad scale
+        // as the terrain silhouette so uplift regions align with it rather
+        // than crossing ridgelines at odd angles.
+        let orogeny = ((self.orogeny_layer.get(wx, wz) / self.orogeny_layer.vertical_scale) + 1.0) * 0.5;
+
         // Altitude → temperature: estimate the elevation using the sea-level
         // climate, then cool by the lapse rate so high ground trends cold/snowy.
         // One fixed-point step breaks the climate↔height circular dependency
         // (height needs climate, cooled climate needs height) without iterating.
         let temp = if self.temp_lapse > 0.0 {
-            let altitude = (self.shape_raw(base, temp_base, hum, ocean) * self.height_scale).max(0.0);
+            let altitude = (self.shape_raw(base, temp_base, hum, ocean, orogeny) * self.height_scale).max(0.0);
             (temp_base - self.temp_lapse * altitude / 1000.0).clamp(0.0, 1.0)
         } else {
             temp_base
         };
 
-        (self.shape_raw(base, temp, hum, ocean), temp, hum)
+        (self.shape_raw(base, temp, hum, ocean, orogeny), temp, hum)
     }
 
     /// How strongly a point is open ocean (0 = land, 1 = full sea), from the
@@ -471,7 +515,10 @@ impl WorldGenerator {
     /// and a precomputed `ocean` factor: abundance-weighted blends of biome
     /// elevation and relief, each pulled toward the ocean basin / flat sea floor.
     /// Taking `ocean` as an argument lets the altitude-cooling pass reuse it.
-    fn shape_raw(&self, base: f32, temp: f32, humidity: f32, ocean: f32) -> f32 {
+    /// `orogeny` (0..1, see [`Self::natural_raw`]) locally boosts land relief
+    /// and elevation around 0.5 so the same biome varies between rolling
+    /// lowlands and real mountain ranges instead of uniform relief everywhere.
+    fn shape_raw(&self, base: f32, temp: f32, humidity: f32, ocean: f32, orogeny: f32) -> f32 {
         let w = self.biome_weights(temp, humidity);
         let land_elev = w[0] * self.grasslands.elevation
             + w[1] * self.taiga.elevation
@@ -481,6 +528,11 @@ impl WorldGenerator {
             + w[1] * self.taiga.relief
             + w[2] * self.desert.relief
             + w[3] * self.forest.relief;
+        // Mean-preserving multiplier: 1.0 at orogeny=0.5 (baseline), ranges
+        // roughly [1 - strength/2, 1 + strength/2] across the field.
+        let uplift = (1.0 + self.orogeny_strength * (orogeny - 0.5)).max(0.0);
+        let land_elev = land_elev * uplift;
+        let land_relief = land_relief * uplift;
         let elevation = land_elev + (-self.ocean_depth - land_elev) * ocean;
         let relief = land_relief + (OCEAN_RELIEF - land_relief) * ocean;
         base * relief + elevation
@@ -549,6 +601,8 @@ struct PerlinLayer {
     /// Per-layer domain offset so octaves seeded alike don't line their zero
     /// crossings into visible grid artifacts.
     offset: f64,
+    /// See [`TerrainOctave::ridged`].
+    ridged: bool,
 }
 
 impl PerlinLayer {
@@ -558,14 +612,27 @@ impl PerlinLayer {
             horizontal_scale,
             vertical_scale,
             offset: (seed as f64 * 1337.42) % 100_000.0,
+            ridged: false,
         }
     }
 
+    fn with_ridged(mut self, ridged: bool) -> Self {
+        self.ridged = ridged;
+        self
+    }
+
     fn get(&self, x: f32, z: f32) -> f32 {
-        let n = self.perlin.get([
+        let mut n = self.perlin.get([
             (x * self.horizontal_scale / 1000.0) as f64 + self.offset,
             (z * self.horizontal_scale / 1000.0) as f64 + (self.offset.sqrt() + 202_994.0),
         ]) as f32;
+        if self.ridged {
+            // Fold smooth Perlin bumps into sharp ridges: |n| turns each zero
+            // crossing into a valley floor, 1 - 2|n| flips valleys to 0 and
+            // peaks to ±1 so ridgelines dominate instead of a uniform lattice
+            // of rounded hills.
+            n = 1.0 - 2.0 * n.abs();
+        }
         n * self.vertical_scale
     }
 }
