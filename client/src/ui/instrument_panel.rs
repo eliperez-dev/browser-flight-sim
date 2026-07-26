@@ -491,8 +491,11 @@ fn draw_vspeed_tape(ui: &mut egui::Ui, vs_fpm: f32, height: f32) {
             format!("{}", mark), egui::FontId::proportional(11.0), TEXT_DIM);
     }
 
-    let vs_clamped = vs_fpm.clamp(-VS_RANGE_FPM, VS_RANGE_FPM);
-    draw_center_bug_small(&painter, rect, center_y - vs_clamped * px_per_fpm, format!("{:.0}", vs_fpm));
+    // Round near-zero rates to 0 so the label doesn't flicker between -1/1
+    // fpm from small physics noise while essentially level.
+    let vs_display = if vs_fpm.abs() < 20.0 { 0.0 } else { vs_fpm };
+    let vs_clamped = vs_display.clamp(-VS_RANGE_FPM, VS_RANGE_FPM);
+    draw_center_bug_small(&painter, rect, center_y - vs_clamped * px_per_fpm, format!("{:.0}", vs_display));
 }
 
 /// Compact version of `draw_center_bug` sized for the narrower altitude/VS

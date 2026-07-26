@@ -9,7 +9,7 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::camera::{OuterCamera, RenderScale, UiScale, WorldToOverlay, fade_alpha};
 use crate::plane::Airplane;
-use crate::terrain::{WaypointStalk, WorldGenerator, airport_name, runway_ident};
+use crate::terrain::WaypointStalk;
 use crate::terrain::TerrainCamera;
 
 /// Must match STALK_TIP_OFFSET / STALK_BASE_OFFSET in runway.rs.
@@ -53,7 +53,6 @@ pub fn update_stalk_visibility(
 
 pub fn draw_waypoint_labels(
     mut contexts: EguiContexts,
-    generator: Res<WorldGenerator>,
     render_scale: Res<RenderScale>,
     ui_scale: Res<UiScale>,
     stalks: Query<(&WaypointStalk, &Transform)>,
@@ -68,7 +67,6 @@ pub fn draw_waypoint_labels(
 
     let overlay = WorldToOverlay::new(*render_scale, ui_scale.0, outer_proj_q.single().ok(), windows.single().ok());
 
-    let seed = generator.seed();
     let ctx = contexts.ctx_mut()?;
 
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -93,35 +91,28 @@ pub fn draw_waypoint_labels(
 
         let a = (alpha * 255.0) as u8;
         let dot_color   = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
-        let ident_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
         let kind_color  = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);
         let dist_color  = egui::Color32::from_rgba_unmultiplied(255, 220, 220, a);
 
         painter.circle_filled(tip_win, 3.5, dot_color);
 
-        let ident     = runway_ident(seed, stalk.cell);
-        let kind_text = airport_name(seed, stalk.cell, stalk.kind);
         let dist_text = format!("{dist_km:.1} km");
 
-        let font_ident = egui::FontId::proportional(16.0);
         let font_kind  = egui::FontId::proportional(16.0);
         let font_dist  = egui::FontId::proportional(16.0);
 
-        let ident_galley = painter.layout_no_wrap(ident,      font_ident, ident_color);
-        let kind_galley  = painter.layout_no_wrap(kind_text.to_string(), font_kind, kind_color);
+        let kind_galley  = painter.layout_no_wrap(stalk.name.clone(), font_kind, kind_color);
         let dist_galley  = painter.layout_no_wrap(dist_text,  font_dist,  dist_color);
 
         let gap = 2.0;
-        let ident_sz = ident_galley.size();
         let kind_sz  = kind_galley.size();
         let dist_sz  = dist_galley.size();
-        let block_h = ident_sz.y + gap + kind_sz.y + gap + dist_sz.y;
+        let block_h = kind_sz.y + gap + dist_sz.y;
         let top_y = tip_win.y - block_h - 6.0;
 
         let cx = tip_win.x;
-        painter.galley(egui::pos2(cx - ident_sz.x * 0.5, top_y),                              ident_galley, ident_color);
-        painter.galley(egui::pos2(cx - kind_sz.x  * 0.5, top_y + ident_sz.y + gap),           kind_galley,  kind_color);
-        painter.galley(egui::pos2(cx - dist_sz.x  * 0.5, top_y + ident_sz.y + gap + kind_sz.y + gap), dist_galley,  dist_color);
+        painter.galley(egui::pos2(cx - kind_sz.x  * 0.5, top_y),                    kind_galley,  kind_color);
+        painter.galley(egui::pos2(cx - dist_sz.x  * 0.5, top_y + kind_sz.y + gap),  dist_galley,  dist_color);
     }
 
     Ok(())

@@ -211,20 +211,25 @@ pub fn generate_chunks(
 /// Displaces every freshly spawned chunk's vertices against the noise field and
 /// paints per-vertex colours, off the main thread. The chunk stays hidden until
 /// [`apply_chunk_meshes`] swaps the finished mesh in.
+///
+/// Rebuilds the flat plane from scratch inside the task rather than cloning the
+/// one already sitting in `Assets<Mesh>` (spawned hidden by [`generate_chunks`]
+/// so the entity has a valid handle immediately) — that clone would otherwise be
+/// a full-mesh copy done synchronously on the main thread, defeating the point
+/// of offloading the displacement work.
 pub fn displace_new_chunks(
     mut commands: Commands,
-    query: Query<(Entity, &Mesh3d, &Transform), Added<Chunk>>,
+    query: Query<(Entity, &Chunk, &Transform), Added<Chunk>>,
     world_gen: Res<WorldGenerator>,
-    meshes: Res<Assets<Mesh>>,
 ) {
     let pool = AsyncComputeTaskPool::get();
-    for (entity, mesh_handle, transform) in &query {
-        let Some(mesh) = meshes.get(mesh_handle) else { continue };
-        let mut mesh = mesh.clone();
+    for (entity, chunk, transform) in &query {
         let world_gen = world_gen.clone();
         let origin = transform.translation;
+        let lod = chunk.current_lod;
 
         let task = pool.spawn(async move {
+            let mut mesh = Plane3d::default().mesh().size(CHUNK_SIZE, CHUNK_SIZE).subdivisions(lod).build();
             displace_mesh(&mut mesh, &world_gen, origin);
             mesh
         });
@@ -433,6 +438,9 @@ pub fn apply_chunk_meshes(
     camera: Query<&Transform, With<TerrainCamera>>,
     settings: Res<WorldGenerationSettings>,
 ) {
+    if tasks.is_empty() {
+        return;
+    }
     let (cam_x, cam_z) = camera_chunk(&camera).unwrap_or((0, 0));
 
     let mut ordered: Vec<(Entity, f32)> = tasks
@@ -454,10 +462,10 @@ pub fn apply_chunk_meshes(
         let Some(new_mesh) = future::block_on(future::poll_once(&mut task.task)) else { continue };
 
         if let Some(new_handle) = task.new_handle.take() {
-            // LOD rebuild: write into the new handle, point the entity at it, drop the old.
-            if let Some(slot) = meshes.get_mut(&new_handle) {
-                *slot = new_mesh;
-            }
+            // LOD rebuild: the handle was only reserved (no asset behind it yet — the
+            // plane is built inside the task), so this must be an insert, not a
+            // get_mut-and-write.
+            let _ = meshes.insert(&new_handle, new_mesh);
             commands.entity(entity).try_insert(Mesh3d(new_handle));
             meshes.remove(mesh_handle);
         } else if let Some(slot) = meshes.get_mut(mesh_handle) {
@@ -479,7 +487,7 @@ pub fn update_chunk_lod(
     mut commands: Commands,
     camera: Query<&Transform, With<TerrainCamera>>,
     mut chunks: Query<(Entity, &mut Chunk, &Transform), Without<ChunkTask>>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    meshes: Res<Assets<Mesh>>,
     world_gen: Res<WorldGenerator>,
     mut manager: ResMut<ChunkManager>,
     settings: Res<WorldGenerationSettings>,
@@ -521,18 +529,15 @@ pub fn update_chunk_lod(
             continue;
         }
 
-        let new_handle = meshes.add(
-            Plane3d::default()
-                .mesh()
-                .size(CHUNK_SIZE, CHUNK_SIZE)
-                .subdivisions(desired),
-        );
-        let Some(base) = meshes.get(&new_handle) else { continue };
-        let mut mesh = base.clone();
+        // Reserve a handle now (cheap — no geometry built yet) so the entity can be
+        // pointed at it once the task finishes; the actual plane is built inside the
+        // task itself, off the main thread, rather than built here and cloned into it.
+        let new_handle = meshes.reserve_handle();
         let world_gen = world_gen.clone();
         let origin = transform.translation;
 
         let task = pool.spawn(async move {
+            let mut mesh = Plane3d::default().mesh().size(CHUNK_SIZE, CHUNK_SIZE).subdivisions(desired).build();
             displace_mesh(&mut mesh, &world_gen, origin);
             mesh
         });
@@ -549,6 +554,10 @@ pub fn update_chunk_lod(
 
 /// Despawns chunks past `render_distance + 1`, farthest-first and rate-limited,
 /// and frees their mesh handles so memory doesn't grow on a long flight.
+///
+/// Only re-scans for candidates when the camera enters a new chunk (chunks
+/// don't fall out of range otherwise), and reuses a `Local` buffer across
+/// frames instead of allocating a fresh `Vec` every call.
 pub fn despawn_out_of_bounds_chunks(
     mut commands: Commands,
     camera: Query<&Transform, With<TerrainCamera>>,
@@ -556,22 +565,29 @@ pub fn despawn_out_of_bounds_chunks(
     mut manager: ResMut<ChunkManager>,
     mut meshes: ResMut<Assets<Mesh>>,
     settings: Res<WorldGenerationSettings>,
+    mut last_cam: Local<Option<(i32, i32)>>,
+    mut out: Local<Vec<(Entity, i32, i32, f32, Handle<Mesh>)>>,
 ) {
     let Some((cam_x, cam_z)) = camera_chunk(&camera) else { return };
-    let despawn_sq = ((manager.render_distance + 1) as f32).powi(2);
 
-    let mut out: Vec<(Entity, i32, i32, f32, Handle<Mesh>)> = Vec::new();
-    for (entity, chunk, mesh) in &chunks {
-        let dx = (chunk.x - cam_x) as f32;
-        let dz = (chunk.z - cam_z) as f32;
-        let distance_sq = dx * dx + dz * dz;
-        if distance_sq > despawn_sq {
-            out.push((entity, chunk.x, chunk.z, distance_sq, mesh.0.clone()));
+    if *last_cam != Some((cam_x, cam_z)) {
+        *last_cam = Some((cam_x, cam_z));
+
+        let despawn_sq = ((manager.render_distance + 1) as f32).powi(2);
+        out.clear();
+        for (entity, chunk, mesh) in &chunks {
+            let dx = (chunk.x - cam_x) as f32;
+            let dz = (chunk.z - cam_z) as f32;
+            let distance_sq = dx * dx + dz * dz;
+            if distance_sq > despawn_sq {
+                out.push((entity, chunk.x, chunk.z, distance_sq, mesh.0.clone()));
+            }
         }
+        out.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
     }
-    out.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
 
-    for (entity, x, z, _, mesh) in out.into_iter().take(settings.max_chunks_per_frame * 2) {
+    let take = (settings.max_chunks_per_frame * 2).min(out.len());
+    for (entity, x, z, _, mesh) in out.drain(..take) {
         manager.spawned_chunks.remove(&(x, z));
         meshes.remove(&mesh);
         commands.entity(entity).despawn();

@@ -82,6 +82,54 @@ pub fn apply_render_scale(
     }
 }
 
+/// User-facing shadow quality, set from the Graphics menu. Only the sun
+/// (`sky::Sun`'s `DirectionalLight`) casts shadows today — aircraft position
+/// lights (nav/strobe/beacon/landing) are spawned with `shadows_enabled:
+/// false` and aren't affected by this.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShadowQuality {
+    Off,
+    Low,
+    Medium,
+    #[default]
+    High,
+}
+
+impl ShadowQuality {
+    /// Shadow map resolution (px) fed into `DirectionalLightShadowMap`, the
+    /// one global resource controlling every cascade's texture size —
+    /// Bevy's own default is 2048 (`Medium` here).
+    pub fn map_size(self) -> usize {
+        match self {
+            ShadowQuality::Off => 0,
+            ShadowQuality::Low => 1024,
+            ShadowQuality::Medium => 2048,
+            ShadowQuality::High => 4096,
+        }
+    }
+}
+
+/// Applies `ShadowQuality` to the sun's `DirectionalLight.shadows_enabled`
+/// and the global `DirectionalLightShadowMap` resolution. Both are plain
+/// components/resources Bevy reads every frame, so this only needs to run
+/// when the setting actually changes.
+pub fn apply_shadow_quality(
+    quality: Res<ShadowQuality>,
+    mut shadow_map: ResMut<bevy::light::DirectionalLightShadowMap>,
+    mut suns: Query<&mut DirectionalLight, With<crate::sky::Sun>>,
+) {
+    if !quality.is_changed() {
+        return;
+    }
+    let enabled = *quality != ShadowQuality::Off;
+    for mut light in &mut suns {
+        light.shadows_enabled = enabled;
+    }
+    if enabled {
+        shadow_map.size = quality.map_size();
+    }
+}
+
 #[derive(Resource, Default, PartialEq, Eq)]
 pub enum CameraMode {
     Free,
@@ -122,8 +170,8 @@ impl Default for FixedCameraMounts {
             mounts: vec![
                 // Nose: just ahead of the prop hub, looking forward.
                 FixedCameraMount { name: "Nose", offset: Vec3::new(0.0, 1.0, 1.41), yaw: std::f32::consts::PI, pitch: 0.0 },
-                // Tail: behind the rudder, looking forward over the aircraft.
-                FixedCameraMount { name: "Tail", offset: Vec3::new(0.0, 1.8, -12.0), yaw: std::f32::consts::PI, pitch: -0.13 },
+                // Belly: under the aircraft, looking forward.
+                FixedCameraMount { name: "Belly", offset: Vec3::new(0.0, -0.3, -3.0), yaw: std::f32::consts::PI, pitch: -0.13 },
                 // Left wingtip, looking inward at the fuselage.
                 FixedCameraMount { name: "Left Wing", offset: Vec3::new(-6.8, 1.00, 0.5), yaw: -1.5708, pitch: -0.20 },
                 // Right wingtip, looking inward at the fuselage.

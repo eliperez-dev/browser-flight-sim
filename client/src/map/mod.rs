@@ -34,7 +34,7 @@ use crate::terrain::{
 use crate::ui::menu_bar::MenuBar;
 use crate::water::WaterSettings;
 
-use render::{TEX, View, half_span};
+use render::{IdentCache, TEX, View, half_span};
 
 /// How long the breadcrumb trail remembers, and how often it samples. 10 min at
 /// one sample every 3 s ⇒ at most 200 dots.
@@ -287,6 +287,7 @@ fn draw_map(
     water: Res<WaterSettings>,
     plane_q: Query<&Transform, With<Airplane>>,
     cam_q: Query<&Transform, (With<TerrainCamera>, Without<Airplane>)>,
+    mut ident_cache: Local<IdentCache>,
 ) -> Result {
     if !bar.map {
         return Ok(());
@@ -313,6 +314,11 @@ fn draw_map(
     // pass finishes, so egui always draws a whole texture and the map never
     // flashes black or visibly wipes mid-bake.
     let force_restart = generator.is_changed() || water.is_changed();
+    if generator.is_changed() {
+        // Idents are cached by cell only; a new seed changes what every cell
+        // means, so the old strings would otherwise leak through as stale.
+        ident_cache.clear();
+    }
     let pass_idle = state.bake_row >= render::TEX;
     if force_restart || (pass_idle && state.view_changed() && !state.interacting) {
         state.bake_pass_center = state.center;
@@ -437,6 +443,7 @@ fn draw_map(
                 render::idents_visible(state.world_per_texel),
                 &icons,
                 &view,
+                &mut ident_cache,
             );
 
             if let (Some((ppos, _)), Some(wp)) = (plane, &state.waypoint) {

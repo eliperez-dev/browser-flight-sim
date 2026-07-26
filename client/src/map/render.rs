@@ -7,7 +7,7 @@
 //! [`super::MapState`]'s dirty check) — never per frame — so the only steady-state
 //! cost is the handful of painter calls for the overlays.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -15,6 +15,12 @@ use bevy_egui::egui;
 use crate::terrain::{Airport, AirportKind, Biome, WorldGenerator, runway_ident};
 
 use super::{Breadcrumb, MapIconSettings, MapLayer};
+
+/// Per-cell ident strings are deterministic (seed + cell), so once computed they
+/// never change for the life of a world — cache them instead of re-hashing and
+/// re-allocating a `String` for every visible airport on every frame the map
+/// is open and zoomed in enough to show idents.
+pub type IdentCache = HashMap<(i32, i32), String>;
 
 /// Background texture resolution (square). Modest on purpose: each texel is a
 /// full multi-octave noise sample, and the bake only reruns when the view moves
@@ -238,6 +244,7 @@ pub fn draw_airports(
     show_idents: bool,
     icons: &MapIconSettings,
     view: &View,
+    ident_cache: &mut IdentCache,
 ) {
     let dot_radius = airport_dot_radius(icons, view);
 
@@ -276,13 +283,16 @@ pub fn draw_airports(
             );
         }
         if show_idents {
+            let ident = ident_cache
+                .entry(ap.cell)
+                .or_insert_with(|| runway_ident(seed, ap.cell));
             // Fixed clearance beyond the dot, not just a few px past its edge —
             // at coarse zoom the dot shrinks to its pixel floor but the label
             // should still sit clearly outside it, not crowd the marker.
             painter.text(
                 center + egui::vec2(dot_radius + 8.0, 0.0),
                 egui::Align2::LEFT_CENTER,
-                format!("{}  {}", runway_ident(seed, ap.cell), ap.kind.display_name()),
+                format!("{}  {}", ident, ap.kind.display_name()),
                 egui::FontId::proportional(icons.label_font),
                 egui::Color32::WHITE,
             );

@@ -15,7 +15,7 @@ use bevy::{
 };
 
 use crate::{camera::{
-    CameraMode, ChaseCam, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_LAYER, PixelCanvas, RenderScale, SCREEN_LAYER, TrackCam, UiScale, apply_render_scale, apply_ui_scale, chase_cam_control, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
+    CameraMode, ChaseCam, FixedCameraMounts, FreeCam, OuterCamera, PIXEL_LAYER, PixelCanvas, RenderScale, SCREEN_LAYER, ShadowQuality, TrackCam, UiScale, apply_render_scale, apply_shadow_quality, apply_ui_scale, chase_cam_control, fit_canvas, fixed_cam_control, fixed_cam_hotkeys, free_cam_control, toggle_camera_mode, toggle_fullscreen_hotkey, track_cam_control
 }, debug_tools::debug_hud::{populate_debug_hud, update_cam_controls_hint, update_cam_mode_text, update_fps, update_fullscreen_hint}, plane::spawn_aircraft};
 use crate::lights::{AircraftLightsPlugin, LightTimers, spawn_aircraft_lights};
 use bevy_egui::{EguiPostUpdateSet, PrimaryEguiContext};
@@ -124,6 +124,7 @@ fn main() {
         .init_resource::<FixedCameraMounts>()
         .init_resource::<UiScale>()
         .init_resource::<RenderScale>()
+        .init_resource::<ShadowQuality>()
         .init_resource::<DebugHud>()
         .init_resource::<GizmosVisible>()
         .add_systems(Startup, (setup, setup_gizmo_config))
@@ -161,9 +162,12 @@ fn main() {
             apply_render_scale,
             fit_canvas,
             apply_ui_scale,
+            apply_shadow_quality,
             apply_config_to_entities,
             spin_propeller,
-            populate_debug_hud,
+            // The only reader is the Dev Tools (F3) window itself, so skip the
+            // dozen format!() allocations every frame it's closed.
+            populate_debug_hud.run_if(|bar: Res<crate::ui::menu_bar::MenuBar>| bar.flight_model),
         ))
         // Camera runs before TransformPropagate so its GlobalTransform is current
         // by the time EguiPrimaryContextPass projects world positions to screen.

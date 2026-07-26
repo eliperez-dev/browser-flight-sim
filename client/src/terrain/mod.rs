@@ -14,7 +14,7 @@ pub use generator::{Biome, BiomeShape, WorldGenConfig, WorldGenerator};
 /// Read-only airport layout, for the map overlay. `runways_in_region` recomputes
 /// the deterministic strips inside a world-space box (see [`runway`]); nothing is
 /// stored, so the map can list nearby airports without touching streaming state.
-pub use runway::{Airport, AirportKind, WaypointStalk, airport_name, airports_in_region, runway_ident};
+pub use runway::{Airport, AirportKind, RunwayLightsEnabled, WaypointStalk, airport_name, airports_in_region, runway_ident};
 
 use bevy::prelude::*;
 
@@ -37,6 +37,7 @@ impl Plugin for TerrainPlugin {
             .init_resource::<WorldGenerationSettings>()
             .init_resource::<SpawnedRunways>()
             .init_resource::<RunwayLightClock>()
+            .init_resource::<runway::RunwayLightsEnabled>()
             .add_systems(Startup, setup_terrain_material)
             .add_systems(
                 Update,
@@ -46,6 +47,7 @@ impl Plugin for TerrainPlugin {
                     // sync_runways then rebuilds the strips for the new layout.
                     streaming::regenerate_terrain,
                     runway::stream_runways,
+                    runway::stream_runway_lights,
                     runway::scale_waypoint_stalks,
                     runway::animate_runway_lights,
                     streaming::generate_chunks,
@@ -64,6 +66,7 @@ impl Plugin for TerrainPlugin {
 fn setup_terrain_material(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     commands.insert_resource(SharedTerrainMaterial {
         handle: materials.add(StandardMaterial {
@@ -72,5 +75,5 @@ fn setup_terrain_material(
             ..default()
         }),
     });
-    commands.insert_resource(RunwayMaterials::new(&mut materials));
+    commands.insert_resource(RunwayMaterials::new(&mut materials, &mut meshes));
 }

@@ -4,8 +4,9 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{RenderScale, UiScale, is_fullscreen, request_toggle_fullscreen};
-use crate::terrain::WorldGenConfig;
+use crate::camera::{RenderScale, ShadowQuality, UiScale, is_fullscreen, request_toggle_fullscreen};
+use crate::fog::FogSettings;
+use crate::terrain::{RunwayLightsEnabled, WorldGenConfig};
 use crate::ui::menu_bar::MenuBar;
 
 pub struct GraphicsMenuPlugin;
@@ -16,10 +17,14 @@ impl Plugin for GraphicsMenuPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_graphics_menu(
     mut bar: ResMut<MenuBar>,
     mut ui_scale: ResMut<UiScale>,
     mut render_scale: ResMut<RenderScale>,
+    mut shadow_quality: ResMut<ShadowQuality>,
+    mut fog: ResMut<FogSettings>,
+    mut runway_lights: ResMut<RunwayLightsEnabled>,
     mut world_gen: ResMut<WorldGenConfig>,
     mut contexts: EguiContexts,
 ) -> Result {
@@ -67,6 +72,35 @@ fn draw_graphics_menu(
                 }
             });
             ui.label(format!("{}×{}", render_scale.width(), render_scale.height()));
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Shadows");
+            ui.horizontal(|ui| {
+                if ui.selectable_label(*shadow_quality == ShadowQuality::Off, "Off").clicked() {
+                    *shadow_quality = ShadowQuality::Off;
+                }
+                if ui.selectable_label(*shadow_quality == ShadowQuality::Low, "Low").clicked() {
+                    *shadow_quality = ShadowQuality::Low;
+                }
+                if ui.selectable_label(*shadow_quality == ShadowQuality::Medium, "Medium").clicked() {
+                    *shadow_quality = ShadowQuality::Medium;
+                }
+                if ui.selectable_label(*shadow_quality == ShadowQuality::High, "High").clicked() {
+                    *shadow_quality = ShadowQuality::High;
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Fog");
+            ui.checkbox(&mut fog.enabled, "Enabled");
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.heading("Runway Lights");
+            ui.checkbox(&mut runway_lights.0, "Enabled");
+            ui.label("Only rendered at night regardless of this setting.");
 
             ui.add_space(10.0);
             ui.separator();

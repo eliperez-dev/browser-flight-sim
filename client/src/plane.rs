@@ -337,6 +337,11 @@ pub fn spawn_aircraft(
     )).id();
     let propeller = commands.spawn((
         Transform::from_translation(prop_hub_local),
+        // The pivot itself has no SceneRoot/Mesh3d to require a Visibility
+        // component, so without this explicit one, apply_gizmos_mesh_visibility's
+        // `Query<&mut Visibility, With<PlaneVisual>>` silently skips it and the
+        // propeller mesh never hides in filled-gizmos mode.
+        Visibility::default(),
         Propeller,
         Name::new("propeller"),
         // Not a child of `visual`, so it needs its own tag to be hidden

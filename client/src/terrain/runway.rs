@@ -205,14 +205,28 @@ impl RunwayInstance {
 
 /// Marks a spawned runway root entity (its meshes are children), tagged with its
 /// grid cell and world position so the streaming system can despawn it by actual
-/// distance when it leaves range.
+/// distance when it leaves range. `width`/`length` are kept so
+/// `stream_runway_lights` can rebuild this strip's light layout without
+/// re-deriving it from `runways_for_cell`; `is_lit` is false for dirt strips,
+/// which never get lights at all.
 #[derive(Component)]
 pub struct RunwaySlab {
     pub cell: (i32, i32),
     pub pos: Vec2,
     #[allow(dead_code)]
     pub elevation: f32,
+    width: f32,
+    length: f32,
+    is_lit: bool,
 }
+
+/// Marks the light-group child entity a runway's `PointLight`s are spawned
+/// under, so `stream_runway_lights` can find and despawn/respawn just the
+/// lights — independent of the pavement (`RunwaySlab`) — as the camera
+/// crosses `LIGHTS_MAX_VIEW_M`. The distance check itself reads the parent
+/// `RunwaySlab::pos`, so this carries no data of its own.
+#[derive(Component)]
+pub(crate) struct RunwayLights;
 
 /// Marks a REIL strobe — flashes at ~1 Hz.
 #[derive(Component)]
@@ -232,23 +246,64 @@ pub struct RunwayLightClock {
     pub elapsed: f32,
 }
 
-/// Grid cells whose runway is currently spawned (visually).
+/// User-facing toggle (Graphics menu) for runway lighting — every edge/
+/// threshold/REIL/ALS `PointLight`. Off entirely skips spawning them (see
+/// `stream_runway_lights`) rather than just hiding them, since the point is
+/// cutting live-light count for the clustered renderer, not just visuals.
+#[derive(Resource, Clone, Copy, PartialEq, Eq)]
+pub struct RunwayLightsEnabled(pub bool);
+
+impl Default for RunwayLightsEnabled {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// Grid cells whose runway is currently spawned (visually), plus a cache of
+/// every evaluated cell's `runways_for_cell` result (including cells with no
+/// runway at all). `runways_for_cell` samples multi-octave noise —
+/// elevation, plus 6 more samples per candidate through
+/// `site_is_flat_enough` — expensive enough that re-running it every frame
+/// for the whole scanned ring (wider than the spawn radius, see
+/// `stream_runways`) was a real, ongoing per-frame cost near any runway-dense
+/// or otherwise-flat area, not just a one-time spawn cost. Caching the result
+/// (not just whether it's currently spawned) means a cell is only ever
+/// hashed/sampled once as long as it stays within the scan radius, not every
+/// frame forever.
 #[derive(Resource, Default)]
 pub struct SpawnedRunways {
     cells: HashSet<(i32, i32)>,
+    layout_cache: bevy::platform::collections::HashMap<(i32, i32), Vec<RunwayInstance>>,
 }
 
-/// Shared surface/paint materials, built once so every runway batches together.
+/// Centreline dash size (metres). Every dash on every runway is the same
+/// size, so `RunwayMaterials` builds one shared mesh instead of each dash
+/// getting its own mesh asset.
+const DASH_LEN: f32 = 30.0;
+const DASH_W: f32 = 1.0;
+
+/// Threshold "piano key" bar size (metres); same one-shared-mesh reasoning as
+/// the centreline dash above.
+const BAR_W: f32 = 2.5;
+const BAR_LEN: f32 = 20.0;
+
+/// Shared surface/paint materials and paint-marking meshes, built once so
+/// every runway batches together instead of each spawning its own duplicate
+/// mesh assets — every dash/bar across every runway is the same fixed size
+/// (`DASH_W`×`DASH_LEN`, `BAR_W`×`BAR_LEN`), so one handle per shape covers
+/// all of them; only the `Transform` differs per instance.
 #[derive(Resource)]
 pub struct RunwayMaterials {
     pub asphalt: Handle<StandardMaterial>,
     pub paint: Handle<StandardMaterial>,
     pub dirt: Handle<StandardMaterial>,
     pub stalk: Handle<StandardMaterial>,
+    dash_mesh: Handle<Mesh>,
+    bar_mesh: Handle<Mesh>,
 }
 
 impl RunwayMaterials {
-    pub fn new(materials: &mut Assets<StandardMaterial>) -> Self {
+    pub fn new(materials: &mut Assets<StandardMaterial>, meshes: &mut Assets<Mesh>) -> Self {
         Self {
             asphalt: materials.add(StandardMaterial {
                 base_color: Color::srgb(0.12, 0.12, 0.13),
@@ -271,6 +326,8 @@ impl RunwayMaterials {
                 fog_enabled: false,
                 ..default()
             }),
+            dash_mesh: meshes.add(Plane3d::default().mesh().size(DASH_W, DASH_LEN)),
+            bar_mesh: meshes.add(Plane3d::default().mesh().size(BAR_W, BAR_LEN)),
         }
     }
 }
@@ -610,6 +667,7 @@ pub fn stream_runways(
             commands.entity(entity).despawn();
         }
         spawned.cells.clear();
+        spawned.layout_cache.clear();
         return;
     }
 
@@ -627,13 +685,27 @@ pub fn stream_runways(
     let keep_sq = view_m * view_m;
     let drop_sq = (view_m * 1.15).powi(2);
     let cell_radius = (view_m * 1.15 / RUNWAY_SPACING).ceil() as i32 + 1;
+    // Cache eviction uses a wider radius than drop_sq so a cell doesn't get
+    // evicted and immediately re-scanned (and re-sampled) the very next
+    // frame just from being right at the scan boundary.
+    let cache_evict_sq = (view_m * 1.5).powi(2);
 
     for gx in (cam_cx - cell_radius)..=(cam_cx + cell_radius) {
         for gz in (cam_cz - cell_radius)..=(cam_cz + cell_radius) {
-            if spawned.cells.contains(&(gx, gz)) {
+            let cell = (gx, gz);
+            if spawned.cells.contains(&cell) {
                 continue;
             }
-            let strips = runways_for_cell(&generator, gx, gz);
+            // Cached from an earlier frame (this cell's layout is a pure
+            // function of the seed/cell, so a stale cache entry is always
+            // still correct) — skip the noise sampling entirely.
+            let strips = if let Some(cached) = spawned.layout_cache.get(&cell) {
+                cached.clone()
+            } else {
+                let strips = runways_for_cell(&generator, gx, gz);
+                spawned.layout_cache.insert(cell, strips.clone());
+                strips
+            };
             if strips.is_empty() {
                 continue;
             }
@@ -649,9 +721,10 @@ pub fn stream_runways(
                     spawn_runway(
                         &mut commands, &mut meshes, &materials, inst, (gx, gz),
                         if i == 0 { Some((centre_x, centre_elev, centre_z)) } else { None },
+                        generator.seed(),
                     );
                 }
-                spawned.cells.insert((gx, gz));
+                spawned.cells.insert(cell);
             }
         }
     }
@@ -665,6 +738,72 @@ pub fn stream_runways(
     for (entity, stalk) in &stalks {
         if !spawned.cells.contains(&stalk.cell) {
             commands.entity(entity).despawn();
+        }
+    }
+
+    // Bound the cache's memory over a long flight: drop entries for cells far
+    // enough behind that they're unlikely to be revisited soon. Uses the
+    // cell's *grid* position (not a noise sample) so this is cheap.
+    spawned.layout_cache.retain(|&(gx, gz), _| {
+        let pos = Vec2::new(gx as f32 * RUNWAY_SPACING, gz as f32 * RUNWAY_SPACING);
+        pos.distance_squared(cam_xz) <= cache_evict_sq
+    });
+}
+
+/// Spawns/despawns each lit runway's light group as the camera crosses
+/// `LIGHTS_MAX_VIEW_M`, independent of the pavement (`RunwaySlab`) itself —
+/// see `LIGHTS_MAX_VIEW_M`'s doc comment for why lights need a much shorter
+/// streaming radius than pavement. Also gated on `RunwayLightsEnabled` (the
+/// Graphics-menu toggle) and daytime: real runway lights aren't lit in
+/// daylight either, and skipping them then is the same live-PointLight-count
+/// win as the distance cap, just time-gated instead of distance-gated — when
+/// either is off, every currently-spawned light group is despawned outright
+/// rather than merely hidden, so daytime flying costs nothing extra.
+pub fn stream_runway_lights(
+    mut commands: Commands,
+    lights_enabled: Res<RunwayLightsEnabled>,
+    day_night: Res<crate::sky::DayNightCycle>,
+    slabs: Query<(Entity, &RunwaySlab, &Children)>,
+    light_groups: Query<Entity, With<RunwayLights>>,
+    camera: Query<&Transform, With<TerrainCamera>>,
+) {
+    let want_lights = lights_enabled.0 && day_night.is_night();
+    if !want_lights {
+        for (_, _, children) in &slabs {
+            for &child in children {
+                if light_groups.contains(child) {
+                    commands.entity(child).despawn();
+                }
+            }
+        }
+        return;
+    }
+
+    let Ok(cam) = camera.single() else { return };
+    let cam_xz = Vec2::new(cam.translation.x, cam.translation.z);
+    let keep_sq = LIGHTS_MAX_VIEW_M * LIGHTS_MAX_VIEW_M;
+    // Hysteresis so a strip right at the boundary doesn't spawn/despawn its
+    // lights every frame — same pattern as stream_runways' keep_sq/drop_sq.
+    let drop_sq = (LIGHTS_MAX_VIEW_M * 1.15).powi(2);
+
+    for (root, slab, children) in &slabs {
+        if !slab.is_lit {
+            continue;
+        }
+        let dist_sq = slab.pos.distance_squared(cam_xz);
+        let light_group = children.iter().find(|&c| light_groups.contains(c));
+
+        match (light_group, dist_sq) {
+            (None, d) if d <= keep_sq => {
+                commands.entity(root).with_children(|parent| {
+                    let half_len = slab.length * 0.5;
+                    spawn_runway_lights(parent, slab.width, slab.length, half_len, RUNWAY_SURFACE_LIFT);
+                });
+            }
+            (Some(light_entity), d) if d > drop_sq => {
+                commands.entity(light_entity).despawn();
+            }
+            _ => {}
         }
     }
 }
@@ -682,8 +821,21 @@ const STALK_RADIUS: f32 = 8.0;
 /// Height of light fixtures above the asphalt surface (metres).
 const LIGHT_Y: f32 = 0.5;
 
-/// Edge lights every this many metres along both sides of the runway.
-const EDGE_LIGHT_SPACING: f32 = 120.0;
+/// Edge lights every this many metres along both sides of the runway. Real
+/// runway edge lights are ~60m apart; this is deliberately much sparser —
+/// each light is a live `PointLight` in Bevy's clustered forward renderer,
+/// and a runway-dense area can have several airports streamed in at once
+/// (see `LIGHTS_MAX_VIEW_M`), so light *count* is a real performance cost,
+/// not just a visual one.
+const EDGE_LIGHT_SPACING: f32 = 240.0;
+
+/// Runway lights stream in/out at a much shorter radius than the pavement
+/// itself (`RUNWAY_MAX_VIEW_M`) — strobes and edge lights aren't meaningfully
+/// visible at range, and each one is a live `PointLight`, so capping how many
+/// can be simultaneously active is the main lever on clustered-lighting cost
+/// with several runway-dense airports in view. Independently toggled by
+/// `stream_runway_lights`, not the initial `spawn_runway` distance check.
+const LIGHTS_MAX_VIEW_M: f32 = 4_000.0;
 
 /// Lateral inset from the runway edge for the edge light row.
 const EDGE_LIGHT_INSET: f32 = 1.5;
@@ -697,7 +849,9 @@ const RANGE_ALS: f32 = 200.0;
 
 /// Spawns one runway strip. `stalk_centre` is `Some((x, elev, z))` for the first
 /// strip of each airport — that strip also spawns the vertical 3D stalk mesh so
-/// the label can occlude behind terrain. Secondary strips pass `None`.
+/// the label can occlude behind terrain. Secondary strips pass `None`. Never
+/// spawns lights itself — see `stream_runway_lights`.
+#[allow(clippy::too_many_arguments)]
 fn spawn_runway(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -705,6 +859,7 @@ fn spawn_runway(
     inst: &RunwayInstance,
     cell: (i32, i32),
     stalk_centre: Option<(f32, f32, f32)>,
+    seed: u32,
 ) {
     const PAINT_Y: f32 = 0.1;
     const THICKNESS: f32 = 3.0;
@@ -716,7 +871,7 @@ fn spawn_runway(
 
     let root = Transform::from_xyz(inst.x, inst.elevation, inst.z)
         .with_rotation(Quat::from_rotation_y(inst.heading));
-    let slab = RunwaySlab { cell, pos: Vec2::new(inst.x, inst.z), elevation: inst.elevation };
+    let slab = RunwaySlab { cell, pos: Vec2::new(inst.x, inst.z), elevation: inst.elevation, width: w, length: l, is_lit: !is_dirt };
 
     commands
         .spawn((root, Visibility::default(), slab, PIXEL_LAYER))
@@ -735,27 +890,27 @@ fn spawn_runway(
                 return;
             }
 
-            // Dashed centreline.
-            const DASH_LEN: f32 = 30.0;
+            // Dashed centreline. Every dash shares one mesh asset
+            // (`materials.dash_mesh`) instead of each getting its own —
+            // they're all the same DASH_W×DASH_LEN size, only Transform differs.
             const GAP_LEN: f32 = 20.0;
-            const DASH_W: f32 = 1.0;
             let stride = DASH_LEN + GAP_LEN;
             let count = (l / stride) as i32;
             let start = -(count as f32 - 1.0) * stride * 0.5;
             for i in 0..count {
                 let z = start + i as f32 * stride;
                 parent.spawn((
-                    Mesh3d(meshes.add(Plane3d::default().mesh().size(DASH_W, DASH_LEN))),
+                    Mesh3d(materials.dash_mesh.clone()),
                     MeshMaterial3d(materials.paint.clone()),
                     Transform::from_xyz(0.0, surface_y + PAINT_Y, z),
                     PIXEL_LAYER,
                 ));
             }
 
-            // Threshold "piano key" bars. `NoFrustumCulling`: zero-thickness paint
-            // planes have no AABB height so Bevy wrongly culls them at shallow angles.
-            const BAR_W: f32 = 2.5;
-            const BAR_LEN: f32 = 20.0;
+            // Threshold "piano key" bars, sharing one mesh asset
+            // (`materials.bar_mesh`) the same way. `NoFrustumCulling`:
+            // zero-thickness paint planes have no AABB height so Bevy wrongly
+            // culls them at shallow angles.
             const BAR_GAP: f32 = 2.0;
             for end in [-1.0_f32, 1.0] {
                 let z = end * (half_len - BAR_LEN * 0.5 - 5.0);
@@ -763,7 +918,7 @@ fn spawn_runway(
                 for k in -4..=4_i32 {
                     if k == 0 { continue; }
                     parent.spawn((
-                        Mesh3d(meshes.add(Plane3d::default().mesh().size(BAR_W, BAR_LEN))),
+                        Mesh3d(materials.bar_mesh.clone()),
                         MeshMaterial3d(materials.paint.clone()),
                         Transform::from_xyz(k as f32 * bar_stride, surface_y + PAINT_Y, z),
                         NoFrustumCulling,
@@ -772,98 +927,14 @@ fn spawn_runway(
                 }
             }
 
-            // --- Runway lights ---
-            let light_y = surface_y + LIGHT_Y;
-            let half_w = w * 0.5 - EDGE_LIGHT_INSET;
-            let n_edge = (l / EDGE_LIGHT_SPACING) as i32 + 1;
-            let edge_start = -half_len;
-            let threshold_z = half_len - 2.0;
-            let white = Color::srgb(1.0, 0.97, 0.88);
-            let yellow = Color::srgb(1.0, 0.85, 0.1);
-            let caution_start = half_len - 610.0;
-
-            for i in 0..=n_edge {
-                let z = edge_start + i as f32 * EDGE_LIGHT_SPACING;
-                if z > half_len { break; }
-                let color = if z >= caution_start { yellow } else { white };
-                for side in [-1.0_f32, 1.0] {
-                    parent.spawn((
-                        PointLight {
-                            color,
-                            intensity: 500_000.0,
-                            range: RANGE_EDGE,
-                            radius: 0.3,
-                            shadows_enabled: false,
-                            ..default()
-                        },
-                        Transform::from_xyz(side * half_w, light_y, z),
-                        PIXEL_LAYER,
-                    ));
-                }
-            }
-
-            for end_sign in [-1.0_f32, 1.0] {
-                let tz = end_sign * threshold_z;
-                parent.spawn((
-                    PointLight {
-                        color: Color::srgb(0.1, 1.0, 0.2),
-                        intensity: 3_200_000.0,
-                        range: RANGE_THRESHOLD,
-                        radius: w * 0.4,
-                        shadows_enabled: false,
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, light_y, tz - end_sign * 1.0),
-                    PIXEL_LAYER,
-                ));
-                parent.spawn((
-                    PointLight {
-                        color: Color::srgb(1.0, 0.08, 0.05),
-                        intensity: 3_200_000.0,
-                        range: RANGE_THRESHOLD,
-                        radius: w * 0.4,
-                        shadows_enabled: false,
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, light_y, tz + end_sign * 1.0),
-                    PIXEL_LAYER,
-                ));
-
-                for side in [-1.0_f32, 1.0] {
-                    parent.spawn((
-                        PointLight {
-                            color: Color::srgb(1.0, 0.15, 0.1),
-                            intensity: 5_000_000.0,
-                            range: RANGE_REIL,
-                            radius: 1.5,
-                            shadows_enabled: false,
-                            ..default()
-                        },
-                        Transform::from_xyz(side * (w * 0.5 + 5.0), light_y + 0.5, tz),
-                        PIXEL_LAYER,
-                        ReilLight,
-                    ));
-                }
-
-                const ALS_BARS: i32 = 3;
-                const ALS_SPACING: f32 = 60.0;
-                for j in 1..=ALS_BARS {
-                    let z = tz + end_sign * j as f32 * ALS_SPACING;
-                    parent.spawn((
-                        PointLight {
-                            color: Color::srgb(1.0, 0.97, 0.88),
-                            intensity: 2_000_000.0,
-                            range: RANGE_ALS,
-                            radius: 9.0,
-                            shadows_enabled: false,
-                            ..default()
-                        },
-                        Transform::from_xyz(0.0, light_y + 1.5, z),
-                        PIXEL_LAYER,
-                        AlsLight { index: j },
-                    ));
-                }
-            }
+            // Lights are never spawned here — `stream_runway_lights` (chained
+            // right after `stream_runways` in the same Update pass, so its
+            // Commands see this same-frame spawn) is the single place that
+            // decides whether a runway's lights should exist, based on
+            // distance, RunwayLightsEnabled, and day/night. Keeping that
+            // logic in one place means "should this runway be lit right now"
+            // never has two different answers depending on which system last
+            // touched it.
         });
 
     // One low-poly cylinder stalk per airport, spawned only for the primary strip.
@@ -876,17 +947,125 @@ fn spawn_runway(
             MeshMaterial3d(materials.stalk.clone()),
             Transform::from_xyz(sx, mid_y, sz),
             PIXEL_LAYER,
-            WaypointStalk { cell, kind: inst.kind },
+            WaypointStalk { cell, kind: inst.kind, name: airport_name(seed, cell, inst.kind) },
             NoFrustumCulling,
         ));
     }
 }
 
-/// Marks the 3D stalk cylinder for a waypoint pin.
+/// Spawns one runway's full light set (edge, threshold, REIL, ALS) under a
+/// `RunwayLights`-tagged child group, so `stream_runway_lights` can despawn
+/// the whole group in one shot when the camera moves out of
+/// `LIGHTS_MAX_VIEW_M`.
+fn spawn_runway_lights(parent: &mut ChildSpawnerCommands, w: f32, l: f32, half_len: f32, surface_y: f32) {
+    let light_y = surface_y + LIGHT_Y;
+    let half_w = w * 0.5 - EDGE_LIGHT_INSET;
+    let n_edge = (l / EDGE_LIGHT_SPACING) as i32 + 1;
+    let edge_start = -half_len;
+    let threshold_z = half_len - 2.0;
+    let white = Color::srgb(1.0, 0.97, 0.88);
+    let yellow = Color::srgb(1.0, 0.85, 0.1);
+    let caution_start = half_len - 610.0;
+
+    parent.spawn((
+        Transform::IDENTITY,
+        Visibility::default(),
+        RunwayLights,
+        PIXEL_LAYER,
+    )).with_children(|group| {
+        for i in 0..=n_edge {
+            let z = edge_start + i as f32 * EDGE_LIGHT_SPACING;
+            if z > half_len { break; }
+            let color = if z >= caution_start { yellow } else { white };
+            for side in [-1.0_f32, 1.0] {
+                group.spawn((
+                    PointLight {
+                        color,
+                        intensity: 500_000.0,
+                        range: RANGE_EDGE,
+                        radius: 0.3,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(side * half_w, light_y, z),
+                    PIXEL_LAYER,
+                ));
+            }
+        }
+
+        for end_sign in [-1.0_f32, 1.0] {
+            let tz = end_sign * threshold_z;
+            group.spawn((
+                PointLight {
+                    color: Color::srgb(0.1, 1.0, 0.2),
+                    intensity: 3_200_000.0,
+                    range: RANGE_THRESHOLD,
+                    radius: w * 0.4,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, light_y, tz - end_sign * 1.0),
+                PIXEL_LAYER,
+            ));
+            group.spawn((
+                PointLight {
+                    color: Color::srgb(1.0, 0.08, 0.05),
+                    intensity: 3_200_000.0,
+                    range: RANGE_THRESHOLD,
+                    radius: w * 0.4,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(0.0, light_y, tz + end_sign * 1.0),
+                PIXEL_LAYER,
+            ));
+
+            for side in [-1.0_f32, 1.0] {
+                group.spawn((
+                    PointLight {
+                        color: Color::srgb(1.0, 0.15, 0.1),
+                        intensity: 5_000_000.0,
+                        range: RANGE_REIL,
+                        radius: 1.5,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(side * (w * 0.5 + 5.0), light_y + 0.5, tz),
+                    PIXEL_LAYER,
+                    ReilLight,
+                ));
+            }
+
+            const ALS_BARS: i32 = 3;
+            const ALS_SPACING: f32 = 60.0;
+            for j in 1..=ALS_BARS {
+                let z = tz + end_sign * j as f32 * ALS_SPACING;
+                group.spawn((
+                    PointLight {
+                        color: Color::srgb(1.0, 0.97, 0.88),
+                        intensity: 2_000_000.0,
+                        range: RANGE_ALS,
+                        radius: 9.0,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, light_y + 1.5, z),
+                    PIXEL_LAYER,
+                    AlsLight { index: j },
+                ));
+            }
+        }
+    });
+}
+
+/// Marks the 3D stalk cylinder for a waypoint pin. `name` is precomputed at
+/// spawn time (deterministic from seed/cell/kind) so the label UI doesn't
+/// re-hash and re-format it every frame it's on screen.
 #[derive(Component)]
 pub struct WaypointStalk {
     pub cell: (i32, i32),
     pub kind: AirportKind,
+    pub name: String,
 }
 
 /// Scales each stalk's X/Z to keep a constant apparent radius on screen.

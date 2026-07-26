@@ -77,6 +77,14 @@ impl Default for DayNightCycle {
     }
 }
 
+impl DayNightCycle {
+    /// Whether it's dark enough for runway/approach lighting to be on — a
+    /// little before full sunset/after sunrise, like real airport lights.
+    pub fn is_night(&self) -> bool {
+        !(0.22..0.78).contains(&self.time_of_day)
+    }
+}
+
 /// Marker for the directional light acting as the sun (invisible; it only lights
 /// the scene). The visible disc in the sky is a separate [`SunDisc`] entity.
 #[derive(Component)]
