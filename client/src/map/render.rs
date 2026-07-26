@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::terrain::{Airport, Biome, WorldGenerator, runway_ident};
+use crate::terrain::{Airport, AirportKind, Biome, WorldGenerator, runway_ident};
 
 use super::{Breadcrumb, MapIconSettings, MapLayer};
 
@@ -22,8 +22,10 @@ use super::{Breadcrumb, MapIconSettings, MapLayer};
 pub const TEX: u32 = 256;
 
 /// Below this world-metres-per-texel zoom, airport idents are drawn — at coarser
-/// zooms there are too many strips on screen for labels to be readable.
-const IDENT_ZOOM_LIMIT: f32 = 160.0;
+/// zooms there are too many strips on screen for labels to be readable. Raised
+/// well past the old 160 so idents stay legible further into the zoomed-out
+/// range, now that pins have a pixel-floor size and don't vanish out there.
+const IDENT_ZOOM_LIMIT: f32 = 500.0;
 
 /// Half the world-space extent the texture currently covers, in metres: the map
 /// spans `center ± half_span` on both axes.
@@ -194,13 +196,29 @@ fn to_u8(v: f32) -> u8 {
 
 // --- Overlay drawing ----------------------------------------------------------
 
-const AIRPORT: egui::Color32 = egui::Color32::from_rgb(255, 90, 220);
 const PLANE: egui::Color32 = egui::Color32::from_rgb(255, 230, 60);
 const CAMERA: egui::Color32 = egui::Color32::from_rgb(120, 220, 255);
 const WAYPOINT: egui::Color32 = egui::Color32::from_rgb(255, 140, 40);
 
+/// Fill colour per [`AirportKind`], so airport class reads at a glance without
+/// relying on dot size (which stays uniform — see [`draw_airports`]).
+fn airport_color(kind: AirportKind) -> egui::Color32 {
+    match kind {
+        AirportKind::DirtStrip => egui::Color32::from_rgb(150, 110, 70),
+        AirportKind::SmallGA => egui::Color32::from_rgb(255, 90, 220),
+        AirportKind::LargeCommuter => egui::Color32::from_rgb(255, 150, 60),
+        AirportKind::Regional => egui::Color32::from_rgb(140, 170, 255),
+        AirportKind::Hub => egui::Color32::from_rgb(90, 255, 140),
+    }
+}
+
 /// Draws one map pin per airport (one per cell), with every strip drawn at its
 /// own heading and to-scale length — so non-parallel runways render correctly.
+/// The pin's colour encodes [`AirportKind`] (dirt strip → hub); every dot is
+/// the same size so colour alone carries the class, not size. The dot's
+/// on-screen radius has a pixel floor so it stays visible zoomed all the way
+/// out, instead of shrinking to a sub-pixel dot the way pure world-space
+/// scaling would.
 pub fn draw_airports(
     painter: &egui::Painter,
     airports: &[Airport],
@@ -210,28 +228,40 @@ pub fn draw_airports(
     icons: &MapIconSettings,
     view: &View,
 ) {
-    // 300 m world-space diameter so the dot scales with zoom exactly like the
-    // runway lines do, instead of a fixed pixel size that balloons/overlaps
-    // neighbouring airports when zoomed out. Capped at 3 km so a future bump to
-    // the base diameter (or a different scaling curve) can't make the dot's
-    // world-space footprint balloon at far zoom-out.
-    const DOT_WORLD_DIAMETER: f32 = 300.0;
+    // World-space diameter so the dot scales with zoom like the runway lines
+    // do when zoomed in, capped so it can't balloon over neighbouring airports.
+    const DOT_WORLD_DIAMETER: f32 = 1000.0;
     const DOT_WORLD_DIAMETER_MAX: f32 = 3000.0;
-    let dot_radius = DOT_WORLD_DIAMETER.min(DOT_WORLD_DIAMETER_MAX) * 0.5 / view.world_per_px();
+    let world_radius = DOT_WORLD_DIAMETER.min(DOT_WORLD_DIAMETER_MAX) * 0.5 / view.world_per_px();
+
     for ap in airports {
         let (ax, az) = ap.pos();
         let center = view.to_screen(Vec2::new(ax, az));
+        let color = airport_color(ap.kind);
+        // Pixel floor (icons.airport_circle) so the pin never vanishes zoomed
+        // out; world-space size still wins zoomed in so it doesn't overlap
+        // neighbours once strips are individually visible. Same floor for
+        // every kind, so size carries no meaning — only colour does.
+        let dot_radius = world_radius.max(icons.airport_circle);
 
-        // Always draw the circle anchor so the airport reads as one pin, then
-        // draw each strip's own line on top, each using its own heading/length.
-        painter.circle(center, dot_radius, AIRPORT, egui::Stroke::NONE);
+        // Outline makes small/dim kinds (dirt strips) still read against
+        // similarly-coloured terrain, and gives every pin a crisp edge.
+        painter.circle(
+            center,
+            dot_radius,
+            color,
+            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(200)),
+        );
+
+        // Draw each strip's own line on top, each using its own heading/length,
+        // once they're big enough on screen to be worth drawing.
         for strip in &ap.strips {
             let sc = view.to_screen(Vec2::new(strip.x, strip.z));
             let (s, c) = strip.heading.sin_cos();
             let hdir = egui::vec2(s, c);
             let strip_screen_len = strip.length / view.world_per_px();
             let half = hdir * (strip_screen_len * 0.5);
-            let stroke_width = strip.width / view.world_per_px();
+            let stroke_width = (strip.width / view.world_per_px()).max(icons.runway_width * 0.4);
             let stroke = egui::Stroke::new(stroke_width, egui::Color32::WHITE);
             painter.line_segment([sc - half, sc + half], stroke);
         }
@@ -244,10 +274,13 @@ pub fn draw_airports(
             );
         }
         if show_idents {
+            // Fixed clearance beyond the dot, not just a few px past its edge —
+            // at coarse zoom the dot shrinks to its pixel floor but the label
+            // should still sit clearly outside it, not crowd the marker.
             painter.text(
-                center + egui::vec2(dot_radius + 3.0, 0.0),
+                center + egui::vec2(dot_radius + 8.0, 0.0),
                 egui::Align2::LEFT_CENTER,
-                runway_ident(seed, ap.cell),
+                format!("{}  {}", runway_ident(seed, ap.cell), ap.kind.display_name()),
                 egui::FontId::proportional(icons.label_font),
                 egui::Color32::WHITE,
             );

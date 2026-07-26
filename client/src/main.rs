@@ -328,13 +328,18 @@ fn setup(
             ..default()
         },
         // Depth precision is set by the near/far ratio. Geometry past the fog
-        // horizon (15 km, see `fog::FogSettings::visibility`) is never visible, so
-        // the far plane sits just beyond it rather than at some huge value — a
-        // tighter range gives the depth buffer far more resolution at altitude,
-        // which is what stops the runway slab and water plane z-fighting their
-        // near-coplanar terrain when viewed from high up. `near` is held at the
-        // closest the orbit cam can zoom (~3 m) without clipping the aircraft.
-        Projection::Perspective(PerspectiveProjection::default()),
+        // horizon (13 km default, see `fog::FogSettings::visibility`) is never
+        // visible, so the far plane sits just beyond it rather than at some huge
+        // value — a tighter range gives the depth buffer far more resolution at
+        // altitude, which is what stops the runway slab and water plane
+        // z-fighting their near-coplanar terrain when viewed from high up. `near`
+        // is held at the closest the orbit cam can zoom (~3 m) without clipping
+        // the aircraft.
+        Projection::Perspective(PerspectiveProjection {
+            near: 3.0,
+            far: 16_000.0,
+            ..default()
+        }),
         RenderTarget::Image(pixel_target.clone().into()),
         Msaa::Off,
         PIXEL_LAYER,

@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{OuterCamera, RenderScale};
+use crate::camera::{OuterCamera, RenderScale, UiScale};
 use crate::network::RemotePlayer;
 use crate::plane::Airplane;
 use crate::terrain::TerrainCamera;
@@ -35,6 +35,7 @@ pub fn draw_player_labels(
     // labeling the raw un-delayed sample instead made the name tag visibly
     // run ahead of the plane it's supposed to label.
     render_scale: Res<RenderScale>,
+    ui_scale: Res<UiScale>,
     remotes: Query<(&RemotePlayer, &Transform), Without<Airplane>>,
     plane_q: Query<&Transform, With<Airplane>>,
     inner_cam_q: Query<(&Camera, &GlobalTransform), With<TerrainCamera>>,
@@ -67,9 +68,13 @@ pub fn draw_player_labels(
         egui::Id::new("player_label_layer"),
     ));
 
+    // See waypoints.rs's to_win for why this divides by UiScale: egui's
+    // painter is scaled by EguiContextSettings.scale_factor (set from
+    // UiScale in camera.rs), so raw window-logical pixels overshoot unless
+    // converted into that points space first.
     let to_win = |cp: Vec2| egui::pos2(
-        cp.x * canvas_scale + canvas_offset_x,
-        cp.y * canvas_scale + canvas_offset_y,
+        (cp.x * canvas_scale + canvas_offset_x) / ui_scale.0,
+        (cp.y * canvas_scale + canvas_offset_y) / ui_scale.0,
     );
 
     for (player, transform) in &remotes {

@@ -464,13 +464,17 @@ fn draw_map(
             }
 
             // --- Click to select an airport / right-click to clear ---
+            // Hit radius is well beyond the drawn dot (which can be smaller than
+            // this for dirt strips) so airports stay easy to click at any zoom,
+            // rather than requiring pixel-precise hits on the marker itself.
+            const AIRPORT_HIT_RADIUS_PX: f32 = 28.0;
             if response.clicked()
                 && let Some(p) = response.interact_pointer_pos() {
                 let mut best: Option<(f32, usize)> = None;
                 for (i, ap) in airports.iter().enumerate() {
                     let (ax, az) = ap.pos();
                     let d = view.to_screen(Vec2::new(ax, az)).distance(p);
-                    if d < 12.0 && best.is_none_or(|(bd, _)| d < bd) {
+                    if d < AIRPORT_HIT_RADIUS_PX && best.is_none_or(|(bd, _)| d < bd) {
                         best = Some((d, i));
                     }
                 }

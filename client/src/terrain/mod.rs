@@ -14,7 +14,7 @@ pub use generator::{Biome, BiomeShape, WorldGenConfig, WorldGenerator};
 /// Read-only airport layout, for the map overlay. `runways_in_region` recomputes
 /// the deterministic strips inside a world-space box (see [`runway`]); nothing is
 /// stored, so the map can list nearby airports without touching streaming state.
-pub use runway::{Airport, WaypointStalk, airport_name, airports_in_region, runway_ident};
+pub use runway::{Airport, AirportKind, WaypointStalk, airport_name, airports_in_region, runway_ident};
 
 use bevy::prelude::*;
 

@@ -267,6 +267,28 @@ fn draw_menu(
                                 .text("Step height (raw units)"));
                         });
 
+                    // --- Rivers (procedural channel mask, not simulated flow) --
+                    egui::CollapsingHeader::new("Rivers")
+                        .id_salt("worldgen_rivers")
+                        .show(ui, |ui| {
+                            ui.label("Not simulated flow — a winding mask carved toward sea level.\nMay occasionally look odd (e.g. cross a ridge) since it doesn't trace real downhill paths.");
+                            ui.add(egui::Slider::new(&mut w.river_depth, 0.0..=3.0)
+                                .text("Depth (raw units)"));
+                            ui.add(egui::Slider::new(&mut w.river_width, 0.005..=0.3)
+                                .text("Width")
+                                .logarithmic(true));
+                            ui.add(egui::Slider::new(&mut w.river_scale, 1.0..=20.0)
+                                .text("Winding detail (freq × continent)")
+                                .logarithmic(true));
+                            ui.add(egui::Slider::new(&mut w.river_rarity, 0.0..=0.95)
+                                .text("Rarity (higher = fewer rivers)"));
+                            ui.separator();
+                            ui.add(egui::Slider::new(&mut w.river_max_height, 0.5..=8.0)
+                                .text("Max height (raw units)"));
+                            ui.add(egui::Slider::new(&mut w.river_fade, 0.1..=4.0)
+                                .text("Fade band (raw units)"));
+                        });
+
                     // --- Oceans (geography-driven, independent of climate) ------
                     egui::CollapsingHeader::new("Oceans")
                         .id_salt("worldgen_oceans")

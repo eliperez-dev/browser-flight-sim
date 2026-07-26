@@ -98,6 +98,43 @@ pub const DEFAULT_PLATEAU_STRENGTH: f32 = 0.4;
 /// distance between terraces. Smaller = more, closer-spaced shelves.
 pub const DEFAULT_PLATEAU_STEP: f32 = 0.6;
 
+/// Default river channel depth (raw units, pre-`height_scale`) carved along
+/// the river mask's near-zero contour. 0 disables. Not a hydraulically
+/// simulated flow network (the world is sampled per-point with no global
+/// heightmap to trace downhill accumulation through) — this is a procedural
+/// stand-in: a dedicated noise field's zero-crossing traces a winding line,
+/// which gets carved down toward sea level. Reads as rivers/valleys from the
+/// air; doesn't guarantee physically perfect downhill flow everywhere.
+pub const DEFAULT_RIVER_DEPTH: f32 = 2.0;
+
+/// Default river channel width, in the same normalised units as the mask
+/// (roughly -1..1 before the near-zero test) — wider tolerance around the
+/// zero-crossing means a broader carved channel.
+pub const DEFAULT_RIVER_WIDTH: f32 = 0.06;
+
+/// Default river frequency multiplier on the continent field, analogous to
+/// `orogeny_scale`. Higher = more, tighter-winding rivers.
+pub const DEFAULT_RIVER_SCALE: f32 = 5.0;
+
+/// Default height (raw units, pre-`height_scale`, pre-carving) above which
+/// rivers stop appearing entirely — a river shouldn't be visible cutting
+/// across a mountainside. Fades out over [`DEFAULT_RIVER_FADE`] rather than
+/// stopping abruptly, so there's no visible seam where the channel just ends.
+pub const DEFAULT_RIVER_MAX_HEIGHT: f32 = 2.3;
+
+/// Default river rarity, 0..1: fraction of the map where the rarity mask
+/// gates rivers *out* entirely. At 0, every zero-crossing of the river mask
+/// becomes a channel (a dense, space-filling network of "scars" everywhere,
+/// since Perlin zero-crossings are common). Higher values only let rivers
+/// exist within a shrinking minority of the map (a separate, low-frequency
+/// "is this a river region" field), so what remains reads as occasional,
+/// localized rivers rather than terrain-wide veins.
+pub const DEFAULT_RIVER_RARITY: f32 = 0.6;
+
+/// Default fade band (raw units) below `river_max_height` over which river
+/// strength ramps from full to zero.
+pub const DEFAULT_RIVER_FADE: f32 = 1.0;
+
 /// Default orogeny frequency multiplier on the continent field (see
 /// [`WorldGenerator::from_config`]): 1.0 makes uplift regions track the
 /// coastline 1:1, higher values carve finer/more numerous ranges within
@@ -224,6 +261,18 @@ pub struct WorldGenConfig {
     pub plateau_strength: f32,
     /// Plateau step height (raw units); see [`DEFAULT_PLATEAU_STEP`].
     pub plateau_step: f32,
+    /// River channel depth (raw units); see [`DEFAULT_RIVER_DEPTH`]. 0 disables.
+    pub river_depth: f32,
+    /// River channel width; see [`DEFAULT_RIVER_WIDTH`].
+    pub river_width: f32,
+    /// River frequency multiplier on the continent field; see [`DEFAULT_RIVER_SCALE`].
+    pub river_scale: f32,
+    /// Height above which rivers stop appearing; see [`DEFAULT_RIVER_MAX_HEIGHT`].
+    pub river_max_height: f32,
+    /// Fade band below `river_max_height`; see [`DEFAULT_RIVER_FADE`].
+    pub river_fade: f32,
+    /// Fraction of the map excluded from rivers entirely; see [`DEFAULT_RIVER_RARITY`].
+    pub river_rarity: f32,
 }
 
 impl Default for WorldGenConfig {
@@ -271,6 +320,12 @@ impl Default for WorldGenConfig {
             orogeny_scale: DEFAULT_OROGENY_SCALE,
             plateau_strength: DEFAULT_PLATEAU_STRENGTH,
             plateau_step: DEFAULT_PLATEAU_STEP,
+            river_depth: DEFAULT_RIVER_DEPTH,
+            river_width: DEFAULT_RIVER_WIDTH,
+            river_scale: DEFAULT_RIVER_SCALE,
+            river_max_height: DEFAULT_RIVER_MAX_HEIGHT,
+            river_fade: DEFAULT_RIVER_FADE,
+            river_rarity: DEFAULT_RIVER_RARITY,
         }
     }
 }
@@ -306,6 +361,11 @@ pub struct WorldGenerator {
     orogeny_strength: f32,
     plateau_strength: f32,
     plateau_step: f32,
+    river_depth: f32,
+    river_width: f32,
+    river_max_height: f32,
+    river_fade: f32,
+    river_rarity: f32,
     terrain_layers: Vec<PerlinLayer>,
     temperature_layer: PerlinLayer,
     humidity_layer: PerlinLayer,
@@ -321,6 +381,19 @@ pub struct WorldGenerator {
     /// can carve out real mountain ranges in one area and stay rolling hills
     /// in another, instead of uniform relief everywhere it appears.
     orogeny_layer: PerlinLayer,
+    /// River mask, arbitrary range: the same seeded field as `continent_layer`
+    /// resampled at yet another frequency/offset (see [`Self::from_config`]).
+    /// Its near-zero contour traces a winding line, carved into a channel by
+    /// [`Self::shape_raw`] — see [`DEFAULT_RIVER_DEPTH`] for why this is a
+    /// procedural stand-in rather than simulated flow.
+    river_layer: PerlinLayer,
+    /// Independent low-frequency mask, 0..1: gates where rivers are allowed to
+    /// exist at all, separately from the river mask's own zero-crossing lines.
+    /// Without this, every zero-crossing of `river_layer` becomes a channel —
+    /// since those are common and space-filling, rivers would carve dense,
+    /// terrain-wide scars rather than occasional, localized valleys. See
+    /// [`DEFAULT_RIVER_RARITY`].
+    river_rarity_layer: PerlinLayer,
     /// Domain-warp fields: displace (x, z) before every other sample so biome
     /// borders and terrain features follow wobbly, organic curves instead of
     /// the straight/grid-aligned contours raw Perlin produces on its own.
@@ -350,6 +423,23 @@ impl WorldGenerator {
             1.0,
             54_321.0,
         );
+        // Another resample, different frequency/offset again, so it winds
+        // through the landscape independently of both the coastline and the
+        // mountain ranges rather than tracking either one.
+        let river_layer = continent_layer.resampled(
+            continent_freq * cfg.river_scale.max(0.1),
+            1.0,
+            98_765.0,
+        );
+        // Low frequency (independent of river_scale, so tightening the
+        // winding detail doesn't also shrink the river-eligible regions) and
+        // yet another offset so the eligible regions don't align with the
+        // river lines, mountains, or coastline.
+        let river_rarity_layer = continent_layer.resampled(
+            continent_freq * 0.35,
+            1.0,
+            13_579.0,
+        );
         Self {
             seed,
             height_scale: cfg.height_scale,
@@ -372,6 +462,11 @@ impl WorldGenerator {
             orogeny_strength: cfg.orogeny_strength,
             plateau_strength: cfg.plateau_strength,
             plateau_step: cfg.plateau_step.max(0.01),
+            river_depth: cfg.river_depth,
+            river_width: cfg.river_width.max(0.001),
+            river_max_height: cfg.river_max_height,
+            river_fade: cfg.river_fade.max(0.01),
+            river_rarity: cfg.river_rarity.clamp(0.0, 1.0),
             // (horizontal_scale, vertical_amplitude). Low scale = broad features.
             // Ratios between octaves are deliberately non-round (not clean
             // doublings) so they don't phase-lock into a repeating lattice.
@@ -388,6 +483,8 @@ impl WorldGenerator {
             humidity_layer: PerlinLayer::new(seed + 500, climate_freq, 1.0),
             continent_layer,
             orogeny_layer,
+            river_layer,
+            river_rarity_layer,
             // Low-frequency, high-amplitude relative to what they displace so the
             // warp is clearly visible in the climate/continent borders and coarse
             // height features. Frequencies are offset from climate_freq/continent_freq
@@ -526,18 +623,28 @@ impl WorldGenerator {
         // than crossing ridgelines at odd angles.
         let orogeny = ((self.orogeny_layer.get(wx, wz) / self.orogeny_layer.vertical_scale) + 1.0) * 0.5;
 
+        // River mask, raw Perlin range: sampled at unwarped (x, z) so its
+        // winding lines cut across the terrain's own warp field independently
+        // rather than tracking it — rivers shouldn't visibly follow the same
+        // bends as the mountains they cut through.
+        let river = self.river_layer.get(x, z) / self.river_layer.vertical_scale;
+
+        // River rarity mask, 0..1: gates which regions are allowed to grow
+        // rivers at all — see field doc on `river_rarity_layer`.
+        let river_rarity = ((self.river_rarity_layer.get(x, z) / self.river_rarity_layer.vertical_scale) + 1.0) * 0.5;
+
         // Altitude → temperature: estimate the elevation using the sea-level
         // climate, then cool by the lapse rate so high ground trends cold/snowy.
         // One fixed-point step breaks the climate↔height circular dependency
         // (height needs climate, cooled climate needs height) without iterating.
         let temp = if self.temp_lapse > 0.0 {
-            let altitude = (self.shape_raw(base, temp_base, hum, ocean, orogeny) * self.height_scale).max(0.0);
+            let altitude = (self.shape_raw(base, temp_base, hum, ocean, orogeny, river, river_rarity) * self.height_scale).max(0.0);
             (temp_base - self.temp_lapse * altitude / 1000.0).clamp(0.0, 1.0)
         } else {
             temp_base
         };
 
-        (self.shape_raw(base, temp, hum, ocean, orogeny), temp, hum)
+        (self.shape_raw(base, temp, hum, ocean, orogeny, river, river_rarity), temp, hum)
     }
 
     /// How strongly a point is open ocean (0 = land, 1 = full sea), from the
@@ -556,7 +663,11 @@ impl WorldGenerator {
     /// `orogeny` (0..1, see [`Self::natural_raw`]) locally boosts land relief
     /// and elevation around 0.5 so the same biome varies between rolling
     /// lowlands and real mountain ranges instead of uniform relief everywhere.
-    fn shape_raw(&self, base: f32, temp: f32, humidity: f32, ocean: f32, orogeny: f32) -> f32 {
+    /// `river` (raw Perlin range, see [`Self::natural_raw`]) carves a channel
+    /// toward sea level near its zero-crossing — see [`DEFAULT_RIVER_DEPTH`].
+    /// `river_rarity` (0..1) gates which regions are eligible for rivers at
+    /// all — see [`DEFAULT_RIVER_RARITY`].
+    fn shape_raw(&self, base: f32, temp: f32, humidity: f32, ocean: f32, orogeny: f32, river: f32, river_rarity: f32) -> f32 {
         let w = self.biome_weights(temp, humidity);
         let land_elev = w[0] * self.grasslands.elevation
             + w[1] * self.taiga.elevation
@@ -580,10 +691,59 @@ impl WorldGenerator {
         // land — mesas are flat-lying rock pushed up wholesale, so gating on
         // `orogeny` keeps lowlands and oceans smooth and ties plateaus to the
         // same uplift that makes mountains, rather than terracing everywhere.
-        if self.plateau_strength > 0.0 && ocean < 0.5 {
+        let height = if self.plateau_strength > 0.0 && ocean < 0.5 {
             let terraced = (height / self.plateau_step).round() * self.plateau_step;
             let gate = (orogeny - 0.5).max(0.0) * 2.0 * self.plateau_strength;
             height + (terraced - height) * gate.min(1.0)
+        } else {
+            height
+        };
+
+        // River channel: `channel` is 1.0 exactly on the mask's zero-crossing
+        // and falls off to 0 within `river_width` either side, tracing a
+        // winding line. The channel floor targets a fixed point just *below*
+        // sea level — not "current height minus a fixed cut" — so the river
+        // actually meets the water plane instead of asymptotically
+        // approaching 0 and reading as a dry ravine. `river_depth` caps how
+        // far a single point can be cut, so a river crossing the tallest
+        // peaks carves a canyon down by at most `river_depth` (may not reach
+        // the water there) while anywhere shallower always reaches it.
+        // `altitude_gate` fades rivers out entirely above `river_max_height`
+        // (over `river_fade`) — a river shouldn't be visible cutting across a
+        // mountainside, only through lowlands/hills it could plausibly reach.
+        // Both this and the channel's own width falloff use `smoothstep`
+        // rather than a linear ramp: a linear ramp's slope changes instantly
+        // at the band edges (a visible kink), while smoothstep eases in/out
+        // with zero slope at both ends, so the river genuinely tapers away
+        // rather than fading at a constant, then suddenly-stopping, rate.
+        // `rarity_gate` additionally excludes `river_rarity` (0..1) of the map
+        // from ever carving a channel — a separate, low-frequency "is this a
+        // river region" field. Without it every zero-crossing of `river`
+        // becomes a channel, and those are common/space-filling, so rivers
+        // read as dense scars everywhere rather than occasional, localized
+        // valleys. Fades over a fixed band around the threshold (rather than
+        // a hard cutoff) for the same reason `altitude_gate` fades: no visible
+        // seam where a river abruptly starts or stops mid-channel.
+        // `biome_gate` additionally restricts rivers to grasslands/desert
+        // lowlands (`w[0]`, `w[2]`) and excludes taiga/forest (`w[1]`, `w[3]`)
+        // — real rivers wind through open lowlands, not conifer forest or
+        // tundra, so weighting by those biome blend weights (already computed
+        // above for elevation/relief) keeps rivers out of the biomes where
+        // they read as out-of-place scars cutting through trees.
+        if self.river_depth > 0.0 && ocean < 0.5 {
+            let above_fade_start = (height - (self.river_max_height - self.river_fade)) / self.river_fade;
+            let altitude_gate = 1.0 - smoothstep(above_fade_start.clamp(0.0, 1.0));
+            const RARITY_FADE: f32 = 0.08;
+            let rarity_gate = smoothstep(((river_rarity - self.river_rarity) / RARITY_FADE).clamp(0.0, 1.0));
+            let biome_gate = smoothstep((w[0] + w[2]).clamp(0.0, 1.0));
+            // Rivers shouldn't cut through actively-uplifted terrain (real
+            // mountain ranges) even where its absolute height happens to be
+            // below `river_max_height` — orogeny centers around 0.5, so gate
+            // out the upper half of that range over a soft band.
+            let orogeny_gate = 1.0 - smoothstep(((orogeny - 0.5) / 0.2).clamp(0.0, 1.0));
+            let channel = smoothstep((1.0 - (river / self.river_width).abs()).clamp(0.0, 1.0)) * altitude_gate * rarity_gate * biome_gate * orogeny_gate;
+            let channel_floor = (height - self.river_depth).max(-0.15 * self.river_depth);
+            height + (channel_floor - height) * channel
         } else {
             height
         }
@@ -631,6 +791,13 @@ impl WorldGenerator {
 /// (bias 0, contrast 1).
 fn remap_axis(v: f32, bias: f32, contrast: f32) -> f32 {
     (0.5 + (v - 0.5) * contrast + bias).clamp(0.0, 1.0)
+}
+
+/// Classic cubic smoothstep, `t` assumed already in 0..1: eases in and out
+/// with zero slope at both ends, unlike a linear ramp which has a visible
+/// kink (instant slope change) at 0 and 1.
+fn smoothstep(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// The four climate biomes plus open water.

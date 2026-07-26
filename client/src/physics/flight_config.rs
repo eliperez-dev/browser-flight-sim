@@ -450,7 +450,7 @@ impl Default for FlightModelConfig {
             throttle_rate:        0.5,
             servo_tau:            0.45,
   
-            elevator_trim:        0.0524,
+            elevator_trim:        0.0424,
 
             // Supplemental damping only — the tail/fin/wings already provide the
             // primary rate damping aerodynamically, so keep this low to avoid

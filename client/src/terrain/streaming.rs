@@ -73,27 +73,17 @@ pub fn regenerate_terrain(
                 manager.last_camera_chunk = None;
             }
             // Generation params changed → schedule a debounced full rebuild.
-            if config.seed != prev.seed
-                || config.horizontal_scale != prev.horizontal_scale
-                || config.height_scale != prev.height_scale
-                || config.sea_level_threshold != prev.sea_level_threshold
-                || config.ocean_transition_width != prev.ocean_transition_width
-                || config.ocean_depth != prev.ocean_depth
-                || config.continent_size != prev.continent_size
-                || config.coastal_humidity != prev.coastal_humidity
-                || config.biome_size != prev.biome_size
-                || config.desert != prev.desert
-                || config.grasslands != prev.grasslands
-                || config.forest != prev.forest
-                || config.taiga != prev.taiga
-                || config.temp_bias != prev.temp_bias
-                || config.temp_contrast != prev.temp_contrast
-                || config.humidity_bias != prev.humidity_bias
-                || config.humidity_contrast != prev.humidity_contrast
-                || config.temp_lapse != prev.temp_lapse
-                || config.latitude_strength != prev.latitude_strength
-                || config.latitude_band != prev.latitude_band
-            {
+            // Compared as "everything except the streaming-only fields
+            // (already handled above)" via a full clone-and-overwrite rather
+            // than an itemized field list — the itemized version silently
+            // stopped triggering rebuilds for every new world-gen knob added
+            // after it was written (terrain octaves, warp, orogeny, plateau,
+            // river...) since nobody remembered to extend it each time.
+            let mut prev_sans_streaming = prev.clone();
+            prev_sans_streaming.render_distance = config.render_distance;
+            prev_sans_streaming.lod_levels = config.lod_levels;
+            prev_sans_streaming.max_chunks_per_frame = config.max_chunks_per_frame;
+            if *config != prev_sans_streaming {
                 *pending = Some(REGEN_DEBOUNCE);
             }
         }

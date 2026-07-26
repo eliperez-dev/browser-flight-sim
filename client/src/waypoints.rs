@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{OuterCamera, RenderScale};
+use crate::camera::{OuterCamera, RenderScale, UiScale};
 use crate::plane::Airplane;
 use crate::terrain::{WaypointStalk, WorldGenerator, airport_name, runway_ident};
 use crate::terrain::TerrainCamera;
@@ -55,6 +55,7 @@ pub fn draw_waypoint_labels(
     mut contexts: EguiContexts,
     generator: Res<WorldGenerator>,
     render_scale: Res<RenderScale>,
+    ui_scale: Res<UiScale>,
     stalks: Query<(&WaypointStalk, &Transform)>,
     plane_q: Query<&Transform, With<Airplane>>,
     inner_cam_q: Query<(&Camera, &GlobalTransform), With<TerrainCamera>>,
@@ -85,9 +86,16 @@ pub fn draw_waypoint_labels(
         egui::Id::new("waypoint_layer"),
     ));
 
+    // world_to_viewport returns window-logical pixels, but egui's painter is
+    // scaled by UiScale (EguiContextSettings.scale_factor, set in camera.rs) —
+    // it interprets painter coordinates as points where physical_px = point *
+    // scale_factor, not raw window-logical pixels. Dividing by ui_scale here
+    // converts into that points space; skipping this made every drawn point
+    // overshoot proportionally to both its distance from the origin and how
+    // far ui_scale sits from 1.0 (the debug/graphics-menu default is 1.15).
     let to_win = |cp: Vec2| egui::pos2(
-        cp.x * canvas_scale + canvas_offset_x,
-        cp.y * canvas_scale + canvas_offset_y,
+        (cp.x * canvas_scale + canvas_offset_x) / ui_scale.0,
+        (cp.y * canvas_scale + canvas_offset_y) / ui_scale.0,
     );
 
     for (stalk, stalk_tf) in &stalks {
