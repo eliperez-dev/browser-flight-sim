@@ -139,16 +139,20 @@ pub struct RemotePlayer {
 #[derive(Component)]
 pub struct RemotePlayerVisual;
 
-/// Remote-only light markers, parallel to the local `NavLightLeft` etc. in
-/// `lights.rs`. Kept distinct so the local-player light systems (which query
-/// by marker alone, not by parent) never pick up a remote player's lights.
-#[derive(Component)] struct RemoteNavLeft;
-#[derive(Component)] struct RemoteNavRight;
-#[derive(Component)] struct RemoteNavTail;
-#[derive(Component)] struct RemoteStrobeLeft;
-#[derive(Component)] struct RemoteStrobeRight;
-#[derive(Component)] struct RemoteStrobeTail;
-#[derive(Component)] struct RemoteBeacon;
+/// Which of a remote player's `PointLight` children this is, so
+/// `animate_remote_lights` can drive them all from one query instead of one
+/// per light. Nav/strobe each cover 3 physical lights (left/right/tail) that
+/// always share one intensity, so the side doesn't need its own variant.
+/// Kept distinct from the local `NavLightLeft` etc. markers in `lights.rs` so
+/// the local-player light systems (which query by marker alone, not by
+/// parent) never pick up a remote player's lights. Landing light is a
+/// separate marker below since it's a `SpotLight`, not a `PointLight`.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum RemoteLightKind {
+    Nav,
+    Strobe,
+    Beacon,
+}
 #[derive(Component)] struct RemoteLandingLight;
 
 /// Per-remote-player light animation phase, mirroring `LightTimers` but
@@ -574,7 +578,7 @@ pub struct RemoteTarget {
     pub lights: LightSwitches,
 }
 
-// Needs to comfortably outlast RENDER_DELAY (4 update-intervals) so the
+// Needs to comfortably outlast RENDER_DELAY (3 update-intervals) so the
 // buffer doesn't evict samples the render timestamp still needs; extra
 // margin absorbs jitter without constantly brushing the fallback path.
 const MAX_SAMPLES: usize = 10;
@@ -661,11 +665,12 @@ fn spawn_remote_players(
         // they silently return `Err` and skip — which is why, before this
         // fix, *both* aircraft lost all control and fell through the
         // terrain the moment a remote ghost spawned. A remote ghost must
-        // therefore be visual-only: strip every physics/control component
-        // spawn_aircraft added, keeping just Transform/Visibility and the
-        // mesh/propeller/light children.
+        // therefore be visual-only: strip_physics_components removes every
+        // physics/control component spawn_aircraft added, keeping just
+        // Transform/Visibility and the mesh/propeller/light children.
         let root = spawn_aircraft(&mut commands, &asset_server, &cfg, position);
-        commands.entity(root)
+        let mut root_cmds = commands.entity(root);
+        root_cmds
             .insert(Transform::from_translation(position).with_rotation(rotation).with_scale(Vec3::splat(0.1)))
             .insert(RemotePlayer { id: player.id, name: player.name })
             .insert(RemoteTarget {
@@ -677,31 +682,21 @@ fn spawn_remote_players(
                 lights: player.lights,
             })
             .insert(RemotePlayerVisual)
-            .insert(RemoteLightTimers::default())
-            .remove::<Airplane>()
-            .remove::<crate::plane::PlaneState>()
-            .remove::<AircraftRoot>()
-            .remove::<avian3d::prelude::RigidBody>()
-            .remove::<avian3d::prelude::Mass>()
-            .remove::<avian3d::prelude::AngularInertia>()
-            .remove::<avian3d::prelude::LinearVelocity>()
-            .remove::<avian3d::prelude::AngularVelocity>()
-            .remove::<avian3d::prelude::AngularDamping>()
-            .remove::<avian3d::prelude::CenterOfMass>()
-            .remove::<avian3d::prelude::TransformInterpolation>();
+            .insert(RemoteLightTimers::default());
+        crate::plane::strip_physics_components(&mut root_cmds);
 
         let light_entities = spawn_aircraft_lights(&mut commands, &cfg);
         // Replace each local light marker with the remote equivalent so the
         // local-only light-animation systems in lights.rs (which query by
         // marker with no parent filter) never touch these.
         let [nav_l, nav_r, nav_t, str_l, str_r, str_t, beacon, landing] = light_entities;
-        commands.entity(nav_l).remove::<NavLightLeft>().insert(RemoteNavLeft);
-        commands.entity(nav_r).remove::<NavLightRight>().insert(RemoteNavRight);
-        commands.entity(nav_t).remove::<NavLightTail>().insert(RemoteNavTail);
-        commands.entity(str_l).remove::<StrobeLeft>().insert(RemoteStrobeLeft);
-        commands.entity(str_r).remove::<StrobeRight>().insert(RemoteStrobeRight);
-        commands.entity(str_t).remove::<StrobeTail>().insert(RemoteStrobeTail);
-        commands.entity(beacon).remove::<Beacon>().insert(RemoteBeacon);
+        commands.entity(nav_l).remove::<NavLightLeft>().insert(RemoteLightKind::Nav);
+        commands.entity(nav_r).remove::<NavLightRight>().insert(RemoteLightKind::Nav);
+        commands.entity(nav_t).remove::<NavLightTail>().insert(RemoteLightKind::Nav);
+        commands.entity(str_l).remove::<StrobeLeft>().insert(RemoteLightKind::Strobe);
+        commands.entity(str_r).remove::<StrobeRight>().insert(RemoteLightKind::Strobe);
+        commands.entity(str_t).remove::<StrobeTail>().insert(RemoteLightKind::Strobe);
+        commands.entity(beacon).remove::<Beacon>().insert(RemoteLightKind::Beacon);
         commands.entity(landing).remove::<LandingLight>().insert(RemoteLandingLight);
         commands.entity(root).add_children(&light_entities);
     }
@@ -771,18 +766,11 @@ fn animate_remote_propellers(
 /// `RemoteTarget::lights` switches, animating strobe flash and beacon pulse
 /// locally from elapsed time exactly like the local-player equivalents in
 /// `lights.rs` — only the on/off switch itself is networked.
-#[allow(clippy::too_many_arguments)]
 fn animate_remote_lights(
     time: Res<Time>,
     cfg: Res<FlightModelConfig>,
     mut remotes: Query<(&RemoteTarget, &mut RemoteLightTimers, &Children), With<RemotePlayerVisual>>,
-    mut nav_l_q: Query<&mut PointLight, (With<RemoteNavLeft>, Without<RemoteNavRight>, Without<RemoteNavTail>, Without<RemoteStrobeLeft>, Without<RemoteStrobeRight>, Without<RemoteStrobeTail>, Without<RemoteBeacon>)>,
-    mut nav_r_q: Query<&mut PointLight, (With<RemoteNavRight>, Without<RemoteNavLeft>, Without<RemoteNavTail>, Without<RemoteStrobeLeft>, Without<RemoteStrobeRight>, Without<RemoteStrobeTail>, Without<RemoteBeacon>)>,
-    mut nav_t_q: Query<&mut PointLight, (With<RemoteNavTail>, Without<RemoteNavLeft>, Without<RemoteNavRight>, Without<RemoteStrobeLeft>, Without<RemoteStrobeRight>, Without<RemoteStrobeTail>, Without<RemoteBeacon>)>,
-    mut str_l_q: Query<&mut PointLight, (With<RemoteStrobeLeft>, Without<RemoteNavLeft>, Without<RemoteNavRight>, Without<RemoteNavTail>, Without<RemoteStrobeRight>, Without<RemoteStrobeTail>, Without<RemoteBeacon>)>,
-    mut str_r_q: Query<&mut PointLight, (With<RemoteStrobeRight>, Without<RemoteNavLeft>, Without<RemoteNavRight>, Without<RemoteNavTail>, Without<RemoteStrobeLeft>, Without<RemoteStrobeTail>, Without<RemoteBeacon>)>,
-    mut str_t_q: Query<&mut PointLight, (With<RemoteStrobeTail>, Without<RemoteNavLeft>, Without<RemoteNavRight>, Without<RemoteNavTail>, Without<RemoteStrobeLeft>, Without<RemoteStrobeRight>, Without<RemoteBeacon>)>,
-    mut beacon_q: Query<&mut PointLight, (With<RemoteBeacon>, Without<RemoteNavLeft>, Without<RemoteNavRight>, Without<RemoteNavTail>, Without<RemoteStrobeLeft>, Without<RemoteStrobeRight>, Without<RemoteStrobeTail>)>,
+    mut light_q: Query<(&RemoteLightKind, &mut PointLight)>,
     mut landing_q: Query<&mut SpotLight, With<RemoteLandingLight>>,
 ) {
     let lc = &cfg.lights;
@@ -807,13 +795,13 @@ fn animate_remote_lights(
         let landing_intensity = if lights.landing_light_on { lc.landing_intensity } else { 0.0 };
 
         for &child in children {
-            if let Ok(mut l) = nav_l_q.get_mut(child) { l.intensity = nav_intensity; }
-            if let Ok(mut l) = nav_r_q.get_mut(child) { l.intensity = nav_intensity; }
-            if let Ok(mut l) = nav_t_q.get_mut(child) { l.intensity = nav_intensity; }
-            if let Ok(mut l) = str_l_q.get_mut(child) { l.intensity = strobe_intensity; }
-            if let Ok(mut l) = str_r_q.get_mut(child) { l.intensity = strobe_intensity; }
-            if let Ok(mut l) = str_t_q.get_mut(child) { l.intensity = strobe_intensity; }
-            if let Ok(mut l) = beacon_q.get_mut(child) { l.intensity = beacon_intensity; }
+            if let Ok((kind, mut l)) = light_q.get_mut(child) {
+                l.intensity = match kind {
+                    RemoteLightKind::Nav => nav_intensity,
+                    RemoteLightKind::Strobe => strobe_intensity,
+                    RemoteLightKind::Beacon => beacon_intensity,
+                };
+            }
             if let Ok(mut l) = landing_q.get_mut(child) { l.intensity = landing_intensity; }
         }
     }

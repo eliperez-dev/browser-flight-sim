@@ -104,11 +104,11 @@ pub struct FlightModelConfig {
     pub engine_start_secs: f32,
 
     // --- Propeller (visual only) -------------------------------------------
-    // Configuation for propeller
+    // Configuration for propeller
     pub propeller: PropellerConfig,
 
     // --- Landing gear ------------------------------------------------------
-    /// Configuation for landing gear
+    /// Configuration for landing gear
     pub landing_gear: LandingGearConfig,
 
     // --- Aircraft lights --------------------------------------------------
@@ -206,7 +206,7 @@ impl Default for CargoConfig {
 
 
 #[derive(Clone)]
-/// Configuation for propeller
+/// Configuration for propeller
 pub struct PropellerConfig {
     /// Propeller spin rate at zero throttle, in revolutions per second. The
     /// engine idles rather than stopping, so the prop keeps turning on the
@@ -222,9 +222,6 @@ pub struct PropellerConfig {
     /// rectangle, relative to the aircraft origin. Slide it onto the nose; this
     /// is the spot the real prop node should occupy once the model is ported.
     pub prop_position: Vec3,
-    /// Propeller disc radius in metres — drives the prop gizmo (the circle swept
-    /// by the blades). C172 ≈ 0.94 m.
-    pub prop_radius: f32,
     /// Airspeed (m/s) at which the fixed-pitch prop produces zero net thrust —
     /// the blades stall and the thrust curve reaches zero. Thrust falls with the
     /// square of `v / prop_zero_thrust_speed` (flat near v=0, falling away only
@@ -248,13 +245,12 @@ impl Default for PropellerConfig {
             // Forward of the wing on the nose, on the centerline. Tune onto the
             // model's spinner with the F3 "Propeller" sliders (G shows the gizmo).
             prop_position:        Vec3::new(0.0, 3.5, 33.0),
-            prop_radius:          0.94,
             prop_zero_thrust_speed: 100.0, // ~194 kt — past Vne; curve stays flat through cruise
         }
     }
 }
 
-/// Configuation for plane landing gear
+/// Configuration for plane landing gear
 #[derive(Clone)]
 pub struct LandingGearConfig {
     // Spring-damper suspension feel, shared by every strut. Geometry (wheel

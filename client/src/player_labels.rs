@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{OuterCamera, RenderScale, UiScale};
+use crate::camera::{OuterCamera, RenderScale, UiScale, WorldToOverlay, fade_alpha};
 use crate::network::RemotePlayer;
 use crate::plane::Airplane;
 use crate::terrain::TerrainCamera;
@@ -50,17 +50,7 @@ pub fn draw_player_labels(
     let plane_pos = plane_tf.translation;
     let Ok((inner_cam, inner_gtf)) = inner_cam_q.single() else { return Ok(()) };
 
-    let canvas_scale = outer_proj_q.single().ok().and_then(|p| {
-        if let Projection::Orthographic(o) = p { Some(1.0 / o.scale) } else { None }
-    }).unwrap_or(1.0);
-
-    let window = windows.single().ok();
-    let win_w = window.map(|w| w.width()).unwrap_or(640.0);
-    let win_h = window.map(|w| w.height()).unwrap_or(360.0);
-    let canvas_w = render_scale.width() as f32 * canvas_scale;
-    let canvas_h = render_scale.height() as f32 * canvas_scale;
-    let canvas_offset_x = (win_w - canvas_w) * 0.5;
-    let canvas_offset_y = (win_h - canvas_h) * 0.5;
+    let overlay = WorldToOverlay::new(*render_scale, ui_scale.0, outer_proj_q.single().ok(), windows.single().ok());
 
     let ctx = contexts.ctx_mut()?;
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -68,31 +58,15 @@ pub fn draw_player_labels(
         egui::Id::new("player_label_layer"),
     ));
 
-    // See waypoints.rs's to_win for why this divides by UiScale: egui's
-    // painter is scaled by EguiContextSettings.scale_factor (set from
-    // UiScale in camera.rs), so raw window-logical pixels overshoot unless
-    // converted into that points space first.
-    let to_win = |cp: Vec2| egui::pos2(
-        (cp.x * canvas_scale + canvas_offset_x) / ui_scale.0,
-        (cp.y * canvas_scale + canvas_offset_y) / ui_scale.0,
-    );
-
     for (player, transform) in &remotes {
         let pos = transform.translation;
         let dist_km = Vec2::new(pos.x - plane_pos.x, pos.z - plane_pos.z).length() / 1000.0;
 
-        let alpha = (1.0 - (dist_km - FADE_START_KM).max(0.0) / (FAR_DIST_KM - FADE_START_KM))
-            .clamp(0.0, 1.0);
+        let alpha = fade_alpha(dist_km, FADE_START_KM, FAR_DIST_KM);
         if alpha <= 0.01 { continue; }
 
         let label_world = pos + Vec3::new(0.0, LABEL_HEIGHT_OFFSET, 0.0);
-        let Ok(label_canvas) = inner_cam.world_to_viewport(inner_gtf, label_world) else { continue };
-        let label_win = to_win(label_canvas);
-
-        if label_win.x < -200.0 || label_win.x > win_w + 200.0
-        || label_win.y < -100.0 || label_win.y > win_h + 100.0 {
-            continue;
-        }
+        let Some(label_win) = overlay.project(inner_cam, inner_gtf, label_world) else { continue };
 
         let a = (alpha * 255.0) as u8;
         let name_color = egui::Color32::from_rgba_unmultiplied(120, 200, 255, a);

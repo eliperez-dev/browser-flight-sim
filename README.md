@@ -76,6 +76,15 @@ Two modes, toggled with **F**:
 - **Orbit camera** (default) — Follows the aircraft at 15 m radius. Arrow keys adjust pitch/yaw of the orbit angle.
 - **Free camera** — WASD/QE movement at 5 m/s normal, 300 m/s with Shift, 2,000 m/s with double-Shift. Arrow keys look.
 
+### Multiplayer
+
+Client-authoritative, relay-only — the server never simulates flight:
+
+- **Workspace layout** — `protocol/` defines the shared wire types; `server/` is an Axum WebSocket relay; `client/` runs the same terrain/physics locally for every player from a shared seed.
+- **World registry** — the server multiplexes any number of worlds (the always-on default plus player-created ones) over one HTTP/WS listener, routed by a `ServerId` in the path; idle non-default worlds are reaped.
+- **State relay** — each client simulates its own aircraft and broadcasts position/rotation/control-surface state; remote players are rendered as visual-only ghosts (no physics) interpolated between updates.
+- **Server directory** — a lobby/browser for discovering and joining player-created worlds.
+
 ### Debug & Tuning
 
 A full live-tuning system for iteration without recompiling:
@@ -83,7 +92,7 @@ A full live-tuning system for iteration without recompiling:
 - **F3 debug panel** — egui sliders for every physics constant: aero surface configs, weight & balance (fuel, cargo, occupants shift CoM and inertia live), engine/propeller params, servo response, gravity, air density, terrain generation (seed, scales, LOD), sky, water, fog, lights, and map display.
 - **F4 map overlay** — 256×256 rendered world map with biome/height/category view tabs, aircraft and camera markers, airport overlays with runway lines, a 10-minute breadcrumb trail, click-to-select airports with Direct-To course line, and scroll/drag pan+zoom.
 - **HUD** — Top-left text overlay: speed (m/s and knots), altitude, engine state, mixture, throttle, flaps, RPM, FPS.
-- **G gizmos** — 3D wireframe overlays for CoM, velocity, thrust, gravity, landing gear struts, and per-surface aerodynamic force vectors.
+- **G gizmos** — 3D wireframe overlays for CoM, velocity, thrust, gravity, and per-surface aerodynamic force vectors.
 
 ---
 
@@ -99,7 +108,7 @@ A full live-tuning system for iteration without recompiling:
 | K / L | Mixture lean/rich |
 | I | Engine starter |
 | B | Brakes |
-| L | Landing light toggle |
+| N | Landing light toggle |
 | F | Camera mode toggle |
 | P | Pause physics |
 | F3 | Debug panel |
@@ -110,9 +119,9 @@ A full live-tuning system for iteration without recompiling:
 
 ## Architecture
 
-The project uses Bevy's ECS (Entity-Component-System) throughout. Each aircraft subsystem is a plugin:
+A Cargo workspace of three crates: `client/` (the WASM app, Bevy ECS throughout), `server/` (the Axum WebSocket relay), and `protocol/` (wire types shared by both).
 
-| Module | Responsibility |
+| Module (`client/src/`) | Responsibility |
 |--------|---------------|
 | `physics/` | Aerodynamics, engine, landing gear, flight config |
 | `terrain/` | Noise generation, chunk streaming, LOD, runway placement |
@@ -124,6 +133,11 @@ The project uses Bevy's ECS (Entity-Component-System) throughout. Each aircraft 
 | `plane.rs` | Aircraft entity, GLTF mesh, propeller animation |
 | `map/` | Debug world map, airport overlays, breadcrumb trail |
 | `waypoints.rs` | In-world 3D runway stalk labels |
+| `player_labels.rs` | On-screen name tags for remote players |
+| `airport_names.rs` | Deterministic airport ident/name generation |
+| `pilot_handbook.rs` | In-game reference window (controls, systems, airports) |
+| `network.rs` / `network_directory.rs` | WebSocket client, remote-player sync, server browser |
+| `ui/` | Menu bar and per-system settings panels (plane, camera, world, multiplayer, graphics) |
 | `debug_tools/` | HUD, F3 tuning panel, gizmos |
 
 **Physics runs at a fixed 60 Hz** (`PhysicsSchedule`) decoupled from render framerate. Custom force systems (`apply_aero_forces`, `apply_landing_gear`) register before the broad-phase collision pass.

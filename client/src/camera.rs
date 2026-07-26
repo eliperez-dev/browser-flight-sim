@@ -1,44 +1,53 @@
 use bevy::{camera::visibility::RenderLayers, input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel}, prelude::*, render::render_resource::Extent3d, window::WindowResized};
-use bevy_egui::{EguiContextSettings, EguiContexts};
+use bevy_egui::{EguiContextSettings, EguiContexts, egui};
 
 use crate::plane::Airplane;
 
-/// Base pixel-art canvas resolution ("Low" — the original, only resolution
-/// before render scale became configurable). "High" renders at exactly 2x
-/// this in each dimension; see `RenderScale`.
-pub const PIXEL_WIDTH: u32 = 720;
-pub const PIXEL_HEIGHT: u32 = 405;
+/// The pixel-art canvas is always 16:9; every `RenderScale` tier's resolution
+/// is `ASPECT_W * multiplier()` × `ASPECT_H * multiplier()` so the aspect
+/// ratio can't drift between tiers.
+pub const ASPECT_W: u32 = 16;
+pub const ASPECT_H: u32 = 9;
 
 pub const PIXEL_LAYER: RenderLayers = RenderLayers::layer(0);
 pub const SCREEN_LAYER: RenderLayers = RenderLayers::layer(1);
 
-/// User-facing render resolution, set from the Graphics menu. `PIXEL_WIDTH`/
-/// `PIXEL_HEIGHT` were fixed consts everywhere they were read (five call
-/// sites across camera.rs/main.rs/waypoints.rs/player_labels.rs); this
-/// resource replaces that, with `current_extent()` as the one place that
-/// derives actual pixel dimensions so every caller stays in sync
+/// User-facing render resolution, set from the Graphics menu. Each tier is a
+/// clean integer multiple of the 16:9 aspect ratio, landing on (or very close
+/// to) a standard video resolution: Low ≈ 480p, Medium = 720p, High = 1080p,
+/// Ultra = 4K. `current_extent()` (via `width()`/`height()`) is the one place
+/// that derives actual pixel dimensions so every caller stays in sync
 /// automatically when the setting changes.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RenderScale {
-    #[default]
+    /// 800×450. True 480p (854×480) isn't an exact 16:9 multiple — this is
+    /// the nearest clean multiplier below it.
     Low,
+    /// 1280×720.
+    #[default]
     Medium,
+    /// 1920×1080.
+    High,
+    /// 3840×2160.
+    Ultra,
 }
 
 impl RenderScale {
-    pub fn multiplier(self) -> f32 {
+    pub fn multiplier(self) -> u32 {
         match self {
-            RenderScale::Low => 1.0,
-            RenderScale::Medium => 1.5,
+            RenderScale::Low => 50,
+            RenderScale::Medium => 80,
+            RenderScale::High => 120,
+            RenderScale::Ultra => 240,
         }
     }
 
     pub fn width(self) -> u32 {
-        (PIXEL_WIDTH as f32 * self.multiplier()) as u32
+        ASPECT_W * self.multiplier()
     }
 
     pub fn height(self) -> u32 {
-        (PIXEL_HEIGHT as f32 * self.multiplier()) as u32
+        ASPECT_H * self.multiplier()
     }
 
     pub fn extent(self) -> Extent3d {
@@ -159,22 +168,14 @@ pub struct OuterCamera;
 /// the Camera menu. `1.0` is bevy_egui's own default (roughly "native
 /// resolution", independent of the 3D canvas's own upscale factor).
 ///
-/// An earlier version of this tried to lock `EguiContextSettings.scale_factor`
-/// to the *same* multiplier driving the 3D canvas's upscale
-/// (`h_scale.min(v_scale)`, often 2-8x depending on window size). That's a
-/// different kind of number: bevy_egui's `scale_factor` is a DPI-style
-/// logical-to-physical-pixel ratio meant to stay near 1.0, not a "grow with
-/// the window" factor — multiplying it by the canvas upscale made the UI
-/// balloon far past readable size on any window bigger than the raw 640x360
-/// canvas, and made this slider's 0.5-2.0 range negligible against that much
-/// larger driving term (hence "doesn't seem to listen"). Keeping this
-/// resource as the *only* input to `scale_factor` fixes both. (A later attempt
-/// to also shrink the UI when the canvas got smaller than the fixed-pixel HUD
-/// needs — coupling scale_factor to canvas size again, just one-directional —
-/// was tried and reverted for the same reason: the UI must render at a
+/// This is the *only* input to `EguiContextSettings.scale_factor` — do not
+/// couple it to the 3D canvas's upscale factor or window/canvas size. Both
+/// were tried and reverted: bevy_egui's `scale_factor` is a DPI-style ratio
+/// meant to stay near 1.0, so multiplying it by the canvas upscale (2-8x)
+/// balloons the UI far past readable size. The UI must render at a
 /// consistent physical size/spacing at a given UiScale regardless of canvas
-/// or window size, full stop. Any overlap/clipping on a small canvas needs to
-/// be solved by making the HUD itself responsive, not by scaling it.)
+/// or window size; overlap/clipping on a small canvas should be solved by
+/// making the HUD itself responsive, not by scaling it.
 #[derive(Resource)]
 pub struct UiScale(pub f32);
 
@@ -182,6 +183,79 @@ impl Default for UiScale {
     fn default() -> Self {
         Self(1.15)
     }
+}
+
+/// Projects world-space points onto the egui overlay layer drawn on top of
+/// the upscaled pixel-art canvas. Shared by every in-world label overlay
+/// (waypoint idents, remote-player name tags) so the canvas-scale/offset and
+/// `UiScale` math can't drift between them.
+pub struct WorldToOverlay {
+    canvas_scale: f32,
+    canvas_offset: Vec2,
+    ui_scale: f32,
+    pub win_w: f32,
+    pub win_h: f32,
+}
+
+impl WorldToOverlay {
+    pub fn new(
+        render_scale: RenderScale,
+        ui_scale: f32,
+        outer_proj: Option<&Projection>,
+        window: Option<&Window>,
+    ) -> Self {
+        let canvas_scale = outer_proj
+            .and_then(|p| if let Projection::Orthographic(o) = p { Some(1.0 / o.scale) } else { None })
+            .unwrap_or(1.0);
+        let win_w = window.map(|w| w.width()).unwrap_or(640.0);
+        let win_h = window.map(|w| w.height()).unwrap_or(360.0);
+        let canvas_w = render_scale.width() as f32 * canvas_scale;
+        let canvas_h = render_scale.height() as f32 * canvas_scale;
+        Self {
+            canvas_scale,
+            canvas_offset: Vec2::new((win_w - canvas_w) * 0.5, (win_h - canvas_h) * 0.5),
+            ui_scale,
+            win_w,
+            win_h,
+        }
+    }
+
+    /// Canvas pixels → egui points. Divides by `UiScale` (`EguiContextSettings.
+    /// scale_factor`, set from this same resource in `camera.rs`) because
+    /// egui's painter interprets coordinates as points where physical_px =
+    /// point * scale_factor, not raw window-logical pixels — skipping this
+    /// makes drawn points overshoot proportionally to distance from the origin
+    /// and how far `ui_scale` sits from 1.0.
+    pub fn to_win(&self, canvas_pos: Vec2) -> egui::Pos2 {
+        egui::pos2(
+            (canvas_pos.x * self.canvas_scale + self.canvas_offset.x) / self.ui_scale,
+            (canvas_pos.y * self.canvas_scale + self.canvas_offset.y) / self.ui_scale,
+        )
+    }
+
+    /// Projects a world point through the inner (3D) camera and into egui
+    /// points, or `None` if it's behind the camera or far enough outside the
+    /// window to skip drawing (200 px horizontal / 100 px vertical margin).
+    pub fn project(
+        &self,
+        inner_cam: &Camera,
+        inner_gtf: &GlobalTransform,
+        world_pos: Vec3,
+    ) -> Option<egui::Pos2> {
+        let canvas_pos = inner_cam.world_to_viewport(inner_gtf, world_pos).ok()?;
+        let win_pos = self.to_win(canvas_pos);
+        if win_pos.x < -200.0 || win_pos.x > self.win_w + 200.0
+        || win_pos.y < -100.0 || win_pos.y > self.win_h + 100.0 {
+            return None;
+        }
+        Some(win_pos)
+    }
+}
+
+/// Linear fade-out alpha for a distance-based label: `1.0` at/before
+/// `start_km`, `0.0` at/past `far_km`.
+pub fn fade_alpha(dist_km: f32, start_km: f32, far_km: f32) -> f32 {
+    (1.0 - (dist_km - start_km).max(0.0) / (far_km - start_km)).clamp(0.0, 1.0)
 }
 
 /// Scales the pixel-art 3D canvas to fill the window (unrelated to egui,
@@ -338,18 +412,13 @@ pub fn toggle_camera_mode(
     *mode = match *mode {
         CameraMode::Orbit | CameraMode::Fixed(_) => {
             if let (Ok((tf, _, mut chase, _)), Ok(plane_tf)) = (cam_query.single_mut(), plane_query.single()) {
-                let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-                chase.yaw = yaw;
-                chase.pitch = pitch;
-                chase.offset = tf.translation - plane_tf.translation;
+                seed_chase_from(tf, plane_tf, &mut chase);
             }
             CameraMode::Chase
         }
         CameraMode::Chase => {
             if let Ok((tf, mut free, _, _)) = cam_query.single_mut() {
-                let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-                free.yaw = yaw;
-                free.pitch = pitch;
+                seed_free_from(tf, &mut free);
             }
             CameraMode::Free
         }
@@ -403,6 +472,55 @@ fn apply_mouse_look(
     }
 }
 
+/// Shared by Free and Chase cam, which only differ in what they *do* with the
+/// resulting orientation (Free writes straight to `transform.translation`;
+/// Chase accumulates a plane-relative offset instead). Accumulates yaw/pitch
+/// from arrow keys and mouse-drag, rebuilds `transform.rotation` from them
+/// (YXZ order — yaw around world-Y then pitch around local-X, avoiding gimbal
+/// lock and keeping roll permanently zero), and returns the resulting
+/// forward/right axes for the caller's own WASD/EQ translation.
+#[allow(clippy::too_many_arguments)]
+fn accumulate_look(
+    dt: f32,
+    keys: &ButtonInput<KeyCode>,
+    mouse_buttons: &ButtonInput<MouseButton>,
+    mouse_motion: &mut MessageReader<MouseMotion>,
+    contexts: &mut EguiContexts,
+    transform: &mut Transform,
+    yaw: &mut f32,
+    pitch: &mut f32,
+) -> (Vec3, Vec3) {
+    const LOOK_SPEED: f32 = 1.5;
+    if keys.pressed(KeyCode::ArrowLeft) { *yaw += LOOK_SPEED * dt; }
+    if keys.pressed(KeyCode::ArrowRight) { *yaw -= LOOK_SPEED * dt; }
+    if keys.pressed(KeyCode::ArrowUp) { *pitch = (*pitch + LOOK_SPEED * dt).clamp(-1.5, 1.5); }
+    if keys.pressed(KeyCode::ArrowDown) { *pitch = (*pitch - LOOK_SPEED * dt).clamp(-1.5, 1.5); }
+
+    apply_mouse_look(mouse_buttons, mouse_motion, contexts, yaw, pitch);
+
+    transform.rotation = Quat::from_euler(EulerRot::YXZ, *yaw, *pitch, 0.0);
+    (transform.forward().as_vec3(), transform.right().as_vec3())
+}
+
+/// Seeds `ChaseCam`'s look angles and plane-relative offset from wherever the
+/// camera currently is, so switching into Chase mode doesn't snap the view.
+/// Shared by the `F`-key toggle and the Camera menu's mode buttons.
+pub fn seed_chase_from(tf: &Transform, plane_tf: &Transform, chase: &mut ChaseCam) {
+    let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+    chase.yaw = yaw;
+    chase.pitch = pitch;
+    chase.offset = tf.translation - plane_tf.translation;
+}
+
+/// Seeds `FreeCam`'s look angles from the current camera orientation, so
+/// switching into Free mode doesn't snap the view. Shared by the `F`-key
+/// toggle and the Camera menu's mode buttons.
+pub fn seed_free_from(tf: &Transform, free: &mut FreeCam) {
+    let (yaw, pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
+    free.yaw = yaw;
+    free.pitch = pitch;
+}
+
 pub fn free_cam_control(
     time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -418,35 +536,15 @@ pub fn free_cam_control(
     }
 
     let move_speed: f32 = free_chase_move_speed(&keys);
-    const LOOK_SPEED: f32 = 1.5;
 
     let Ok((mut transform, mut cam)) = query.single_mut() else { return };
     let dt = time.delta_secs();
 
-    // Accumulate yaw (left/right) and pitch (up/down) from arrow keys.
-    // Yaw is unbounded so you can spin freely; pitch is clamped just under
-    // ±90° to prevent the camera from flipping upside-down at the poles.
-    if keys.pressed(KeyCode::ArrowLeft) { cam.yaw += LOOK_SPEED * dt; }
-    if keys.pressed(KeyCode::ArrowRight) { cam.yaw -= LOOK_SPEED * dt; }
-    if keys.pressed(KeyCode::ArrowUp) {
-        cam.pitch = (cam.pitch + LOOK_SPEED * dt).clamp(-1.5, 1.5);
-    }
-    if keys.pressed(KeyCode::ArrowDown) {
-        cam.pitch = (cam.pitch - LOOK_SPEED * dt).clamp(-1.5, 1.5);
-    }
-
     let cam = &mut *cam;
-    apply_mouse_look(&mouse_buttons, &mut mouse_motion, &mut contexts, &mut cam.yaw, &mut cam.pitch);
-
-    // Rebuild the rotation from the accumulated angles every frame using
-    // YXZ order: yaw around world-Y first, then pitch around the camera's
-    // local-X. This avoids gimbal lock and keeps roll permanently zero.
-    transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
-
-    // Derive movement axes from the freshly-updated rotation so WASD always
-    // moves relative to where the camera is currently pointing.
-    let forward = transform.forward();
-    let right = transform.right();
+    let (forward, right) = accumulate_look(
+        dt, &keys, &mouse_buttons, &mut mouse_motion, &mut contexts,
+        &mut transform, &mut cam.yaw, &mut cam.pitch,
+    );
 
     // WASD flies the camera along its local forward/right axes (no altitude change).
     // E/Q move straight up or down in world space regardless of camera tilt,
@@ -479,32 +577,20 @@ pub fn chase_cam_control(
     }
 
     let move_speed: f32 = free_chase_move_speed(&keys);
-    const LOOK_SPEED: f32 = 1.5;
 
     let Ok(plane_tf) = plane_query.single() else { return };
     let Ok((mut transform, mut cam)) = cam_query.single_mut() else { return };
     let dt = time.delta_secs();
 
-    // Same look-angle accumulation as Free cam.
-    if keys.pressed(KeyCode::ArrowLeft) { cam.yaw += LOOK_SPEED * dt; }
-    if keys.pressed(KeyCode::ArrowRight) { cam.yaw -= LOOK_SPEED * dt; }
-    if keys.pressed(KeyCode::ArrowUp) {
-        cam.pitch = (cam.pitch + LOOK_SPEED * dt).clamp(-1.5, 1.5);
-    }
-    if keys.pressed(KeyCode::ArrowDown) {
-        cam.pitch = (cam.pitch - LOOK_SPEED * dt).clamp(-1.5, 1.5);
-    }
-
     let cam = &mut *cam;
-    apply_mouse_look(&mouse_buttons, &mut mouse_motion, &mut contexts, &mut cam.yaw, &mut cam.pitch);
-
-    transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
+    let (forward, right) = accumulate_look(
+        dt, &keys, &mouse_buttons, &mut mouse_motion, &mut contexts,
+        &mut transform, &mut cam.yaw, &mut cam.pitch,
+    );
 
     // WASD/EQ move the plane-relative offset along the camera's own axes,
     // same as Free cam — but it's the offset that accumulates, not world
     // position, so the camera tracks the plane every frame below.
-    let forward = transform.forward();
-    let right = transform.right();
     if keys.pressed(KeyCode::KeyW) { cam.offset += forward * move_speed * dt; }
     if keys.pressed(KeyCode::KeyS) { cam.offset -= forward * move_speed * dt; }
     if keys.pressed(KeyCode::KeyA) { cam.offset -= right * move_speed * dt; }

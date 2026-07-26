@@ -148,10 +148,6 @@ pub struct RunwayInstance {
     pub width: f32,
     pub length: f32,
     pub kind: AirportKind,
-    /// The grid cell this strip belongs to — its stable identity, used to derive
-    /// a deterministic ident for the map overlay (see [`runway_ident`]).
-    #[allow(dead_code)]
-    pub cell: (i32, i32),
 }
 
 
@@ -173,16 +169,22 @@ impl RunwayInstance {
         (lo as u32, hi as u32)
     }
 
+    /// World (x, z) → the strip's own frame: origin at the strip center, +Z
+    /// along its heading, +X across it. Shared by every method below that
+    /// needs to know where a point falls relative to the runway rectangle.
+    fn to_local(&self, x: f32, z: f32) -> (f32, f32) {
+        let (s, c) = self.heading.sin_cos();
+        let px = x - self.x;
+        let pz = z - self.z;
+        (px * c - pz * s, px * s + pz * c)
+    }
+
     /// Flatten weight at world (x, z): 1.0 inside the runway rectangle (plus
     /// apron), ramping to 0.0 by [`RUNWAY_BLEND_MARGIN`] beyond it. Distance is
     /// measured in the runway's own frame, so the levelled zone is a rounded
     /// rectangle aligned to the strip rather than a circle.
     fn flatten_weight(&self, x: f32, z: f32) -> f32 {
-        let (s, c) = self.heading.sin_cos();
-        let px = x - self.x;
-        let pz = z - self.z;
-        let lx = px * c - pz * s;
-        let lz = px * s + pz * c;
+        let (lx, lz) = self.to_local(x, z);
 
         let half_w = self.width * 0.5 + RUNWAY_FLAT_APRON;
         let half_l = self.length * 0.5 + RUNWAY_FLAT_APRON;
@@ -196,11 +198,7 @@ impl RunwayInstance {
 
     /// Whether world (x, z) lies on the surface rectangle — where the gear rests.
     fn on_pavement(&self, x: f32, z: f32) -> bool {
-        let (s, c) = self.heading.sin_cos();
-        let px = x - self.x;
-        let pz = z - self.z;
-        let lx = px * c - pz * s;
-        let lz = px * s + pz * c;
+        let (lx, lz) = self.to_local(x, z);
         lx.abs() <= self.width * 0.5 && lz.abs() <= self.length * 0.5
     }
 }
@@ -369,7 +367,6 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
             width: RUNWAY_WIDTH,
             length: RUNWAY_LENGTH,
             kind: AirportKind::SmallGA,
-            cell: (0, 0),
         }];
     }
 
@@ -410,13 +407,13 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
     match kind {
         AirportKind::DirtStrip => {
             let length = DIRT_MIN_LEN + hash01(h ^ 0xf00d_cafe) * (DIRT_MAX_LEN - DIRT_MIN_LEN);
-            vec![RunwayInstance { x, z, heading, elevation, width: DIRT_WIDTH, length, kind, cell: (gx, gz) }]
+            vec![RunwayInstance { x, z, heading, elevation, width: DIRT_WIDTH, length, kind }]
         }
         AirportKind::SmallGA => {
-            vec![RunwayInstance { x, z, heading, elevation, width: RUNWAY_WIDTH, length: RUNWAY_LENGTH, kind, cell: (gx, gz) }]
+            vec![RunwayInstance { x, z, heading, elevation, width: RUNWAY_WIDTH, length: RUNWAY_LENGTH, kind }]
         }
         AirportKind::LargeCommuter => {
-            vec![RunwayInstance { x, z, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind, cell: (gx, gz) }]
+            vec![RunwayInstance { x, z, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind }]
         }
         AirportKind::Regional => {
             // Two small-GA strips offset laterally (perpendicular to heading).
@@ -424,8 +421,8 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
             let ox = c * TWIN_OFFSET;
             let oz = -s * TWIN_OFFSET;
             vec![
-                RunwayInstance { x: x - ox * 0.5, z: z - oz * 0.5, heading, elevation, width: RUNWAY_WIDTH, length: RUNWAY_LENGTH, kind, cell: (gx, gz) },
-                RunwayInstance { x: x + ox * 0.5, z: z + oz * 0.5, heading, elevation, width: RUNWAY_WIDTH, length: RUNWAY_LENGTH, kind, cell: (gx, gz) },
+                RunwayInstance { x: x - ox * 0.5, z: z - oz * 0.5, heading, elevation, width: RUNWAY_WIDTH, length: RUNWAY_LENGTH, kind },
+                RunwayInstance { x: x + ox * 0.5, z: z + oz * 0.5, heading, elevation, width: RUNWAY_WIDTH, length: RUNWAY_LENGTH, kind },
             ]
         }
         AirportKind::Hub => {
@@ -433,8 +430,8 @@ fn runways_for_cell(generator: &WorldGenerator, gx: i32, gz: i32) -> Vec<RunwayI
             let ox = c * HUB_OFFSET;
             let oz = -s * HUB_OFFSET;
             vec![
-                RunwayInstance { x: x - ox * 0.5, z: z - oz * 0.5, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind, cell: (gx, gz) },
-                RunwayInstance { x: x + ox * 0.5, z: z + oz * 0.5, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind, cell: (gx, gz) },
+                RunwayInstance { x: x - ox * 0.5, z: z - oz * 0.5, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind },
+                RunwayInstance { x: x + ox * 0.5, z: z + oz * 0.5, heading, elevation, width: LARGE_WIDTH, length: LARGE_LENGTH, kind },
             ]
         }
     }
@@ -910,7 +907,7 @@ pub fn scale_waypoint_stalks(
 /// Animates REIL strobes and ALS sequencing bars every frame.
 ///
 /// - REIL: flashes at ~1 Hz (50 ms on, 950 ms off).
-/// - ALS: one bar is lit at a time, stepping toward the threshold at ~10 Hz,
+/// - ALS: one bar is lit at a time, stepping toward the threshold at `ALS_HZ`,
 ///   giving the classic "rabbit" effect pilots use on final approach.
 pub fn animate_runway_lights(
     time: Res<Time>,
@@ -927,7 +924,7 @@ pub fn animate_runway_lights(
         light.intensity = if reil_on { 2_000_000.0 } else { 0.0 };
     }
 
-    // ALS rabbit: cycle through bars farthest→nearest at 10 Hz (100 ms per step).
+    // ALS rabbit: cycle through bars farthest→nearest at ALS_HZ.
     // `active` is which bar index (1=nearest threshold, 3=farthest) is lit.
     const ALS_BARS: i32 = 3;
     const ALS_HZ: f32 = 2.0;

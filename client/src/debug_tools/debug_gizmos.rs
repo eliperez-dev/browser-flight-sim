@@ -219,35 +219,6 @@ pub fn draw_aero_gizmos(
 
     gizmos.arrow(com_world, com_world + Vec3::NEG_Y * 3.0, Color::srgb(1.0, 0.2, 0.2));
 
-    // Fuselage drag box: a cuboid at the CoM whose extents are the per-axis
-    // Cd·A (X=flank, Y=belly/top, Z=nose). The thin forward dimension vs. the
-    // broad side/vertical faces visualises why pulls and skids bleed energy but
-    // level cruise stays slippery. Oriented with the body, sized in metres.
-    // {
-    //     let h = cfg.fuselage_drag * 0.5 * 0.2; // half-extents
-    //     let drag_color = Color::srgb(1.0, 0.0, 0.8);
-    //     // 8 corners in body frame, transformed to world via the body rotation.
-    //     let corner = |sx: f32, sy: f32, sz: f32| {
-    //         com_world + tf.rotation * Vec3::new(sx * h.x, sy * h.y, sz * h.z)
-    //     };
-    //     let signs = [-1.0_f32, 1.0];
-    //     for &sy in &signs {
-    //         for &sz in &signs {
-    //             gizmos.line(corner(-1.0, sy, sz), corner(1.0, sy, sz), drag_color); // X edges
-    //         }
-    //     }
-    //     for &sx in &signs {
-    //         for &sz in &signs {
-    //             gizmos.line(corner(sx, -1.0, sz), corner(sx, 1.0, sz), drag_color); // Y edges
-    //         }
-    //     }
-    //     for &sx in &signs {
-    //         for &sy in &signs {
-    //             gizmos.line(corner(sx, sy, -1.0), corner(sx, sy, 1.0), drag_color); // Z edges
-    //         }
-    //     }
-    // }
-
     // Newtons → metres of arrow. Tuned so a wing at cruise reads ~1.5 m and a
     // hard pull grows it visibly, capped so high-g loads don't fill the screen.
     const FORCE_TO_M: f32 = 0.0004;
@@ -410,8 +381,10 @@ pub fn draw_aero_gizmos(
 }
 
 /// Draws a small sphere at each exterior light's world position (color-coded
-/// by type) and a forward arrow for the landing spotlight. Runs under the same
-/// G toggle as the aero gizmos.
+/// by type) and a forward arrow for the landing spotlight. Meant to run under
+/// the same G toggle as the aero gizmos, but not currently registered as a
+/// system anywhere — kept for whenever it's wired in.
+#[allow(dead_code)]
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn draw_light_gizmos(
     visible: Res<GizmosVisible>,

@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
-use crate::camera::{OuterCamera, RenderScale, UiScale};
+use crate::camera::{OuterCamera, RenderScale, UiScale, WorldToOverlay, fade_alpha};
 use crate::plane::Airplane;
 use crate::terrain::{WaypointStalk, WorldGenerator, airport_name, runway_ident};
 use crate::terrain::TerrainCamera;
@@ -66,17 +66,7 @@ pub fn draw_waypoint_labels(
     let plane_pos = plane_tf.translation;
     let Ok((inner_cam, inner_gtf)) = inner_cam_q.single() else { return Ok(()) };
 
-    let canvas_scale = outer_proj_q.single().ok().and_then(|p| {
-        if let Projection::Orthographic(o) = p { Some(1.0 / o.scale) } else { None }
-    }).unwrap_or(1.0);
-
-    let window = windows.single().ok();
-    let win_w = window.map(|w| w.width()).unwrap_or(640.0);
-    let win_h = window.map(|w| w.height()).unwrap_or(360.0);
-    let canvas_w = render_scale.width() as f32 * canvas_scale;
-    let canvas_h = render_scale.height() as f32 * canvas_scale;
-    let canvas_offset_x = (win_w - canvas_w) * 0.5;
-    let canvas_offset_y = (win_h - canvas_h) * 0.5;
+    let overlay = WorldToOverlay::new(*render_scale, ui_scale.0, outer_proj_q.single().ok(), windows.single().ok());
 
     let seed = generator.seed();
     let ctx = contexts.ctx_mut()?;
@@ -86,25 +76,12 @@ pub fn draw_waypoint_labels(
         egui::Id::new("waypoint_layer"),
     ));
 
-    // world_to_viewport returns window-logical pixels, but egui's painter is
-    // scaled by UiScale (EguiContextSettings.scale_factor, set in camera.rs) —
-    // it interprets painter coordinates as points where physical_px = point *
-    // scale_factor, not raw window-logical pixels. Dividing by ui_scale here
-    // converts into that points space; skipping this made every drawn point
-    // overshoot proportionally to both its distance from the origin and how
-    // far ui_scale sits from 1.0 (the debug/graphics-menu default is 1.15).
-    let to_win = |cp: Vec2| egui::pos2(
-        (cp.x * canvas_scale + canvas_offset_x) / ui_scale.0,
-        (cp.y * canvas_scale + canvas_offset_y) / ui_scale.0,
-    );
-
     for (stalk, stalk_tf) in &stalks {
         let pos = stalk_tf.translation;
         let dist_km = Vec2::new(pos.x - plane_pos.x, pos.z - plane_pos.z).length() / 1000.0;
         if dist_km < MIN_DIST_KM { continue; }
 
-        let alpha = (1.0 - (dist_km - FADE_START_KM).max(0.0) / (FAR_DIST_KM - FADE_START_KM))
-            .clamp(0.0, 1.0);
+        let alpha = fade_alpha(dist_km, FADE_START_KM, FAR_DIST_KM);
         if alpha <= 0.01 { continue; }
 
         // Tip is at the top of the stalk. The stalk transform is at the midpoint,
@@ -112,13 +89,7 @@ pub fn draw_waypoint_labels(
         let stalk_h = STALK_TIP_OFFSET - STALK_BASE_OFFSET;
         let tip_world = Vec3::new(pos.x, pos.y + stalk_h * 0.5, pos.z);
 
-        let Ok(tip_canvas) = inner_cam.world_to_viewport(inner_gtf, tip_world) else { continue };
-        let tip_win = to_win(tip_canvas);
-
-        if tip_win.x < -200.0 || tip_win.x > win_w + 200.0
-        || tip_win.y < -100.0 || tip_win.y > win_h + 100.0 {
-            continue;
-        }
+        let Some(tip_win) = overlay.project(inner_cam, inner_gtf, tip_world) else { continue };
 
         let a = (alpha * 255.0) as u8;
         let dot_color   = egui::Color32::from_rgba_unmultiplied(255, 255, 255, a);

@@ -24,7 +24,6 @@ pub struct SharedWorld {
     pub seed: u32,
     pub players: Mutex<HashMap<PlayerId, PlayerState>>,
     pub next_id: AtomicU32,
-    pub start: Instant,
     pub broadcast_tx: broadcast::Sender<(PlayerId, ServerToClient)>,
     /// Set to `None` whenever a player is connected, and to `Some(Instant)`
     /// the moment the world becomes empty. The reaper drops worlds that have
@@ -42,14 +41,9 @@ impl SharedWorld {
             seed,
             players: Mutex::new(HashMap::new()),
             next_id: AtomicU32::new(1),
-            start: Instant::now(),
             broadcast_tx,
             empty_since: Mutex::new(None),
         })
-    }
-
-    pub fn world_time(&self) -> f32 {
-        self.start.elapsed().as_secs_f32()
     }
 
     pub fn is_default(&self) -> bool {

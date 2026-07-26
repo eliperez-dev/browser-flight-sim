@@ -31,8 +31,8 @@ pub struct ControlSurfaces {
 }
 
 /// Exterior light switch state. Nav/strobe/beacon *animation* (blink phase)
-/// is derived locally from `world_time` on each client rather than streamed,
-/// since it's a pure function of elapsed time — only the on/off switches
+/// is derived locally from each client's own elapsed time rather than
+/// streamed, since it's a pure function of time — only the on/off switches
 /// (set rarely, by cockpit input) need to cross the wire.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct LightSwitches {
@@ -76,7 +76,6 @@ pub enum ServerToClient {
     Welcome {
         your_id: PlayerId,
         seed: u32,
-        world_time: f32,
         other_players: Vec<PlayerState>,
     },
     PlayerJoined(PlayerState),

@@ -78,12 +78,7 @@ async fn run(socket: WebSocket, peer: SocketAddr, world: Arc<SharedWorld>, regis
     };
     registry.notify_membership_changed(&world).await;
 
-    let welcome = ServerToClient::Welcome {
-        your_id: id,
-        seed: world.seed,
-        world_time: world.world_time(),
-        other_players,
-    };
+    let welcome = ServerToClient::Welcome { your_id: id, seed: world.seed, other_players };
     ws_tx.send(Message::Binary(welcome.encode().into())).await?;
 
     let _ = world.broadcast_tx.send((id, ServerToClient::PlayerJoined(initial_state)));

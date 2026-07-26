@@ -537,16 +537,6 @@ impl WorldGenerator {
         self.seed
     }
 
-    /// Sea-level climate at (x, z): `(temperature, humidity)`, 0..1. Altitude
-    /// cooling is applied on top in [`Self::natural_raw`], once a height estimate
-    /// exists. Thin wrapper over [`Self::climate_and_continent`] for callers that
-    /// don't need the continentalness value (kept for upcoming features).
-    #[allow(dead_code)]
-    pub fn get_climate(&self, x: f32, z: f32) -> (f32, f32) {
-        let (temp, hum, _) = self.climate_and_continent(x, z);
-        (temp, hum)
-    }
-
     /// Climate plus the land/sea mask at (x, z): `(temperature, humidity,
     /// continentalness)`. Temperature gets the latitude band, humidity gets a
     /// coastal boost from low continentalness (wet coasts, dry interiors), then
@@ -597,9 +587,7 @@ impl WorldGenerator {
         (((raw / self.continent_layer.vertical_scale) + 1.0) * 0.5).clamp(0.0, 1.0)
     }
 
-    /// Biome at (x, z). Kept for upcoming features (vegetation, audio) that key
-    /// off biome rather than raw height.
-    #[allow(dead_code)]
+    /// Biome at (x, z), used by the map overlay to paint/label terrain by kind.
     pub fn get_biome(&self, x: f32, z: f32) -> Biome {
         let (temp, hum, continentalness) = self.climate_and_continent(x, z);
         if self.ocean_factor(continentalness) >= 0.5 {
@@ -837,7 +825,6 @@ fn smoothstep(t: f32) -> f32 {
 
 /// The four climate biomes plus open water.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum Biome {
     Desert,
     Grasslands,

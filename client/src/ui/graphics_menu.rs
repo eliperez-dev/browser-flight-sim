@@ -59,7 +59,14 @@ fn draw_graphics_menu(
                 if ui.selectable_label(*render_scale == RenderScale::Medium, "Medium").clicked() {
                     *render_scale = RenderScale::Medium;
                 }
+                if ui.selectable_label(*render_scale == RenderScale::High, "High").clicked() {
+                    *render_scale = RenderScale::High;
+                }
+                if ui.selectable_label(*render_scale == RenderScale::Ultra, "Ultra").clicked() {
+                    *render_scale = RenderScale::Ultra;
+                }
             });
+            ui.label(format!("{}×{}", render_scale.width(), render_scale.height()));
 
             ui.add_space(10.0);
             ui.separator();

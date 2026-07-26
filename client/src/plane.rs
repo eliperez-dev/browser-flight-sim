@@ -364,8 +364,7 @@ pub fn spawn_aircraft(
         RigidBody::Dynamic,
         Mass(mass_eff),
         AngularInertia::new(inertia_eff),
-        // Forward launch velocity — kept for reference.
-        // LinearVelocity(Vec3::new(0.0, 0.0, 65.0)),
+        // Spawns at rest; the takeoff roll builds speed under throttle.
         LinearVelocity(Vec3::ZERO),
         AngularVelocity(Vec3::ZERO),
         AngularDamping(cfg.angular_damping),
@@ -375,6 +374,33 @@ pub fn spawn_aircraft(
     ))
     .add_children(&[visual, propeller, left_wing, right_wing, aileron_l, aileron_r, body_left, body_right, elevator, rudder, vertical_fin])
     .id()
+}
+
+/// Strips every physics/control component [`spawn_aircraft`] attaches to its
+/// root entity, turning a full aircraft into a visual-only ghost (used for
+/// remote players — see `network::spawn_remote_players`). A second entity
+/// carrying `AircraftRoot` makes several physics/controller queries ambiguous
+/// (some are scoped only by `AircraftRoot`, not `Airplane`) and they silently
+/// return `Err` and skip, so a networked ghost must not keep any of these.
+///
+/// Kept next to `spawn_aircraft`'s own component list (rather than as a
+/// separate builder) so editing one is a visual reminder to check the other —
+/// adding a new physics/control component up there without adding its
+/// removal here would let a remote ghost re-fight the local aircraft's
+/// physics queries, exactly the bug this exists to prevent.
+pub fn strip_physics_components(entity: &mut EntityCommands) {
+    entity
+        .remove::<Airplane>()
+        .remove::<PlaneState>()
+        .remove::<AircraftRoot>()
+        .remove::<avian3d::prelude::RigidBody>()
+        .remove::<avian3d::prelude::Mass>()
+        .remove::<avian3d::prelude::AngularInertia>()
+        .remove::<avian3d::prelude::LinearVelocity>()
+        .remove::<avian3d::prelude::AngularVelocity>()
+        .remove::<avian3d::prelude::AngularDamping>()
+        .remove::<avian3d::prelude::CenterOfMass>()
+        .remove::<avian3d::prelude::TransformInterpolation>();
 }
 
 /// Spins every tagged propeller about the configured local axis at the engine's

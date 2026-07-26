@@ -671,8 +671,6 @@ fn draw_menu(
                         .text("Prop Y up (local)"));
                     ui.add(egui::Slider::new(&mut cfg.propeller.prop_position.z, -30.0..=90.0)
                         .text("Prop Z fwd (local)"));
-                    ui.add(egui::Slider::new(&mut cfg.propeller.prop_radius, 0.1..=3.0)
-                        .text("Prop radius (m)"));
 
                     ui.separator();
                     ui.add(egui::Slider::new(&mut cfg.propeller.prop_idle_rps, 0.0..=30.0)

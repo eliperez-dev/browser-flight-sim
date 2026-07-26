@@ -208,9 +208,11 @@ fn toggle_pause(
 fn apply_config_to_entities(
     cfg: Res<FlightModelConfig>,
     mut visual_q: Query<&mut Transform, (With<PlaneVisual>, Without<Propeller>)>,
-    // Propeller — repositioned live from `prop_position`. Disjoint from
-    // `visual_q` (both touch Transform) via the marker filters.
-    mut prop_q: Query<&mut Transform, (With<Propeller>, Without<PlaneVisual>)>,
+    // Propeller — repositioned live from `prop_position`. Both this and the
+    // body mesh also carry `PlaneVisual` (so filled-gizmo mode hides both
+    // together), so disjointness from `visual_q` comes from the
+    // With/Without<Propeller> split instead.
+    mut prop_q: Query<&mut Transform, With<Propeller>>,
     mut body_q: Query<
         (&mut CenterOfMass, &mut Mass, &mut AngularInertia, &mut AngularDamping),
         With<Airplane>,
@@ -373,68 +375,32 @@ fn setup(
         PrimaryEguiContext,
     ));
 
+    spawn_hud_label(&mut commands, "FPS: --", 8.0, true).insert(FpsText);
+    spawn_hud_label(&mut commands, "CAM: --", 28.0, true).insert(CamModeText);
+    spawn_hud_label(&mut commands, "Press F to Cycle Camera Mode", 48.0, true);
+    spawn_hud_label(&mut commands, "Press J for Fullscreen", 68.0, true).insert(FullscreenHintText);
+    spawn_hud_label(&mut commands, "", 8.0, false).insert(CamControlsHintText);
+}
+
+/// Spawns one yellow, 16px HUD text label pinned to a screen corner —
+/// `right_aligned` picks right-vs-left, `top_px` is its distance from the top.
+/// Returns the `EntityCommands` so callers can chain their own marker
+/// component (the text-update systems key off those, not this helper).
+fn spawn_hud_label<'a>(commands: &'a mut Commands, text: &str, top_px: f32, right_aligned: bool) -> EntityCommands<'a> {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        top: Val::Px(top_px),
+        ..default()
+    };
+    if right_aligned {
+        node.right = Val::Px(8.0);
+    } else {
+        node.left = Val::Px(8.0);
+    }
     commands.spawn((
-        Text::new("FPS: --"),
-        FpsText,
+        Text::new(text),
         TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
         TextFont { font_size: 16.0, ..default() },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            right: Val::Px(8.0),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new("CAM: --"),
-        CamModeText,
-        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
-        TextFont { font_size: 16.0, ..default() },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(28.0),
-            right: Val::Px(8.0),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new("Press F to Cycle Camera Mode"),
-        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
-        TextFont { font_size: 16.0, ..default() },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(48.0),
-            right: Val::Px(8.0),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new("Press J for Fullscreen"),
-        FullscreenHintText,
-        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
-        TextFont { font_size: 16.0, ..default() },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(68.0),
-            right: Val::Px(8.0),
-            ..default()
-        },
-    ));
-
-    commands.spawn((
-        Text::new(""),
-        CamControlsHintText,
-        TextColor(Color::linear_rgb(1.0, 1.0, 0.0)),
-        TextFont { font_size: 16.0, ..default() },
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            left: Val::Px(8.0),
-            ..default()
-        },
-    ));
-
+        node,
+    ))
 }

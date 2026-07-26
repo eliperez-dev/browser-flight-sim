@@ -115,7 +115,7 @@ pub fn apply_aero_forces(
     // drag, and engine power all agree on what the air is doing up there.
     let air_density = cfg.air_density * isa_density_ratio(origin.y);
 
-    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, ROOT_SCALE, children, &surface_q, air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
+    let frame_ft = sum_aero_forces(lin_vel, ang_vel, origin, com, rot, children, &surface_q, air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
 
     // Thrust follows engine RPM, not the throttle directly: the throttle sets a
     // target RPM that the engine spools toward (airplane_controller), so thrust
@@ -148,7 +148,7 @@ pub fn apply_aero_forces(
     let ang_accel = inertia_world_rot * accel_local;
     let ang_vel_pred = ang_vel + dt * cfg.prediction_fraction * ang_accel;
 
-    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, ROOT_SCALE, children, &surface_q, air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
+    let pred_ft = sum_aero_forces(vel_pred, ang_vel_pred, origin, com, rot, children, &surface_q, air_density, cfg.ground_effect_strength, cfg.ground_effect_span);
 
     let final_ft = (frame_ft + pred_ft) * 0.5;
 
@@ -196,7 +196,6 @@ fn sum_aero_forces(
     origin: Vec3,
     com: Vec3,
     root_rot: Quat,
-    root_scale: f32,
     children: &Children,
     surface_q: &Query<(&AeroSurface, &Transform), Without<AircraftRoot>>,
     air_density: f32,
@@ -208,7 +207,7 @@ fn sum_aero_forces(
         let Ok((surface, local_tf)) = surface_q.get(*child) else { continue };
         // World position is relative to the transform origin; the moment arm and
         // the rotational airspeed term are relative to the center of mass.
-        let surface_pos = origin + root_rot * (local_tf.translation * root_scale);
+        let surface_pos = origin + root_rot * (local_tf.translation * ROOT_SCALE);
         let rel_pos = surface_pos - com;
         let world_air_vel = -lin_vel - ang_vel.cross(rel_pos);
         let world_rot = root_rot * local_tf.rotation;
