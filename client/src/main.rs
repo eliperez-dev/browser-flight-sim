@@ -25,7 +25,7 @@ use crate::fog::FogPlugin;
 use crate::water::WaterPlugin;
 use crate::plane::{Airplane, PlaneVisual, Propeller, spin_propeller};
 use crate::debug_tools::debug_gizmos::{
-    GizmosVisible, apply_gizmos_mesh_visibility, draw_aero_gizmos, draw_light_gizmos,
+    GizmosVisible, apply_gizmos_mesh_visibility, draw_aero_gizmos,
     ensure_filled_surface_meshes, setup_gizmo_config, toggle_gizmos, update_filled_surface_meshes,
 };
 use crate::physics::aero_surface::{AeroSurface, ControlInputType};
@@ -174,7 +174,7 @@ fn main() {
         // otherwise world_to_viewport uses last frame's rotation, producing an
         // angular error that's invisible up close but grows with distance.
         .add_systems(PostUpdate, (track_cam_control, chase_cam_control, fixed_cam_control).before(TransformSystems::Propagate))
-        .add_systems(PostUpdate, (draw_aero_gizmos, draw_light_gizmos).after(TransformSystems::Propagate))
+        .add_systems(PostUpdate, (draw_aero_gizmos,).after(TransformSystems::Propagate))
         .configure_sets(PostUpdate, EguiPostUpdateSet::EndPass.after(TransformSystems::Propagate).after(CameraUpdateSystems))
         .run();
 }

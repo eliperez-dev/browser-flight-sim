@@ -339,6 +339,9 @@ pub fn spawn_aircraft(
         Transform::from_translation(prop_hub_local),
         Propeller,
         Name::new("propeller"),
+        // Not a child of `visual`, so it needs its own tag to be hidden
+        // alongside the body mesh in filled-gizmos mode.
+        PlaneVisual,
     )).add_children(&[propeller_mesh]).id();
 
     let (mass_eff, com_eff, inertia_eff) = cfg.loaded_mass_properties();

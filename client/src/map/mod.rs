@@ -28,7 +28,9 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, EguiTextureHandle, egui};
 
 use crate::plane::Airplane;
-use crate::terrain::{Airport, TerrainCamera, WorldGenerator, airport_name, airports_in_region, runway_ident};
+use crate::terrain::{
+    Airport, AirportKind, TerrainCamera, WorldGenerator, airport_name, airports_in_region, runway_ident,
+};
 use crate::ui::menu_bar::MenuBar;
 use crate::water::WaterSettings;
 
@@ -77,8 +79,9 @@ pub struct MapIconSettings {
     pub plane_width: f32,
     /// Camera marker overall size (px); the triangle + FOV wedge scale from it.
     pub camera_size: f32,
-    /// Zoomed-out airport symbol circle radius (px), and the runway-line stroke
-    /// width used in both the zoomed-in strip and the symbol overlay (px).
+    /// Minimum airport pin radius (px) — the floor the dot is held to at any
+    /// zoom, so it stays visible even zoomed all the way out (see
+    /// [`render::airport_dot_radius`]).
     pub airport_circle: f32,
     pub runway_width: f32,
     /// Ring radius around the selected airport (px).
@@ -464,17 +467,19 @@ fn draw_map(
             }
 
             // --- Click to select an airport / right-click to clear ---
-            // Hit radius is well beyond the drawn dot (which can be smaller than
-            // this for dirt strips) so airports stay easy to click at any zoom,
-            // rather than requiring pixel-precise hits on the marker itself.
-            const AIRPORT_HIT_RADIUS_PX: f32 = 28.0;
+            // Hit radius tracks the actual drawn dot radius (plus a fixed
+            // margin) so it can never end up smaller than the marker itself —
+            // which a flat pixel constant would, once the dot's on-screen size
+            // grows past it at close zoom.
+            const AIRPORT_HIT_MARGIN_PX: f32 = 16.0;
+            let airport_hit_radius = render::airport_dot_radius(&icons, &view) + AIRPORT_HIT_MARGIN_PX;
             if response.clicked()
                 && let Some(p) = response.interact_pointer_pos() {
                 let mut best: Option<(f32, usize)> = None;
                 for (i, ap) in airports.iter().enumerate() {
                     let (ax, az) = ap.pos();
                     let d = view.to_screen(Vec2::new(ax, az)).distance(p);
-                    if d < AIRPORT_HIT_RADIUS_PX && best.is_none_or(|(bd, _)| d < bd) {
+                    if d < airport_hit_radius && best.is_none_or(|(bd, _)| d < bd) {
                         best = Some((d, i));
                     }
                 }
@@ -530,9 +535,25 @@ fn draw_map(
             ui.collapsing("Key", |ui| {
                 ui.label("▮ yellow  plane (nose = heading)");
                 ui.label("▲ cyan    camera + FOV");
-                ui.label("— magenta runway (oriented)");
+                ui.label("— white   runway (oriented)");
                 ui.label("· dashes  past track (last 10 min)");
                 ui.label("⇢ orange  direct-to course");
+                ui.separator();
+                ui.label("Airport dot colour = class:");
+                ui.horizontal(|ui| {
+                    ui.colored_label(render::airport_kind_color(AirportKind::DirtStrip), "●");
+                    ui.label("Dirt");
+                    ui.colored_label(render::airport_kind_color(AirportKind::SmallGA), "●");
+                    ui.label("Small GA");
+                    ui.colored_label(render::airport_kind_color(AirportKind::LargeCommuter), "●");
+                    ui.label("Commuter");
+                });
+                ui.horizontal(|ui| {
+                    ui.colored_label(render::airport_kind_color(AirportKind::Regional), "●");
+                    ui.label("Regional");
+                    ui.colored_label(render::airport_kind_color(AirportKind::Hub), "●");
+                    ui.label("Hub");
+                });
             });
 
             // --- Interaction: pan and zoom ---

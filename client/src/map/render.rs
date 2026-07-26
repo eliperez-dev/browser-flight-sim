@@ -202,7 +202,7 @@ const WAYPOINT: egui::Color32 = egui::Color32::from_rgb(255, 140, 40);
 
 /// Fill colour per [`AirportKind`], so airport class reads at a glance without
 /// relying on dot size (which stays uniform — see [`draw_airports`]).
-fn airport_color(kind: AirportKind) -> egui::Color32 {
+pub fn airport_kind_color(kind: AirportKind) -> egui::Color32 {
     match kind {
         AirportKind::DirtStrip => egui::Color32::from_rgb(150, 110, 70),
         AirportKind::SmallGA => egui::Color32::from_rgb(255, 90, 220),
@@ -212,13 +212,24 @@ fn airport_color(kind: AirportKind) -> egui::Color32 {
     }
 }
 
+/// On-screen radius (px) of an airport pin at the current zoom: scales with
+/// world-space size like the runway lines do when zoomed in, floored so it
+/// never vanishes zoomed out, and capped in *screen* space so a close-in zoom
+/// can't balloon the dot into covering its own runway strips. Same for every
+/// airport (colour carries the class, not size) — shared by [`draw_airports`]
+/// and the map's click hit-test so "what you see" and "what you can click"
+/// never drift apart.
+pub fn airport_dot_radius(icons: &MapIconSettings, view: &View) -> f32 {
+    const DOT_WORLD_DIAMETER: f32 = 1000.0;
+    const DOT_SCREEN_RADIUS_MAX: f32 = 16.0;
+    let world_radius = DOT_WORLD_DIAMETER * 0.5 / view.world_per_px();
+    world_radius.max(icons.airport_circle).min(DOT_SCREEN_RADIUS_MAX)
+}
+
 /// Draws one map pin per airport (one per cell), with every strip drawn at its
 /// own heading and to-scale length — so non-parallel runways render correctly.
 /// The pin's colour encodes [`AirportKind`] (dirt strip → hub); every dot is
-/// the same size so colour alone carries the class, not size. The dot's
-/// on-screen radius has a pixel floor so it stays visible zoomed all the way
-/// out, instead of shrinking to a sub-pixel dot the way pure world-space
-/// scaling would.
+/// the same size so colour alone carries the class, not size.
 pub fn draw_airports(
     painter: &egui::Painter,
     airports: &[Airport],
@@ -228,21 +239,12 @@ pub fn draw_airports(
     icons: &MapIconSettings,
     view: &View,
 ) {
-    // World-space diameter so the dot scales with zoom like the runway lines
-    // do when zoomed in, capped so it can't balloon over neighbouring airports.
-    const DOT_WORLD_DIAMETER: f32 = 1000.0;
-    const DOT_WORLD_DIAMETER_MAX: f32 = 3000.0;
-    let world_radius = DOT_WORLD_DIAMETER.min(DOT_WORLD_DIAMETER_MAX) * 0.5 / view.world_per_px();
+    let dot_radius = airport_dot_radius(icons, view);
 
     for ap in airports {
         let (ax, az) = ap.pos();
         let center = view.to_screen(Vec2::new(ax, az));
-        let color = airport_color(ap.kind);
-        // Pixel floor (icons.airport_circle) so the pin never vanishes zoomed
-        // out; world-space size still wins zoomed in so it doesn't overlap
-        // neighbours once strips are individually visible. Same floor for
-        // every kind, so size carries no meaning — only colour does.
-        let dot_radius = world_radius.max(icons.airport_circle);
+        let color = airport_kind_color(ap.kind);
 
         // Outline makes small/dim kinds (dirt strips) still read against
         // similarly-coloured terrain, and gives every pin a crisp edge.

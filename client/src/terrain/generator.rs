@@ -61,7 +61,13 @@ pub const DEFAULT_COASTAL_HUMIDITY: f32 = 0.3;
 
 /// Default biome-size multiplier. 1.0 keeps the original climate frequency;
 /// larger = broader biomes, smaller = patchier. See [`WorldGenerator::from_config`].
-pub const DEFAULT_BIOME_SIZE: f32 = 1.0;
+/// Bumped above 1.0 now that latitude banding is off by default (see
+/// [`DEFAULT_LATITUDE_STRENGTH`]): latitude used to supply large-scale
+/// climate structure, so without it the raw climate frequency alone reads as
+/// small, scattered patches — a lower frequency (bigger biome_size) gives
+/// each biome broader, more contiguous regions again, while `warp_strength`
+/// keeps the borders organically wavy rather than smooth Perlin blobs.
+pub const DEFAULT_BIOME_SIZE: f32 = 1.6;
 
 /// Default lapse rate: normalised temperature drop per 1000 m of altitude above
 /// sea level. Couples temperature to terrain height so peaks trend cold/snowy —
@@ -70,13 +76,28 @@ pub const DEFAULT_BIOME_SIZE: f32 = 1.0;
 pub const DEFAULT_TEMP_LAPSE: f32 = 0.25;
 
 /// Default latitude banding strength: peak ± temperature swing between the warm
-/// "equator" lines and the cold bands between them.
-pub const DEFAULT_LATITUDE_STRENGTH: f32 = 0.3;
+/// "equator" lines and the cold bands between them. 0 by default — the
+/// latitude term is a pure function of world-Z alone, so any nonzero value
+/// paints dead-straight, perfectly periodic stripes across the whole map
+/// (no variation along X), which reads as an obvious barcode pattern rather
+/// than natural climate variation. Biome distribution instead comes from the
+/// (2D, warped, irregular) temperature/humidity noise fields alone. Left
+/// live-tunable via the debug slider for anyone who wants banding back.
+pub const DEFAULT_LATITUDE_STRENGTH: f32 = 0.0;
 
 /// Default latitude band wavelength (m): world-Z distance from one warm equator
 /// line to the next. The pattern is periodic so an endless world keeps cycling
-/// through climate zones.
-pub const DEFAULT_LATITUDE_BAND: f32 = 60_000.0;
+/// through climate zones. Short enough that an ordinary flight crosses more
+/// than one climate cycle instead of staying inside a single band the whole
+/// time.
+pub const DEFAULT_LATITUDE_BAND: f32 = 18_000.0;
+
+/// Default humidity-latitude coupling strength: peak ± humidity swing driven
+/// by the same latitude cosine as temperature, phase-shifted a quarter cycle
+/// so wet/dry belts don't line up with warm/cold ones. 0 by default, in step
+/// with [`DEFAULT_LATITUDE_STRENGTH`] — same stripe artifact if latitude
+/// banding is off, since this rides the same world-Z-only cosine.
+pub const DEFAULT_LATITUDE_HUMIDITY_STRENGTH: f32 = 0.0;
 
 /// Default orogeny (mountain-building) strength: how strongly the low-frequency
 /// `orogeny_layer` locally boosts relief/elevation on top of a biome's baseline.
@@ -246,6 +267,9 @@ pub struct WorldGenConfig {
     pub latitude_strength: f32,
     /// Latitude band wavelength (m); see [`DEFAULT_LATITUDE_BAND`].
     pub latitude_band: f32,
+    /// Humidity-latitude coupling strength; see [`DEFAULT_LATITUDE_HUMIDITY_STRENGTH`].
+    /// 0 disables (humidity stays fully latitude-independent).
+    pub latitude_humidity_strength: f32,
     /// The 5 terrain-height noise octaves; see [`TerrainOctave`]. Always the
     /// same length as the generator's `terrain_layers` (enforced by
     /// [`WorldGenerator::from_config`], which zips them together).
@@ -297,17 +321,18 @@ impl Default for WorldGenConfig {
             biome_size: DEFAULT_BIOME_SIZE,
             // Corners of the climate square (matching the original constants):
             //   dry→wet at cold = grasslands→taiga, dry→wet at hot = desert→forest.
-            desert:     BiomeShape { elevation: 0.3,  relief: 0.005, abundance: 0.3 },
+            desert:     BiomeShape { elevation: 0.9,  relief: 0.15,  abundance: 0.3 },
             grasslands: BiomeShape { elevation: 0.04, relief: 0.02,  abundance: 1.0 },
-            forest:     BiomeShape { elevation: 1.2,  relief: 0.1,   abundance: 1.0 },
-            taiga:      BiomeShape { elevation: 6.5,  relief: 0.5,   abundance: 0.5 },
-            temp_bias: -0.15,
-            humidity_bias: -0.15,
+            forest:     BiomeShape { elevation: 1.6,  relief: 0.2,   abundance: 1.0 },
+            taiga:      BiomeShape { elevation: 3.5,  relief: 0.35,  abundance: 0.5 },
+            temp_bias: 0.0,
+            humidity_bias: 0.0,
             humidity_contrast: 1.0,
             temp_contrast: 1.0,
             temp_lapse: DEFAULT_TEMP_LAPSE,
             latitude_strength: DEFAULT_LATITUDE_STRENGTH,
             latitude_band: DEFAULT_LATITUDE_BAND,
+            latitude_humidity_strength: DEFAULT_LATITUDE_HUMIDITY_STRENGTH,
             terrain_octaves: [
                 TerrainOctave { horizontal_scale_mult: 0.08, vertical_scale: 4.5,  ridged: true },
                 TerrainOctave { horizontal_scale_mult: 0.21, vertical_scale: 3.5,  ridged: true },
@@ -357,6 +382,7 @@ pub struct WorldGenerator {
     temp_lapse: f32,
     latitude_strength: f32,
     latitude_band: f32,
+    latitude_humidity_strength: f32,
     warp_strength: WarpStrengths,
     orogeny_strength: f32,
     plateau_strength: f32,
@@ -458,6 +484,7 @@ impl WorldGenerator {
             temp_lapse: cfg.temp_lapse,
             latitude_strength: cfg.latitude_strength,
             latitude_band: cfg.latitude_band.max(1.0),
+            latitude_humidity_strength: cfg.latitude_humidity_strength,
             warp_strength: cfg.warp_strength,
             orogeny_strength: cfg.orogeny_strength,
             plateau_strength: cfg.plateau_strength,
@@ -539,15 +566,23 @@ impl WorldGenerator {
         // Latitude banding: warm on the equator lines, cold between, periodic in
         // world-Z so an endless world keeps cycling. Mean-zero, so it shifts the
         // pattern rather than the average temperature.
-        let latitude =
-            self.latitude_strength * (z * std::f32::consts::TAU / self.latitude_band).cos();
+        let angle = z * std::f32::consts::TAU / self.latitude_band;
+        let latitude = self.latitude_strength * angle.cos();
         // Coastal humidity: oceans (low continentalness) raise nearby humidity,
         // decaying toward the dry continental interior — the realistic causality
         // where the ocean drives moisture, not the reverse.
         let coastal = self.coastal_humidity * (1.0 - continentalness);
+        // Humidity-latitude coupling: the same cosine cycle, phase-shifted a
+        // quarter turn (sin instead of cos) so wet/dry belts fall *between*
+        // the warm/cold ones rather than on top of them — otherwise "warm"
+        // and "wet" would always coincide and desert (warm+dry) could never
+        // form. This gives four distinct climate quadrants around each cycle
+        // (e.g. wet equator, dry subtropics, wet temperate, dry pole) instead
+        // of humidity being a fully latitude-independent speckle field.
+        let humidity_latitude = self.latitude_humidity_strength * angle.sin();
         (
             remap_axis(temp + latitude, self.temp_bias, self.temp_contrast),
-            remap_axis(hum + coastal, self.humidity_bias, self.humidity_contrast),
+            remap_axis(hum + coastal + humidity_latitude, self.humidity_bias, self.humidity_contrast),
             continentalness,
         )
     }

@@ -168,7 +168,13 @@ pub struct OuterCamera;
 /// balloon far past readable size on any window bigger than the raw 640x360
 /// canvas, and made this slider's 0.5-2.0 range negligible against that much
 /// larger driving term (hence "doesn't seem to listen"). Keeping this
-/// resource as the *only* input to `scale_factor` fixes both.
+/// resource as the *only* input to `scale_factor` fixes both. (A later attempt
+/// to also shrink the UI when the canvas got smaller than the fixed-pixel HUD
+/// needs — coupling scale_factor to canvas size again, just one-directional —
+/// was tried and reverted for the same reason: the UI must render at a
+/// consistent physical size/spacing at a given UiScale regardless of canvas
+/// or window size, full stop. Any overlap/clipping on a small canvas needs to
+/// be solved by making the HUD itself responsive, not by scaling it.)
 #[derive(Resource)]
 pub struct UiScale(pub f32);
 

@@ -202,6 +202,8 @@ fn draw_menu(
                             ui.add(egui::Slider::new(&mut w.latitude_band, 5_000.0..=200_000.0)
                                 .text("Latitude band (m)")
                                 .logarithmic(true));
+                            ui.add(egui::Slider::new(&mut w.latitude_humidity_strength, 0.0..=0.5)
+                                .text("Latitude humidity coupling"));
                         });
 
                     // --- Per-biome shaping (corners of the climate square) ------
@@ -550,7 +552,7 @@ fn draw_menu(
                     ui.add(egui::Slider::new(&mut map_icons.camera_size, 2.0..=30.0)
                         .text("Camera size"));
                     ui.add(egui::Slider::new(&mut map_icons.airport_circle, 2.0..=24.0)
-                        .text("Airport circle (zoomed out)"));
+                        .text("Airport circle (min radius)"));
                     ui.add(egui::Slider::new(&mut map_icons.runway_width, 0.5..=8.0)
                         .text("Runway line width"));
                     ui.add(egui::Slider::new(&mut map_icons.selected_ring, 3.0..=24.0)

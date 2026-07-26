@@ -5,7 +5,7 @@ use crate::lights::{Beacon, LandingLight, NavLightLeft, NavLightRight, NavLightT
 use crate::physics::aero_surface::AeroSurface;
 use crate::physics::aircraft_physics::{AircraftRoot, ground_effect_factor};
 use crate::physics::flight_config::FlightModelConfig;
-use crate::physics::landing_gear::{GROUND_Y, gear_legs};
+use crate::physics::landing_gear::GROUND_Y;
 use crate::plane::{Airplane, PlaneVisual};
 use crate::ui::menu_bar::{GizmosMode, MenuBar};
 
@@ -218,24 +218,6 @@ pub fn draw_aero_gizmos(
     );
 
     gizmos.arrow(com_world, com_world + Vec3::NEG_Y * 3.0, Color::srgb(1.0, 0.2, 0.2));
-
-    // Landing-gear struts: a line from each mount down to the wheel at full
-    // extension, with a sphere at the contact point. Mounts are in metres in the
-    // body frame (like the CoM), so reconstruct world position the same way —
-    // tf.translation + tf.rotation * mount — *without* tf.scale. The wheel hangs
-    // `gear_rest_length` along body-down (−Y); this is exactly where the strut in
-    // landing_gear.rs starts looking for the ground, so the spheres mark where
-    // the aircraft will touch down.
-    {
-        let strut_color = Color::srgb(0.8, 0.4, 1.0); // violet
-        let down = tf.rotation * Vec3::NEG_Y;
-        for leg in gear_legs(&cfg) {
-            let mount_world = tf.translation + tf.rotation * leg.mount;
-            let wheel_world = mount_world + down * leg.rest_length;
-            gizmos.line(mount_world, wheel_world, strut_color);
-            gizmos.sphere(Isometry3d::from_translation(wheel_world), 0.2, strut_color);
-        }
-    }
 
     // Fuselage drag box: a cuboid at the CoM whose extents are the per-axis
     // Cd·A (X=flank, Y=belly/top, Z=nose). The thin forward dimension vs. the
